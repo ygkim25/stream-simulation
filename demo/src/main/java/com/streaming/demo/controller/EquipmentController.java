@@ -18,4 +18,6 @@ public class EquipmentController {
     public List<EquipmentStatusDto> getAllEquipment() {
         return service.getAllEquipment();
     }
+
+    // 테스트
 }
