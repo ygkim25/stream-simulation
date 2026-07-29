@@ -19,5 +19,4 @@ public class EquipmentController {
         return service.getAllEquipment();
     }
 
-    // 테스트
 }
