@@ -5,9 +5,13 @@ import AlarmSidebar from '../components/AlarmSidebar';
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
+
 const RealtimeScreen = ({ user, setRoute, openMyPage, alarms, setAlarms, openLogs }) => {
   const [tabMode, setTabMode] = useState('stream');
-  const [time, setTime] = useState(new Date('2026-07-29T15:15:00'));
+  // 🚀 [수정됨] 고정된 과거 시각 대신, 페이지를 연 시점의 실제 현재 시각으로 초기화
+  const [time, setTime] = useState(() => new Date());
+  // 초기화 버튼용 - 마운트 시점 시각을 그대로 보존 (리렌더링에 영향받지 않도록 useState 지연 초기화 사용)
+  const [initialTime] = useState(() => new Date());
 
   // 🚀 [추가됨] 현재 선택된 설비 ID 상태 관리
   const [selectedEquipId, setSelectedEquipId] = useState(null);
@@ -20,8 +24,14 @@ const RealtimeScreen = ({ user, setRoute, openMyPage, alarms, setAlarms, openLog
     { id: 'EQ-005', name: '열교환기 E', location: '3구역 / 설비3팀', current: 31.4, threshold: 50 },
   ]);
 
+  // 🚀 [수정됨] 함수형 업데이트로 변경 -> 항상 직전 time 값 기준으로 10분씩 정확히 가감
   const adjustTime = (minutes) => {
-    setTime(new Date(time.getTime() + minutes * 60000));
+    setTime(prev => new Date(prev.getTime() + minutes * 60000));
+  };
+
+  // 🚀 [수정됨] 페이지를 연 시점의 실제 현재 시각으로 되돌리는 리셋 함수
+  const resetTime = () => {
+    setTime(initialTime);
   };
 
   const handleExport = () => {
@@ -70,6 +80,15 @@ const RealtimeScreen = ({ user, setRoute, openMyPage, alarms, setAlarms, openLog
               </div>
               <button onClick={() => adjustTime(10)} className="w-8 h-8 bg-green-700 text-white flex items-center justify-center font-bold text-lg hover:bg-green-800 transition-colors">+</button>
             </div>
+
+            {/* 🚀 [추가됨] 초기화 버튼 - +/- 컨트롤 바로 옆 */}
+            <button 
+              onClick={resetTime}
+              className="px-4 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-full text-xs sm:text-sm font-semibold transition-colors shadow-sm"
+            >
+              초기화
+            </button>
+
             <button onClick={handleExport} className="px-5 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-full text-sm font-semibold transition-colors shadow-sm flex items-center gap-1.5">
               <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
               내보내기
@@ -94,13 +113,14 @@ const RealtimeScreen = ({ user, setRoute, openMyPage, alarms, setAlarms, openLog
                 )}
               </div>
               
+              {/* 🚀 [수정됨] 순서 변경: 동기화 문구가 저장 버튼보다 왼쪽에 오도록 */}
               <div className="flex items-center gap-4">
+                <span className="text-xs text-gray-400">마지막 동기화: 실시간 수신 중</span>
                 {tabMode === 'threshold' && (
                   <button onClick={() => { alert('저장되었습니다.'); setTabMode('stream'); }} className="px-4 py-1.5 bg-green-700 hover:bg-green-800 text-white rounded text-sm font-bold shadow-sm transition-colors">
                     저장
                   </button>
                 )}
-                <span className="text-xs text-gray-400">마지막 동기화: 실시간 수신 중</span>
               </div>
             </div>
 
