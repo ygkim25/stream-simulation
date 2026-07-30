@@ -54,8 +54,8 @@ public class EquipmentStatusService {
                 .collect(Collectors.toList());
 
         // 로그
-        fluctuated.forEach(eq -> log.info("[{}] {} - 온도:{}, 전력:{}, 상태:{}",
-                now, eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus()));
+        // fluctuated.forEach(eq -> log.info("[{}] {} - 온도:{}, 전력:{}, 상태:{}",
+        //         now, eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus()));
 
         List<EquipmentStatusDto> dtos = fluctuated.stream()
                 .map(EquipmentStatusDto::new)
