@@ -20,6 +20,7 @@ public class LoginController {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
+    
     public LoginController(LoginRepository loginRepository,
                            PasswordEncoder passwordEncoder,
                            JwtUtil jwtUtil) {
