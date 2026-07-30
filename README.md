@@ -22,3 +22,6 @@
       "java.import.gradle.java.home": "C:\\wemb\\java\\jdk-17",
       "java.configuration.updateBuildConfiguration": "interactive"
       }
+
+7. 스프링 부트 확장 팩 설치
+   - vscode 확장:마켓플레이스 > Spring Boot Extension Pack 설치
