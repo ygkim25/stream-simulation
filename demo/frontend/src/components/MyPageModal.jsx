@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
+import { getDivisionName } from '../constants/division';
+
+
 
 // ==========================================
 // 마이페이지 팝업 컴포넌트
 // ==========================================
 const MyPageModal = ({ user, onClose }) => {
-  const [name, setName] = useState(user?.name || '');
-  const [dept, setDept] = useState(user?.dept || '');
-  const [id, setId] = useState(user?.id || 'admin'); // 계정 정보 (수정 불가)
+  const [name, setName] = useState(user?.userName || '');
+  const [dept, setDept] = useState(getDivisionName(user?.divisionCode));
+  const [id, setId] = useState(user?.userId || 'admin'); // 계정 정보 (수정 불가)
 
   // 배경 클릭 시 모달 닫기
   const handleOverlayClick = (e) => {

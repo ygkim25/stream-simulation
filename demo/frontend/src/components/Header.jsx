@@ -1,4 +1,5 @@
 import React from 'react';
+import { getDivisionName } from '../constants/division';
 
 // ==========================================
 // 공통 헤더 컴포넌트
@@ -26,11 +27,11 @@ const Header = ({ title, user, setRoute, openMyPage }) => {
         onClick={openMyPage}
       >
         <div className="w-9 h-9 bg-white text-green-800 rounded-full flex items-center justify-center font-bold text-base shrink-0 shadow-sm">
-          {user ? user.name.charAt(0) : '관'}
+          {user?.userName ? user.userName.charAt(0) : '관'}
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-bold leading-tight">{user ? user.name : '홍길동'}</span>
-          <span className="text-xs text-green-200">{user ? user.dept : '관제1팀'}</span>
+          <span className="text-sm font-bold leading-tight">{user?.userName}</span>
+          <span className="text-xs text-green-200">{getDivisionName(user?.divisionCode)}</span>
         </div>
       </div>
     </header>

@@ -6,9 +6,11 @@ import com.streaming.demo.entity.EquipmentStatus;
 import com.streaming.demo.repository.EquipmentHistoryRepository;
 import com.streaming.demo.repository.EquipmentStatusRepository;
 import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
+
+// import org.slf4j.Logger;
+// import org.slf4j.LoggerFactory;
+// import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -20,18 +22,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class EquipmentStatusService {
 
-    private static final Logger log = LoggerFactory.getLogger(EquipmentStatusService.class);
+    // private static final Logger log = LoggerFactory.getLogger(EquipmentStatusService.class);
 
-    @Autowired
-    private EquipmentStatusRepository repository;
-
-    @Autowired
-    private EquipmentHistoryRepository historyRepository;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
+    private final EquipmentStatusRepository repository;
+    private final EquipmentHistoryRepository historyRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     private final Map<String, EquipmentStatus> liveData = new ConcurrentHashMap<>();
 

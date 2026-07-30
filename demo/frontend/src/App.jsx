@@ -8,8 +8,6 @@ import FullLogModal from './components/FullLogModal';
 // ==========================================
 // 최상위 App 컴포넌트
 // ==========================================
-const KEEP_LOGIN_HOURS = 2;
-
 export default function App() {
   const [route, setRoute] = useState('login');
   const [user, setUser] = useState(null);
@@ -46,57 +44,21 @@ export default function App() {
     { id: 120, time: '15:14:02', type: 'warning', equipName: '압축기 D', message: '임계값을 완전히 초과하여 가동이 일시 중지되었습니다.', value: 105.8, threshold: 100 },
   ]);
 
-  // 🚀 앱 초기 로드 시 (새로고침 시): 세션 검증
+  // 세션 검증
   useEffect(() => {
-    // 1. 브라우저가 가진 대기표(세션 ID)를 꺼냄
-    const sessionId = localStorage.getItem('SESSION_ID');
+    const token = sessionStorage.getItem('token');
+    const userId = sessionStorage.getItem('userId');
+    const userName = sessionStorage.getItem('userName');
+    const divisionCode = sessionStorage.getItem('divisionCode');
 
-    if (sessionId) {
-      // 2. 가짜 백엔드 서버의 메모리를 로컬 스토리지에서 다시 로드 (F5 방어용)
-      const rawServerDB = localStorage.getItem('_MOCK_SERVER_DB_');
-      
-      if (rawServerDB) {
-        const mockServerDB = JSON.parse(rawServerDB);
-        const serverSessionData = mockServerDB[sessionId];
-        const now = new Date().getTime();
-
-        // 3. 서버 DB에 대기표가 있고 시간이 안 지났다면 통과!
-        if (serverSessionData && now < serverSessionData.expiry) {
-          setUser(serverSessionData.userInfo);
-          setRoute('main');
-        } else {
-          // 만료되었으면 폐기
-          localStorage.removeItem('SESSION_ID');
-          delete mockServerDB[sessionId];
-          localStorage.setItem('_MOCK_SERVER_DB_', JSON.stringify(mockServerDB));
-        }
-      } else {
-         localStorage.removeItem('SESSION_ID');
-      }
+    if (token && userId) {
+      setUser({ userId, userName, token, divisionCode });
+      setRoute('main');
     }
   }, []);
 
+  // 로그인 성공 핸들러
   const handleLogin = (userInfo) => {
-    // 1. 랜덤 문자열(대기표) 생성
-    const randomSessionId = 'ses_' + Math.random().toString(36).substring(2, 15);
-    const expiryTime = new Date().getTime() + (KEEP_LOGIN_HOURS * 60 * 60 * 1000);
-
-    // 2. 가짜 백엔드 서버의 메모리를 불러오거나 새로 생성
-    const rawServerDB = localStorage.getItem('_MOCK_SERVER_DB_');
-    const mockServerDB = rawServerDB ? JSON.parse(rawServerDB) : {};
-
-    // 3. 가짜 서버 DB에 진짜 정보(이름, 만료시간) 기록
-    mockServerDB[randomSessionId] = {
-      userInfo: userInfo,
-      expiry: expiryTime
-    };
-
-    // 4. 가짜 서버 메모리를 브라우저 구석에 몰래 저장 (진짜 서버면 이 과정이 없음!)
-    localStorage.setItem('_MOCK_SERVER_DB_', JSON.stringify(mockServerDB));
-    
-    // 5. 프론트엔드(사용자 브라우저 쿠키 역할)에는 대기표 번호만 쥐여줌
-    localStorage.setItem('SESSION_ID', randomSessionId);
-
     setUser(userInfo);
     setRoute('main');
   };
