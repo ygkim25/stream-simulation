@@ -1,204 +1,119 @@
-// import { useState } from 'react'
-// import reactLogo from './assets/react.svg'
-// import viteLogo from './assets/vite.svg'
-// import heroImg from './assets/hero.png'
-// import './App.css'
+import React, { useState, useEffect } from 'react';
+import LoginScreen from './pages/LoginScreen';
+import MainScreen from './pages/MainScreen';
+import RealtimeScreen from './pages/RealtimeScreen';
+import MyPageModal from './components/MyPageModal'; 
+import FullLogModal from './components/FullLogModal';
 
-// function App() {
-//   const [count, setCount] = useState(0)
+// ==========================================
+// 최상위 App 컴포넌트
+// ==========================================
+const KEEP_LOGIN_HOURS = 2;
 
-//   return (
-//     <>
-//       <section id="center">
-//         <div className="hero">
-//           <img src={heroImg} className="base" width="170" height="179" alt="" />
-//           <img src={reactLogo} className="framework" alt="React logo" />
-//           <img src={viteLogo} className="vite" alt="Vite logo" />
-//         </div>
-//         <div>
-//           <h1>Get started</h1>
-//           <p>
-//             Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-//           </p>
-//         </div>
-//         <button
-//           type="button"
-//           className="counter"
-//           onClick={() => setCount((count) => count + 1)}
-//         >
-//           Count is {count}
-//         </button>
-//       </section>
+export default function App() {
+  const [route, setRoute] = useState('login');
+  const [user, setUser] = useState(null);
+  
+  const [isMyPageOpen, setIsMyPageOpen] = useState(false);
+  const [isLogOpen, setIsLogOpen] = useState(false); 
 
-//       <div className="ticks"></div>
+  const [alarms, setAlarms] = useState([
+    { id: 1, equipName: '압축기 D', time: '15:14:02', value: 105.8, threshold: 100, location: '3구역 / 설비3팀' },
+    { id: 2, equipName: '냉각 팬 B', time: '15:10:45', value: 65.0, threshold: 60, location: '1구역 / 설비1팀' },
+  ]);
 
-//       <section id="next-steps">
-//         <div id="docs">
-//           <svg className="icon" role="presentation" aria-hidden="true">
-//             <use href="/icons.svg#documentation-icon"></use>
-//           </svg>
-//           <h2>Documentation</h2>
-//           <p>Your questions, answered</p>
-//           <ul>
-//             <li>
-//               <a href="https://vite.dev/" target="_blank">
-//                 <img className="logo" src={viteLogo} alt="" />
-//                 Explore Vite
-//               </a>
-//             </li>
-//             <li>
-//               <a href="https://react.dev/" target="_blank">
-//                 <img className="button-icon" src={reactLogo} alt="" />
-//                 Learn more
-//               </a>
-//             </li>
-//           </ul>
-//         </div>
-//         <div id="social">
-//           <svg className="icon" role="presentation" aria-hidden="true">
-//             <use href="/icons.svg#social-icon"></use>
-//           </svg>
-//           <h2>Connect with us</h2>
-//           <p>Join the Vite community</p>
-//           <ul>
-//             <li>
-//               <a href="https://github.com/vitejs/vite" target="_blank">
-//                 <svg
-//                   className="button-icon"
-//                   role="presentation"
-//                   aria-hidden="true"
-//                 >
-//                   <use href="/icons.svg#github-icon"></use>
-//                 </svg>
-//                 GitHub
-//               </a>
-//             </li>
-//             <li>
-//               <a href="https://chat.vite.dev/" target="_blank">
-//                 <svg
-//                   className="button-icon"
-//                   role="presentation"
-//                   aria-hidden="true"
-//                 >
-//                   <use href="/icons.svg#discord-icon"></use>
-//                 </svg>
-//                 Discord
-//               </a>
-//             </li>
-//             <li>
-//               <a href="https://x.com/vite_js" target="_blank">
-//                 <svg
-//                   className="button-icon"
-//                   role="presentation"
-//                   aria-hidden="true"
-//                 >
-//                   <use href="/icons.svg#x-icon"></use>
-//                 </svg>
-//                 X.com
-//               </a>
-//             </li>
-//             <li>
-//               <a href="https://bsky.app/profile/vite.dev" target="_blank">
-//                 <svg
-//                   className="button-icon"
-//                   role="presentation"
-//                   aria-hidden="true"
-//                 >
-//                   <use href="/icons.svg#bluesky-icon"></use>
-//                 </svg>
-//                 Bluesky
-//               </a>
-//             </li>
-//           </ul>
-//         </div>
-//       </section>
+  const [logs, setLogs] = useState([
+    { id: 100, time: '09:00:00', type: 'info', equipName: '시스템', message: '오전 관제 모니터링 시스템 기동 완료.' },
+    { id: 101, time: '09:05:12', type: 'info', equipName: '시스템', message: 'DB 동기화 완료 및 실시간 데이터 수신 시작.' },
+    { id: 102, time: '09:15:30', type: 'info', equipName: '메인 펌프 A', message: '초기 가동 점검 정상 확인.' },
+    { id: 103, time: '10:22:15', type: 'warning', equipName: '냉각 팬 B', message: '회전수 미세 감소 감지. 모니터링 강화 설정.', value: 58.2, threshold: 60 },
+    { id: 104, time: '10:45:00', type: 'success', equipName: '냉각 팬 B', message: '회전수 정상 범위로 자체 복구됨.' },
+    { id: 105, time: '11:30:00', type: 'info', equipName: '시스템', message: '오전 정기 리포트 생성 완료.' },
+    { id: 106, time: '12:05:40', type: 'warning', equipName: '열교환기 E', message: '냉각수 온도 상승 추이 확인.', value: 48.5, threshold: 50 },
+    { id: 107, time: '12:15:22', type: 'warning', equipName: '열교환기 E', message: '냉각수 온도 임계치 근접. 주의 요망.', value: 49.8, threshold: 50 },
+    { id: 108, time: '12:20:10', type: 'warning', equipName: '열교환기 E', message: '냉각수 온도 임계치 돌파. 냉각 밸브 자동 개방.', value: 51.2, threshold: 50 },
+    { id: 109, time: '12:35:55', type: 'success', equipName: '열교환기 E', message: '냉각수 온도 정상 수치로 복귀. 밸브 제어 해제.' },
+    { id: 110, time: '13:00:00', type: 'info', equipName: '시스템', message: '오후 관제 모니터링 시작.' },
+    { id: 111, time: '13:10:05', type: 'info', equipName: '보조 발전기 C', message: '정기 자체 진단 테스트 시작.' },
+    { id: 112, time: '13:15:00', type: 'success', equipName: '보조 발전기 C', message: '진단 테스트 통과. 이상 없음.' },
+    { id: 113, time: '14:28:15', type: 'warning', equipName: '열교환기 E', message: '순간적인 압력 상승 감지. 주의 요망.', value: 52.1, threshold: 50 },
+    { id: 114, time: '14:30:00', type: 'info', equipName: '시스템', message: '사용자(admin)가 로그인했습니다.' },
+    { id: 115, time: '14:45:30', type: 'warning', equipName: '메인 펌프 A', message: '진동 수치 비정상 패턴 감지.', value: 81.5, threshold: 80 },
+    { id: 116, time: '14:48:12', type: 'warning', equipName: '메인 펌프 A', message: '진동 수치 지속 초과. 경고 알람 발송.', value: 83.2, threshold: 80 },
+    { id: 117, time: '15:05:10', type: 'success', equipName: '메인 펌프 A', message: '수동 조작으로 펌프 압력 및 진동 정상화되었습니다.' },
+    { id: 118, time: '15:10:45', type: 'warning', equipName: '냉각 팬 B', message: '온도 상승으로 인한 임계값 초과 경고 발생.', value: 65.0, threshold: 60 },
+    { id: 119, time: '15:12:30', type: 'warning', equipName: '압축기 D', message: '입력 전압 불안정 감지. 가동 중지 대기 상태.', value: 98.5, threshold: 100 },
+    { id: 120, time: '15:14:02', type: 'warning', equipName: '압축기 D', message: '임계값을 완전히 초과하여 가동이 일시 중지되었습니다.', value: 105.8, threshold: 100 },
+  ]);
 
-//       <div className="ticks"></div>
-//       <section id="spacer"></section>
-//     </>
-//   )
-// }
-
-// export default App
-
-import { useEffect, useState } from 'react';
-import { Client } from '@stomp/stompjs';
-import SockJS from 'sockjs-client';
-
-function App() {
-  const [equipmentList, setEquipmentList] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  // 1) 초기 데이터: REST API
+  // 🚀 앱 초기 로드 시 (새로고침 시): 세션 검증
   useEffect(() => {
-    fetch('/api/equipment')
-      .then((res) => {
-        if (!res.ok) throw new Error('서버 응답 오류');
-        return res.json();
-      })
-      .then((data) => {
-        setEquipmentList(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
+    // 1. 브라우저가 가진 대기표(세션 ID)를 꺼냄
+    const sessionId = localStorage.getItem('SESSION_ID');
+
+    if (sessionId) {
+      // 2. 가짜 백엔드 서버의 메모리를 로컬 스토리지에서 다시 로드 (F5 방어용)
+      const rawServerDB = localStorage.getItem('_MOCK_SERVER_DB_');
+      
+      if (rawServerDB) {
+        const mockServerDB = JSON.parse(rawServerDB);
+        const serverSessionData = mockServerDB[sessionId];
+        const now = new Date().getTime();
+
+        // 3. 서버 DB에 대기표가 있고 시간이 안 지났다면 통과!
+        if (serverSessionData && now < serverSessionData.expiry) {
+          setUser(serverSessionData.userInfo);
+          setRoute('main');
+        } else {
+          // 만료되었으면 폐기
+          localStorage.removeItem('SESSION_ID');
+          delete mockServerDB[sessionId];
+          localStorage.setItem('_MOCK_SERVER_DB_', JSON.stringify(mockServerDB));
+        }
+      } else {
+         localStorage.removeItem('SESSION_ID');
+      }
+    }
   }, []);
 
-  // 2) 실시간 갱신: WebSocket 구독
-  useEffect(() => {
-    const client = new Client({
-      webSocketFactory: () => new SockJS('/ws'),
-      reconnectDelay: 5000,
-      onConnect: () => {
-        console.log('WebSocket 연결 성공');
-        client.subscribe('/topic/equipment', (message) => {
-          const data = JSON.parse(message.body);
-          console.log('받은 데이터:', data);
-          setEquipmentList(data);
-        });
-      },
-      onStompError: (frame) => {
-        console.error('STOMP 에러:', frame);
-      },
-    });
+  const handleLogin = (userInfo) => {
+    // 1. 랜덤 문자열(대기표) 생성
+    const randomSessionId = 'ses_' + Math.random().toString(36).substring(2, 15);
+    const expiryTime = new Date().getTime() + (KEEP_LOGIN_HOURS * 60 * 60 * 1000);
 
-    client.activate();
-    return () => client.deactivate();
-  }, []);
+    // 2. 가짜 백엔드 서버의 메모리를 불러오거나 새로 생성
+    const rawServerDB = localStorage.getItem('_MOCK_SERVER_DB_');
+    const mockServerDB = rawServerDB ? JSON.parse(rawServerDB) : {};
 
-  if (loading) return <div>로딩 중...</div>;
-  if (error) return <div>에러 발생: {error}</div>;
+    // 3. 가짜 서버 DB에 진짜 정보(이름, 만료시간) 기록
+    mockServerDB[randomSessionId] = {
+      userInfo: userInfo,
+      expiry: expiryTime
+    };
+
+    // 4. 가짜 서버 메모리를 브라우저 구석에 몰래 저장 (진짜 서버면 이 과정이 없음!)
+    localStorage.setItem('_MOCK_SERVER_DB_', JSON.stringify(mockServerDB));
+    
+    // 5. 프론트엔드(사용자 브라우저 쿠키 역할)에는 대기표 번호만 쥐여줌
+    localStorage.setItem('SESSION_ID', randomSessionId);
+
+    setUser(userInfo);
+    setRoute('main');
+  };
+
+  const handleMyPageOpen = () => setIsMyPageOpen(true);
+  const handleMyPageClose = () => setIsMyPageOpen(false);
+  const handleLogOpen = () => setIsLogOpen(true);
+  const handleLogClose = () => setIsLogOpen(false);
+  const handleClearLogs = () => setLogs([]);
 
   return (
-    <div>
-      <table border="1" cellPadding="8">
-        <thead>
-          <tr>
-            <th>장비 ID</th><th>장비명</th><th>온도</th><th>전력량</th>
-            <th>임계값</th><th>상태</th><th>수신시간</th>
-          </tr>
-        </thead>
-        <tbody>
-          {equipmentList.map((eq) => (
-            <tr key={eq.equipId}>
-              <td>{eq.equipId}</td>
-              <td>{eq.equipName}</td>
-              <td>{eq.temperature}</td>
-              <td>{eq.power}</td>
-              <td>{eq.threshold}</td>
-              <td style={{
-                color: eq.status === '위험' ? 'red' : eq.status === '경고' ? 'orange' : 'green'
-              }}>{eq.status}</td>
-              <td>{eq.receivedAt}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {route === 'login' && <LoginScreen onLogin={handleLogin} />}
+      {route === 'main' && <MainScreen user={user} setRoute={setRoute} openMyPage={handleMyPageOpen} />}
+      {route === 'realtime' && <RealtimeScreen user={user} setRoute={setRoute} openMyPage={handleMyPageOpen} alarms={alarms} setAlarms={setAlarms} openLogs={handleLogOpen} />}
+      {isMyPageOpen && <MyPageModal user={user} onClose={handleMyPageClose} />}
+      {isLogOpen && <FullLogModal logs={logs} onClear={handleClearLogs} onClose={handleLogClose} />}
+    </>
   );
 }
-
-export default App;
