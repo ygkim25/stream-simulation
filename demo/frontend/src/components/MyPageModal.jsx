@@ -6,7 +6,7 @@ import { getDivisionName } from '../constants/division';
 // ==========================================
 // 마이페이지 팝업 컴포넌트
 // ==========================================
-const MyPageModal = ({ user, onClose }) => {
+const MyPageModal = ({ user, onClose, onLogout }) => {
   const [name, setName] = useState(user?.userName || '');
   const [dept, setDept] = useState(getDivisionName(user?.divisionCode));
   const [id, setId] = useState(user?.userId || 'admin'); // 계정 정보 (수정 불가)
@@ -15,6 +15,13 @@ const MyPageModal = ({ user, onClose }) => {
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) {
       onClose();
+    }
+  };
+
+  // 🚀 [추가됨] 로그아웃 확인 후 처리
+  const handleLogoutClick = () => {
+    if (window.confirm('로그아웃 하시겠습니까?')) {
+      onLogout?.();
     }
   };
 
@@ -123,6 +130,16 @@ const MyPageModal = ({ user, onClose }) => {
               className="w-full bg-green-700 hover:bg-green-800 text-white font-bold py-3.5 rounded-lg transition-colors text-lg cursor-pointer border-none"
             >
               저장
+            </button>
+          </div>
+
+          {/* 🚀 [추가됨] 로그아웃 버튼 */}
+          <div>
+            <button 
+              onClick={handleLogoutClick}
+              className="w-full bg-white hover:bg-red-50 text-red-600 font-bold py-3 rounded-lg transition-colors text-base cursor-pointer border border-red-200"
+            >
+              로그아웃
             </button>
           </div>
           

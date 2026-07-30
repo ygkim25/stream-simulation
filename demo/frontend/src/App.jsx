@@ -63,6 +63,14 @@ export default function App() {
     setRoute('main');
   };
 
+  // 🚀 [추가됨] 로그아웃 핸들러 - 세션 정리 + 로그인 화면으로 이동
+  const handleLogout = () => {
+    sessionStorage.clear();
+    setUser(null);
+    setIsMyPageOpen(false);
+    setRoute('login');
+  };
+
   const handleMyPageOpen = () => setIsMyPageOpen(true);
   const handleMyPageClose = () => setIsMyPageOpen(false);
   const handleLogOpen = () => setIsLogOpen(true);
@@ -74,7 +82,7 @@ export default function App() {
       {route === 'login' && <LoginScreen onLogin={handleLogin} />}
       {route === 'main' && <MainScreen user={user} setRoute={setRoute} openMyPage={handleMyPageOpen} />}
       {route === 'realtime' && <RealtimeScreen user={user} setRoute={setRoute} openMyPage={handleMyPageOpen} alarms={alarms} setAlarms={setAlarms} openLogs={handleLogOpen} />}
-      {isMyPageOpen && <MyPageModal user={user} onClose={handleMyPageClose} />}
+      {isMyPageOpen && <MyPageModal user={user} onClose={handleMyPageClose} onLogout={handleLogout} />}
       {isLogOpen && <FullLogModal logs={logs} onClear={handleClearLogs} onClose={handleLogClose} />}
     </>
   );
