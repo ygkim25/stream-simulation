@@ -43,7 +43,7 @@ public class LoginController {
         var loginOpt = loginRepository.findByUserId(request.getUserId());
 
         if (loginOpt.isEmpty()) {
-            return ResponseEntity.status(401).body("아이디 또는 비밀번호가 일치하지 않습니다.");
+            return ResponseEntity.status(401).body("등록되지 않은 계정입니다.");
         }
 
         Login login = loginOpt.get();
@@ -51,12 +51,12 @@ public class LoginController {
 
         if (login.getPassword() == null || login.getPassword().isBlank()) {
             if (!"12345".equals(request.getPassword())) {
-                return ResponseEntity.status(401).body("아이디 또는 비밀번호가 일치하지 않습니다.");
+                return ResponseEntity.status(401).body("비밀번호가 일치하지 않습니다.");
             }
             mustChangePassword = true;
         } else {
             if (!passwordEncoder.matches(request.getPassword(), login.getPassword())) {
-                return ResponseEntity.status(401).body("아이디 또는 비밀번호가 일치하지 않습니다.");
+                return ResponseEntity.status(401).body("비밀번호가 일치하지 않습니다.");
             }
             mustChangePassword = false;
         }
@@ -112,6 +112,9 @@ public class LoginController {
         }
         if ("12345".equals(newPassword)) {
             return ResponseEntity.status(400).body("초기 비밀번호와 다른 비밀번호를 설정해주세요.");
+        }
+        if (newPassword.equals(request.getCurrentPassword())) {
+            return ResponseEntity.status(400).body("현재 사용중인 비밀번호 입니다. 다른 비밀번호를 설정해주세요.");
         }
 
         // 3) 암호화해서 저장
