@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-// ==========================================
-// 로그인 화면 컴포넌트
-// ==========================================
-const LoginScreen = ({ onLogin }) => {
+const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
   const [id, setId] = useState('');
   const [pw, setPw] = useState('');
   const [error, setError] = useState('');
@@ -21,28 +18,13 @@ const LoginScreen = ({ onLogin }) => {
 
     setIsLoading(true);
 
-    // API 전송 포맷 (userId, password)
     const loginData = {
       userId: id.trim(),
       password: pw.trim()
     };
 
-    // 🔍 [디버깅 1] 전송 직전 데이터 및 타입 확인
-    console.group('🔍 [Login Request Debugging]');
-    console.log('1. Target URL:', '/api/auth/login');
-    console.log('2. Request Payload:', JSON.stringify(loginData, null, 2));
-    console.log('3. Input ID Length:', id.length, '| Processed ID:', loginData.userId);
-    console.groupEnd();
-
     try {
       const response = await axios.post('/api/auth/login', loginData);
-
-      // 🔍 [디버깅 2] 성공 응답 데이터 확인
-      console.group('✅ [Login Success]');
-      console.log('HTTP Status:', response.status);
-      console.log('Response Data:', response.data);
-      console.groupEnd();
-
       const { token, userId: resUserId, userName, divisionCode } = response.data;
 
       sessionStorage.setItem('token', token);
@@ -52,72 +34,113 @@ const LoginScreen = ({ onLogin }) => {
 
       if (onLogin) {
         onLogin({ userId: resUserId, userName, token, divisionCode });
-}
-
+      }
     } catch (err) {
-      // 🔍 [디버깅 3] 상세 에러 분석
-      console.group('❌ [Login Error Debugging]');
       if (err.response) {
-        // 서버가 응답을 반환한 경우 (4xx, 5xx 에러)
-        console.error('HTTP Status:', err.response.status);
-        console.error('Response Headers:', err.response.headers);
-        console.error('Response Data from Server:', err.response.data);
-
         if (err.response.status === 401) {
           setError(`[401] 아이디/비밀번호 불일치 (입력한 ID: ${loginData.userId})`);
         } else {
           setError(`[${err.response.status}] 로그인 처리 중 서버 에러가 발생했습니다.`);
         }
-      } else if (err.request) {
-        // 요청은 보냈으나 응답을 전혀 받지 못한 경우 (프록시/네트워크/CORS 문제)
-        console.error('No response received from server. Request object:', err.request);
-        setError('서버와 통신할 수 없습니다. 백엔드(8086 포트) 상태 또는 프록시 설정을 확인하세요.');
       } else {
-        // 요청 세팅 중 문제 발생
-        console.error('Error setting up request:', err.message);
-        setError('요청 생성 실패: ' + err.message);
+        setError('서버와 통신할 수 없습니다. 백엔드(8086 포트) 상태를 확인하세요.');
       }
-      console.groupEnd();
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen w-full min-w-[340px] flex flex-col items-center justify-center bg-gray-50 p-4">
-      <div className="bg-white p-10 sm:p-14 rounded-2xl border border-gray-200 shadow-sm w-full max-w-[420px]">
-        <div className="text-center mb-10">
-          <h1 className="text-2xl font-bold text-gray-900">모의 관제 시스템</h1>
+    <div className={`h-screen max-h-[1080px] w-full min-w-[340px] flex flex-col items-center justify-center p-4 overflow-y-auto transition-colors relative ${
+      isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
+    }`}>
+      {/* 우측 상단 테마 토글 버튼 */}
+      <button
+        onClick={() => setIsDarkMode(!isDarkMode)}
+        className={`absolute top-6 right-6 p-2.5 rounded-xl border transition-colors flex items-center justify-center ${
+          isDarkMode 
+            ? 'bg-[#12172A] border-[#232B45] text-[#22D3EE] hover:bg-[#1A223D]' 
+            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100 shadow-sm'
+        }`}
+      >
+        {isDarkMode ? (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        )}
+      </button>
+
+      {/* 로그인 카통 */}
+      <div className={`p-8 sm:p-12 rounded-2xl border w-full max-w-[420px] transition-all ${
+        isDarkMode 
+          ? 'bg-[#12172A] border-[#232B45] shadow-2xl shadow-black/50' 
+          : 'bg-white border-gray-200 shadow-md'
+      }`}>
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 mb-2">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#34D399]"></span>
+            </span>
+            <span className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
+              Control Room System
+            </span>
+          </div>
+          <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-900'}`}>
+            모의 관제 시스템
+          </h1>
         </div>
         
         <form onSubmit={handleLogin} className="space-y-4">
-          <input 
-            type="text" 
-            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3.5 focus:outline-none focus:border-green-600 text-gray-800 text-base"
-            placeholder="ID (예: wemb@wemb.co.kr)"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            disabled={isLoading}
-          />
-          <input 
-            type="password" 
-            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3.5 focus:outline-none focus:border-green-600 text-gray-800 text-base"
-            placeholder="PW"
-            value={pw}
-            onChange={(e) => setPw(e.target.value)}
-            disabled={isLoading}
-          />
+          <div>
+            <input 
+              type="text" 
+              className={`w-full rounded-xl px-4 py-3.5 focus:outline-none transition-all text-sm font-medium ${
+                isDarkMode 
+                  ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
+                  : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
+              }`}
+              placeholder="ID (예: wemb@wemb.co.kr)"
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+          <div>
+            <input 
+              type="password" 
+              className={`w-full rounded-xl px-4 py-3.5 focus:outline-none transition-all text-sm font-medium ${
+                isDarkMode 
+                  ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
+                  : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
+              }`}
+              placeholder="비밀번호"
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
           
-          {error && <p className="text-red-500 text-sm font-semibold whitespace-pre-line">{error}</p>}
+          {error && (
+            <p className="text-[#FB5D75] text-xs font-semibold whitespace-pre-line pt-1">
+              {error}
+            </p>
+          )}
           
           <button 
             type="submit" 
             disabled={isLoading}
-            className={`w-full bg-green-700 hover:bg-green-800 text-white font-bold py-3.5 rounded-lg transition-colors text-lg mt-4 flex items-center justify-center ${
-              isLoading ? 'opacity-70 cursor-not-allowed' : ''
-            }`}
+            className={`w-full font-bold py-3.5 rounded-xl transition-all text-base mt-2 flex items-center justify-center ${
+              isDarkMode 
+                ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A] shadow-[0_0_20px_rgba(34,211,238,0.2)]' 
+                : 'bg-green-700 hover:bg-green-800 text-white'
+            } ${isLoading ? 'opacity-70 cursor-not-allowed' : ''}`}
           >
-            {isLoading ? '로그인 중...' : '로그인'}
+            {isLoading ? '인증 중...' : '로그인'}
           </button>
         </form>
       </div>

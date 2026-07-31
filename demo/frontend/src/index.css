@@ -1,1 +1,41 @@
 @import "tailwindcss";
+
+/* ------------------------------------------
+ * 기본 (라이트 / 일반 모드) 스크롤바
+ * ------------------------------------------ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9; /* slate-100 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1; /* slate-300 */
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8; /* slate-400 */
+}
+
+/* ------------------------------------------
+ * 다크 모드 스크롤바 (.dark 클래스 적용 시)
+ * ------------------------------------------ */
+.dark ::-webkit-scrollbar-track,
+html.dark ::-webkit-scrollbar-track {
+  background: #0A0E1A;
+}
+
+.dark ::-webkit-scrollbar-thumb,
+html.dark ::-webkit-scrollbar-thumb {
+  background: #232B45;
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover,
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #22D3EE;
+}
