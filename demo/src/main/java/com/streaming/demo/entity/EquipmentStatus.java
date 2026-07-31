@@ -22,6 +22,9 @@ public class EquipmentStatus {
     @Column(name = "received_at")
     private LocalDateTime receivedAt;
 
+    @Column(name = "location")
+    private String location;
+
     public EquipmentStatus() {}
 
     public String getEquipId() { return equipId; }
@@ -44,4 +47,7 @@ public class EquipmentStatus {
 
     public LocalDateTime getReceivedAt() { return receivedAt; }
     public void setReceivedAt(LocalDateTime receivedAt) { this.receivedAt = receivedAt; }
+
+    public String getLocation() { return location; }
+    public void setLocation(String location) { this.location = location; }
 }

@@ -35,6 +35,7 @@ public class UserInfoController {
 
     @GetMapping("/employee/me")
     public ResponseEntity<?> getMyInfo(@RequestHeader("Authorization") String authHeader) {
+        System.out.println("========== UserInfoController ---- getMyInfo() ==========");
 
         String token = authHeader.replace("Bearer ", "");
 
