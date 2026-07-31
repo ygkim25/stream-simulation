@@ -60,7 +60,7 @@ public class EquipmentStatusService {
         List<EquipmentStatusDto> dtos = fluctuated.stream()
                 .map(EquipmentStatusDto::new)
                 .collect(Collectors.toList());
-        messagingTemplate.convertAndSend("/topic/equipment", dtos);
+        messagingTemplate.convertAndSend("/topic/live/monitoring", dtos);
 
         List<EquipmentHistory> histories = fluctuated.stream()
                 .map(eq -> new EquipmentHistory(

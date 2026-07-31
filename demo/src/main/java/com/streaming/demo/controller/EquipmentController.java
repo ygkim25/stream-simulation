@@ -12,7 +12,7 @@ import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/equipment")
+@RequestMapping("/api/live/monitoring")
 public class EquipmentController {
 
     // @Autowired
