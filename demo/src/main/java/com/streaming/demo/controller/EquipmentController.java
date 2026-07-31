@@ -21,7 +21,14 @@ public class EquipmentController {
 
     @GetMapping
     public List<EquipmentStatusDto> getAllEquipment() {
+        System.out.println("========== EquipmentController ---- getAllEquipment() ==========");
         return service.getAllEquipment();
+    }
+
+    @PutMapping("/update")
+    public void updateEquipment(@RequestBody List<EquipmentStatusDto> updatedList) {
+        System.out.println("========== EquipmentController ---- updateEquipment() ==========");
+        service.updateAll(updatedList);
     }
 
 }

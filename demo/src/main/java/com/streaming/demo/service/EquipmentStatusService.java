@@ -6,6 +6,7 @@ import com.streaming.demo.entity.EquipmentStatus;
 import com.streaming.demo.repository.EquipmentHistoryRepository;
 import com.streaming.demo.repository.EquipmentStatusRepository;
 import jakarta.annotation.PostConstruct;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 
 import org.slf4j.Logger;
@@ -55,7 +56,7 @@ public class EquipmentStatusService {
 
         // 로그
         // fluctuated.forEach(eq -> log.info("[{}] {} - 온도:{}, 전력:{}, 상태:{}",
-        //         now, eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus()));
+        // now, eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus()));
 
         List<EquipmentStatusDto> dtos = fluctuated.stream()
                 .map(EquipmentStatusDto::new)
@@ -83,12 +84,41 @@ public class EquipmentStatusService {
     }
 
     private String determineStatus(double temperature, double threshold) {
-        if (temperature >= threshold * 1.1) return "위험";
-        if (temperature >= threshold) return "경고";
+        if (temperature >= threshold * 1.1)
+            return "위험";
+        if (temperature >= threshold)
+            return "경고";
         return "정상";
     }
 
     private double round(double value) {
         return Math.round(value * 100.0) / 100.0;
+    }
+
+    @Transactional
+    public void updateAll(List<EquipmentStatusDto> updatedList) {
+        for (EquipmentStatusDto dto : updatedList) {
+            if (dto.getEquipId() == null || dto.getEquipId().isBlank()) {
+                throw new IllegalArgumentException("설비 ID 값은 필수입니다.");
+            }
+            EquipmentStatus eq = repository.findById(dto.getEquipId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            dto.getEquipId() + " 설비를 찾을 수 없습니다."));
+
+            if (dto.getEquipName() != null)
+                eq.setEquipName(dto.getEquipName());
+            if (dto.getLocation() != null)
+                eq.setLocation(dto.getLocation()); // location 필드 추가 후
+            if (dto.getThreshold() != null)
+                eq.setThreshold(dto.getThreshold());
+            // temperature, power, status는 body에 없으면 건드리지 않음 → 기존 값 유지
+
+            liveData.put(eq.getEquipId(), eq);
+        }
+
+        repository.saveAll(
+                updatedList.stream()
+                        .map(dto -> liveData.get(dto.getEquipId()))
+                        .collect(Collectors.toList()));
     }
 }
