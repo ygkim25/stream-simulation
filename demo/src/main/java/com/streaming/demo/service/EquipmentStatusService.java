@@ -95,6 +95,7 @@ public class EquipmentStatusService {
         return Math.round(value * 100.0) / 100.0;
     }
 
+    // 설비 설정 업데이트
     @Transactional
     public void updateAll(List<EquipmentStatusDto> updatedList) {
         for (EquipmentStatusDto dto : updatedList) {
