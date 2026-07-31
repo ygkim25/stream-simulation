@@ -24,21 +24,35 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
     };
 
     try {
-      const response = await axios.post('/api/auth/login', loginData);
-      const { token, userId: resUserId, userName, divisionCode } = response.data;
+      // 백엔드 URL 연결
+      const response = await axios.post('http://localhost:8086/api/auth/login', loginData);
+      
+      // ★ response.data에서 mustChangePassword 추가 추출
+      const { token, userId: resUserId, userName, divisionCode, mustChangePassword } = response.data;
 
+      // sessionStorage 저장
       sessionStorage.setItem('token', token);
       sessionStorage.setItem('userId', resUserId);
       sessionStorage.setItem('userName', userName);
       sessionStorage.setItem('divisionCode', divisionCode);
-
+      sessionStorage.setItem('mustChangePassword', mustChangePassword);
+      
+      // 상위 컴포넌트로 전달
       if (onLogin) {
-        onLogin({ userId: resUserId, userName, token, divisionCode });
+        onLogin({ 
+          userId: resUserId, 
+          userName, 
+          token, 
+          divisionCode, 
+          mustChangePassword // ★ 전달 객체에 추가
+        });
       }
     } catch (err) {
       if (err.response) {
         if (err.response.status === 401) {
           setError(`[401] 아이디/비밀번호 불일치 (입력한 ID: ${loginData.userId})`);
+        } else if (err.response.status === 403) {
+          setError(`[403] 접근 권한이 없거나 Security 방화벽에 차단되었습니다.`);
         } else {
           setError(`[${err.response.status}] 로그인 처리 중 서버 에러가 발생했습니다.`);
         }

@@ -1,7 +1,43 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from '../components/Header';
 
 const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+
+  // ★ 화면 진입 시 비밀번호 변경 필요 여부 & 24시간 팝업 차단 여부 체크
+  useEffect(() => {
+    const mustChange = sessionStorage.getItem('mustChangePassword');
+    const hideUntil = localStorage.getItem('hidePasswordModalUntil');
+    const now = Date.now();
+
+    // 1. mustChangePassword 상태 확인
+    const isMustChange = mustChange === 'true' || mustChange === true;
+    
+    // 2. 24시간 숨김 기한이 설정되지 않았거나 이미 지난 경우
+    const isExpired = !hideUntil || now > Number(hideUntil);
+
+    if (isMustChange && isExpired) {
+      setShowPasswordModal(true);
+    }
+  }, []);
+
+  // ★ "나중에 하기 (하루 동안 보지 않기)" 클릭 핸들러
+  const handleDismissForADay = () => {
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 24시간 (밀리초)
+    const hideUntil = Date.now() + ONE_DAY_MS;
+
+    localStorage.setItem('hidePasswordModalUntil', hideUntil.toString());
+    setShowPasswordModal(false);
+  };
+
+  // 비밀번호 변경 이동 핸들러
+  const handleGoToChangePassword = () => {
+    setShowPasswordModal(false);
+    if (openMyPage) {
+      openMyPage(); // 기존 마이페이지 모달 호출
+    }
+  };
+
   return (
     <div className={`h-screen max-h-[1080px] w-full min-w-[340px] flex flex-col overflow-y-auto transition-colors ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
@@ -71,6 +107,52 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
         </div>
 
       </div>
+
+      {/* ★ 비밀번호 변경 권장 안내 모달 */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl transition-all ${
+            isDarkMode ? 'bg-[#12172A] border-[#232B45] text-[#EDF1FC]' : 'bg-white border-gray-200 text-gray-900'
+          }`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-bold">비밀번호 변경 안내</h3>
+            </div>
+
+            <p className={`text-sm mb-6 leading-relaxed ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+              보안을 위해 비밀번호 변경이 권장되는 계정입니다.<br />
+              원활한 시스템 이용을 위해 지금 비밀번호를 변경하시겠습니까?
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleDismissForADay}
+                className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                  isDarkMode 
+                    ? 'bg-[#1A223D] text-[#8592AD] hover:text-[#EDF1FC] hover:bg-[#232B45]' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                24시간 동안 보지 않기
+              </button>
+              <button
+                onClick={handleGoToChangePassword}
+                className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  isDarkMode 
+                    ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A] shadow-[0_0_15px_rgba(34,211,238,0.2)]' 
+                    : 'bg-green-700 hover:bg-green-800 text-white'
+                }`}
+              >
+                지금 변경하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
