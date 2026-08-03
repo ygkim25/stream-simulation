@@ -23,6 +23,15 @@ public class Login {
     @Column(name = "phone", length = 20)
     private String phone;
 
+    @Column(name = "division_name", length = 255)
+    private String divisionName;
+
+    @Column(name = "responsibility", length = 255)
+    private String responsibility;
+
+    @Column(name = "role", length = 255)
+    private String role;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -44,6 +53,15 @@ public class Login {
 
     public String getPhone() { return phone; }
     public void setPhone(String phone) { this.phone = phone; }
+
+    public String getDivisionName() { return divisionName; }
+    public void setDivisionName(String divisionName) { this.divisionName = divisionName; }
+
+    public String getResponsibility() { return responsibility; }
+    public void setResponsibility(String responsibility) { this.responsibility = responsibility; }
+
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
