@@ -58,7 +58,7 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
               ? 'hover:bg-[#151B30] border-transparent hover:border-[#232B45]' 
               : 'hover:bg-gray-100 border-transparent hover:border-gray-200'
           }`}
-          onClick={openMyPage}
+          onClick={() => openMyPage()}
         >
           <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 font-mono border ${
             isDarkMode 
