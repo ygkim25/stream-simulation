@@ -6,12 +6,18 @@ public class UserInfoDto {
     private String userName;
     private String phone;
     private String divisionCode;
+    private String role;
+    private String divisionName;
+    private String responsibility;
 
-    public UserInfoDto(String userId, String userName, String phone, String divisionCode) {
+    public UserInfoDto(String userId, String userName, String phone, String divisionCode, String role, String divisionName, String responsibility) {
         this.userId = userId;
         this.userName = userName;
         this.phone = phone;
         this.divisionCode = divisionCode;
+        this.role = role;
+        this.divisionName = divisionName;
+        this.responsibility = responsibility;
     }
 
     public String getUserId() {
@@ -25,6 +31,15 @@ public class UserInfoDto {
     }
     public String getDivisionCode() {
         return divisionCode;
+    }
+    public String getRole() {
+        return role;
+    }
+    public String getDivisionName() {
+        return divisionName;
+    }
+    public String getResponsibility() {
+        return responsibility;
     }
 
 }
