@@ -1,8 +1,10 @@
 package com.streaming.demo.service;
 
 import com.streaming.demo.dto.EquipmentStatusDto;
+import com.streaming.demo.entity.EquipmentAlert;
 import com.streaming.demo.entity.EquipmentHistory;
 import com.streaming.demo.entity.EquipmentStatus;
+import com.streaming.demo.repository.EquipmentAlertRepository;
 import com.streaming.demo.repository.EquipmentHistoryRepository;
 import com.streaming.demo.repository.EquipmentStatusRepository;
 import jakarta.annotation.PostConstruct;
@@ -30,6 +32,7 @@ public class EquipmentStatusService {
 
     private final EquipmentStatusRepository repository;
     private final EquipmentHistoryRepository historyRepository;
+    private final EquipmentAlertRepository alertRepository;
     private final SimpMessagingTemplate messagingTemplate;
 
     private final Map<String, EquipmentStatus> liveData = new ConcurrentHashMap<>();
@@ -69,6 +72,16 @@ public class EquipmentStatusService {
                         eq.getStatus(), now))
                 .collect(Collectors.toList());
         historyRepository.saveAll(histories);
+
+        List<EquipmentAlert> alerts = fluctuated.stream()
+                .filter(eq -> "경고".equals(eq.getStatus()))
+                .map(eq -> new EquipmentAlert(
+                        eq.getEquipId(), eq.getTemperature(), eq.getPower(),
+                        eq.getThreshold(), eq.getStatus(), now))
+                .collect(Collectors.toList());
+        if (!alerts.isEmpty()) {
+            alertRepository.saveAll(alerts);
+        }
     }
 
     private EquipmentStatus fluctuate(EquipmentStatus eq) {
