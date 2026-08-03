@@ -38,7 +38,7 @@ public class LoginController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginReqDto request) {
 
-        System.out.println("========== LoginController ---- login() ==========" + request.getUserId());
+        System.out.println("========== LoginController ---- login() ==========   로그인 계정 ::: " + request.getUserId());
 
         var loginOpt = loginRepository.findByUserId(request.getUserId());
 
