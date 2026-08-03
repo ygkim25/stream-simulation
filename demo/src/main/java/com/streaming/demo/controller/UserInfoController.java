@@ -57,7 +57,10 @@ public class UserInfoController {
                 login.getUserId(),
                 login.getUserName(),
                 login.getPhone(),
-                login.getDivisionCode()
+                login.getDivisionCode(),
+                login.getRole(),
+                login.getDivisionName(),
+                login.getResponsibility()
             );
 
         return ResponseEntity.ok(response);

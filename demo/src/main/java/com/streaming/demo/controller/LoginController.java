@@ -14,8 +14,6 @@ import com.streaming.demo.dto.UpdatePasswordDto;
 import com.streaming.demo.entity.Login;
 import com.streaming.demo.repository.LoginRepository;
 import com.streaming.demo.security.JwtUtil;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -38,7 +36,7 @@ public class LoginController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginReqDto request) {
 
-        System.out.println("========== LoginController ---- login() ==========" + request.getUserId());
+        System.out.println("========== LoginController ---- login() ==========   로그인 계정 ::: " + request.getUserId());
 
         var loginOpt = loginRepository.findByUserId(request.getUserId());
 
