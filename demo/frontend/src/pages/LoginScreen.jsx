@@ -24,28 +24,35 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
     };
 
     try {
-      // 백엔드 URL 연결
       const response = await axios.post('http://localhost:8086/api/auth/login', loginData);
       
-      // ★ response.data에서 mustChangePassword 추가 추출
-      const { token, userId: resUserId, userName, divisionCode, mustChangePassword } = response.data;
+      const { 
+        token, 
+        userId: resUserId, 
+        userName, 
+        divisionName, 
+        responsibility, 
+        role, 
+        mustChangePassword 
+      } = response.data;
 
-      // sessionStorage 저장
-      sessionStorage.setItem('token', token);
-      sessionStorage.setItem('userId', resUserId);
-      sessionStorage.setItem('userName', userName);
-      sessionStorage.setItem('divisionCode', divisionCode);
-      sessionStorage.setItem('mustChangePassword', mustChangePassword);
+      // 유저 정보 객체 생성
+      const userData = {
+        token,
+        userId: resUserId,
+        userName,
+        divisionName,
+        responsibility,
+        role,
+        mustChangePassword
+      };
+
+      // ★ JSON 통째로 sessionStorage에 저장
+      sessionStorage.setItem('user', JSON.stringify(userData));
       
       // 상위 컴포넌트로 전달
       if (onLogin) {
-        onLogin({ 
-          userId: resUserId, 
-          userName, 
-          token, 
-          divisionCode, 
-          mustChangePassword // ★ 전달 객체에 추가
-        });
+        onLogin(userData);
       }
     } catch (err) {
       if (err.response) {
@@ -68,7 +75,6 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
     <div className={`h-screen max-h-[1080px] w-full min-w-[340px] flex flex-col items-center justify-center p-4 overflow-y-auto transition-colors relative ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
-      {/* 우측 상단 테마 토글 버튼 */}
       <button
         onClick={() => setIsDarkMode(!isDarkMode)}
         className={`absolute top-6 right-6 p-2.5 rounded-xl border transition-colors flex items-center justify-center ${
@@ -88,7 +94,6 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
         )}
       </button>
 
-      {/* 로그인 카통 */}
       <div className={`p-8 sm:p-12 rounded-2xl border w-full max-w-[420px] transition-all ${
         isDarkMode 
           ? 'bg-[#12172A] border-[#232B45] shadow-2xl shadow-black/50' 
@@ -118,7 +123,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
                   ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
                   : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
               }`}
-              placeholder="ID (예: wemb@wemb.co.kr)"
+              placeholder="ID (예: hykang@wemb.co.kr)"
               value={id}
               onChange={(e) => setId(e.target.value)}
               disabled={isLoading}

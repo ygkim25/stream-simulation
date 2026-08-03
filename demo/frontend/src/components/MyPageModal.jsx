@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { getDivisionName } from '../constants/division';
 
 // ==========================================
 // 설정(Settings) 팝업 컴포넌트 (내 정보 / 비밀번호 / 사용자 조회)
 // ==========================================
-const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
+const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   // 탭 상태 관리 (info, password, auth)
-  const [activeTab, setActiveTab] = useState('info');
+  const [activeTab, setActiveTab] = useState(initialTab || 'info');
 
   // [탭 1] 내 정보 관련 State
   const [name, setName] = useState(user?.userName || '');
-  const [dept, setDept] = useState(getDivisionName(user?.divisionCode));
+  const [dept, setDept] = useState(user?.divisionName || '');
+  const [duty, setDuty] = useState(user?.responsibility || '');
   const [id, setId] = useState(user?.userId || 'admin');
 
   // [탭 2] 비밀번호 관련 State
@@ -69,7 +69,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
     }
   };
 
-  // ★ [탭 3] 사용자 조회 - 전 직원 목록 불러오기 (누구나 조회 가능)
+  // ★ [탭 3] 사용자 조회 - 전 직원 목록 불러오기
   useEffect(() => {
     if (activeTab === 'auth' && employees.length === 0) {
       const fetchEmployees = async () => {
@@ -84,10 +84,9 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
           ]);
         } catch (error) {
           console.error('직원 목록 조회 실패:', error);
-          // 백엔드 연결 실패 시 임시 테스트 데이터
           setEmployees([
             { userId: 'admin', userName: '시스템관리자', role: 'ADMIN' },
-            { userId: 'khy@wemb.co.kr', userName: '김현영', role: 'USER' },
+            { userId: 'hykang@wemb.co.kr', userName: '강희연', role: 'USER' },
             { userId: 'test_user', userName: '테스트계정', role: 'USER' }
           ]);
         } finally {
@@ -128,7 +127,6 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
       }}
       onClick={handleOverlayClick}
     >
-      {/* 팝업 크기 확대: max-w-[500px] -> max-w-[650px] */}
       <div
         className={`w-full max-w-[650px] min-w-[340px] rounded-2xl shadow-2xl overflow-hidden flex flex-col border transition-all relative z-[100000] ${
           isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
@@ -194,24 +192,41 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
           </button>
         </div>
 
-        {/* 팝업 본문 (여백 확대: p-7 md:p-8) */}
+        {/* 팝업 본문 */}
         <div className="p-7 md:p-8 flex flex-col min-h-[340px]">
           
           {/* [탭 1] 내 정보 */}
           {activeTab === 'info' && (
             <div className="flex flex-col gap-6 h-full justify-between animate-fade-in">
               <div className="space-y-4">
-                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="이름" />
-                <input type="text" value={dept} onChange={(e) => setDept(e.target.value)} className={inputClass} placeholder="부서" />
-                <input
-                  type="text"
-                  value={id}
-                  readOnly
-                  className={`w-full border rounded-xl px-4 py-3.5 font-mono text-[14px] cursor-not-allowed box-border ${
-                    isDarkMode ? 'bg-[#0A0E1A] border-[#1E253D] text-[#5C6584]' : 'bg-gray-100 border-gray-200 text-gray-400'
-                  }`}
-                  placeholder="계정"
-                />
+                <div>
+                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>이름</label>
+                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="이름" />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>부서</label>
+                    <input type="text" value={dept} onChange={(e) => setDept(e.target.value)} className={inputClass} placeholder="부서명" />
+                  </div>
+                  <div>
+                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>직급</label>
+                    <input type="text" value={duty} onChange={(e) => setDuty(e.target.value)} className={inputClass} placeholder="직급" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>계정 (ID)</label>
+                  <input
+                    type="text"
+                    value={id}
+                    readOnly
+                    className={`w-full border rounded-xl px-4 py-3.5 font-mono text-[14px] cursor-not-allowed box-border ${
+                      isDarkMode ? 'bg-[#0A0E1A] border-[#1E253D] text-[#5C6584]' : 'bg-gray-100 border-gray-200 text-gray-400'
+                    }`}
+                    placeholder="계정"
+                  />
+                </div>
               </div>
               <div className="pt-2">
                 <button
@@ -247,7 +262,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
             </div>
           )}
 
-          {/* [탭 3] 사용자 조회 (누구나 조회 가능, 관리자만 수정/삭제) */}
+          {/* [탭 3] 사용자 조회 */}
           {activeTab === 'auth' && (
             <div className="flex flex-col h-full animate-fade-in">
               <div className="flex items-center justify-between mb-4">
@@ -277,7 +292,6 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        {/* 관리자일 때만 권한 수정 Dropdown 및 Delete 버튼 표시 */}
                         {isAdmin ? (
                           <>
                             <select
@@ -303,7 +317,6 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode }) => {
                             </button>
                           </>
                         ) : (
-                          /* 일반 사용자에게는 권한 상태만 뱃지로 표시 */
                           <span className={`text-[12px] font-semibold px-3 py-1 rounded-lg border ${
                             emp.role === 'ADMIN'
                               ? (isDarkMode ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#22D3EE]' : 'bg-green-50 border-green-200 text-green-700')

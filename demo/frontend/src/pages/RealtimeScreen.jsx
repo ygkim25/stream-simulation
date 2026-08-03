@@ -64,7 +64,7 @@ const clearDB = async () => {
 
 // datetime-local input 포맷 변환 (YYYY-MM-DDTHH:mm)
 const formatForDateTimeInput = (date) => {
-  if (!date) return '';
+  if (!date || isNaN(date.getTime())) return '';
   const tzoffset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
 };
@@ -94,17 +94,25 @@ const RealtimeScreen = ({
   const [accumulatedCount, setAccumulatedCount] = useState(0);
   const [flash, setFlash] = useState(false);
 
-  // ★ 시작 시각 & 종료 시각 State (기본값: 1시간 전 ~ 현재)
+  // 시작 시각 & 종료 시각 State (기본값: 1시간 전 ~ 현재)
   const [startTime, setStartTime] = useState(() => new Date(Date.now() - 60 * 60 * 1000));
   const [endTime, setEndTime] = useState(() => new Date());
 
   const stompClientRef = useRef(null);
 
-  // 1. 웹소켓(WebSocket) 연결 및 /topic/live/monitoring 구독
+  // ★ 웹소켓(WebSocket) 연결 및 중복 구독 방지 처리
   useEffect(() => {
+    let isMounted = true;
+
     const setupWebSocket = async () => {
       await clearDB();
+      if (!isMounted) return;
       setAccumulatedCount(0);
+
+      // 기존 클라이언트가 살아있다면 해제 후 재연결
+      if (stompClientRef.current) {
+        stompClientRef.current.deactivate();
+      }
 
       const client = new Client({
         webSocketFactory: () => new SockJS('http://localhost:8086/ws'),
@@ -119,10 +127,13 @@ const RealtimeScreen = ({
         reconnectDelay: 5000,
         
         onConnect: () => {
+          if (!isMounted) return;
           setIsConnected(true);
           setLoadError('');
 
           client.subscribe('/topic/live/monitoring', async (message) => {
+            if (!isMounted) return;
+
             try {
               const parsedData = JSON.parse(message.body);
               
@@ -139,10 +150,16 @@ const RealtimeScreen = ({
                 setEquipments(newDataList);
 
                 setFlash(true);
-                setTimeout(() => setFlash(false), 500);
+                setTimeout(() => {
+                  if (isMounted) setFlash(false);
+                }, 500);
 
                 await saveToDB(newDataList);
-                setAccumulatedCount(prev => prev + newDataList.length);
+
+                // 컴포넌트가 정상 마운트 상태일 때만 정확히 수신 개수만큼 누적 (+20)
+                if (isMounted) {
+                  setAccumulatedCount(prev => prev + newDataList.length);
+                }
               }
             } catch (e) {
               console.error('웹소켓 데이터 파싱 에러:', e);
@@ -151,13 +168,14 @@ const RealtimeScreen = ({
         },
 
         onStompError: (frame) => {
+          if (!isMounted) return;
           console.error('STOMP 에러:', frame.headers['message']);
           setLoadError('STOMP 프로토콜 오류');
           setIsConnected(false);
         },
 
         onWebSocketClose: () => {
-          setIsConnected(false);
+          if (isMounted) setIsConnected(false);
         }
       });
 
@@ -168,11 +186,13 @@ const RealtimeScreen = ({
     setupWebSocket();
 
     return () => {
+      isMounted = false;
       if (stompClientRef.current) {
         stompClientRef.current.deactivate();
+        stompClientRef.current = null;
       }
     };
-  }, [user]);
+  }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
 
   // 임계값 탭 이동 시 값 세팅
   useEffect(() => {
@@ -185,7 +205,7 @@ const RealtimeScreen = ({
     }
   }, [tabMode, equipments]);
 
-  // ★ 1시간 이내 시간 범위 퀵 선택 옵션
+  // 시간 프리셋 조절 함수
   const handlePresetRange = (presetType) => {
     const now = new Date();
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -199,10 +219,37 @@ const RealtimeScreen = ({
     } else if (presetType === 'LAST_30M') {
       setStartTime(new Date(now.getTime() - 30 * 60 * 1000));
       setEndTime(now);
+    } else if (presetType === 'RESET_NOW') {
+      setStartTime(oneHourAgo);
+      setEndTime(now);
     }
   };
 
-  // ★ 엑셀 내보내기 (시작시간 ~ 종료시간 데이터 필터링 + 유효성 검사)
+  // 시작 시간 변경 처리
+  const handleStartTimeChange = (e) => {
+    if (!e.target.value) return;
+    const selectedStart = new Date(e.target.value);
+    
+    if (selectedStart > endTime) {
+      alert('시작 시각은 종료 시각보다 나중일 수 없습니다.');
+      return;
+    }
+    setStartTime(selectedStart);
+  };
+
+  // 종료 시간 변경 처리
+  const handleEndTimeChange = (e) => {
+    if (!e.target.value) return;
+    const selectedEnd = new Date(e.target.value);
+    
+    if (selectedEnd < startTime) {
+      alert('종료 시각은 시작 시각보다 빠를 수 없습니다.');
+      return;
+    }
+    setEndTime(selectedEnd);
+  };
+
+  // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
   const handleExport = async () => {
     if (startTime >= endTime) {
       alert('시작 시각은 종료 시각보다 빨라야 합니다.');
@@ -220,7 +267,7 @@ const RealtimeScreen = ({
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
 
-      // 지정한 [startTime ~ endTime] 유효 범위 데이터만 필터
+      // 지정한 [startTime ~ endTime] 유효 범위 데이터 필터링
       const filteredData = accumulatedData.filter(item => {
         if (!item.receivedAt) return true;
         const itemMs = new Date(item.receivedAt).getTime();
@@ -228,8 +275,8 @@ const RealtimeScreen = ({
       });
 
       if (filteredData.length === 0) {
-        const startStr = startTime.toLocaleTimeString('ko-KR');
-        const endStr = endTime.toLocaleTimeString('ko-KR');
+        const startStr = startTime.toLocaleString('ko-KR');
+        const endStr = endTime.toLocaleString('ko-KR');
         alert(`지정한 시간 구간 (${startStr} ~ ${endStr}) 내 수신 데이터가 없습니다.`);
         return;
       }
@@ -306,11 +353,8 @@ const RealtimeScreen = ({
     }
   };
 
-  // input 제약용 기준 시각 계산 (1시간 전 ~ 현재)
-  const now = new Date();
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const minTimeIso = formatForDateTimeInput(oneHourAgo);
-  const maxTimeIso = formatForDateTimeInput(now);
+  // input 제약 기준 시각 (현재 시각)
+  const currentNowIso = formatForDateTimeInput(new Date());
 
   const selectedEquipName = equipments.find(e => e.equipId === selectedEquipId)?.equipName;
   const displayedAlarms = selectedEquipName
@@ -368,32 +412,29 @@ const RealtimeScreen = ({
               </button>
             </div>
 
-            {/* ★ 1시간 슬롯 내 자유 범위 설정 영역 */}
+            {/* 완전 자유로운 범위 선택 영역 */}
             <div className={`flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg border text-xs ${
               isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#A2ACC9]' : 'bg-gray-50 border-gray-200 text-gray-700'
             }`}>
               <span className="font-bold shrink-0">추출 범위:</span>
               
-              {/* 시작 시간 설정 (최소: 1시간 전, 최대: 현재) */}
               <input
                 type="datetime-local"
-                min={minTimeIso}
-                max={maxTimeIso}
+                max={formatForDateTimeInput(endTime)}
                 value={formatForDateTimeInput(startTime)}
-                onChange={(e) => e.target.value && setStartTime(new Date(e.target.value))}
-                className={`bg-transparent outline-none font-mono text-xs ${
+                onChange={handleStartTimeChange}
+                className={`bg-transparent outline-none font-mono text-xs cursor-pointer ${
                   isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
                 }`}
               />
               <span>~</span>
-              {/* 종료 시간 설정 (최소: 1시간 전, 최대: 현재) */}
               <input
                 type="datetime-local"
-                min={minTimeIso}
-                max={maxTimeIso}
+                min={formatForDateTimeInput(startTime)}
+                max={currentNowIso}
                 value={formatForDateTimeInput(endTime)}
-                onChange={(e) => e.target.value && setEndTime(new Date(e.target.value))}
-                className={`bg-transparent outline-none font-mono text-xs ${
+                onChange={handleEndTimeChange}
+                className={`bg-transparent outline-none font-mono text-xs cursor-pointer ${
                   isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
                 }`}
               />
@@ -405,8 +446,9 @@ const RealtimeScreen = ({
                   className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
                     isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
                   }`}
+                  title="최근 1시간 선택"
                 >
-                  1시간 전체
+                  최근 1시간
                 </button>
                 <button
                   onClick={() => handlePresetRange('FIRST_30M')}
@@ -423,6 +465,17 @@ const RealtimeScreen = ({
                   }`}
                 >
                   후반 30분
+                </button>
+                <button
+                  onClick={() => handlePresetRange('RESET_NOW')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                    isDarkMode 
+                      ? 'bg-[#1E2A4A] border-[#22D3EE]/50 text-[#22D3EE] hover:bg-[#25355E]' 
+                      : 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
+                  }`}
+                  title="종료 시각을 현재 시각으로 설정"
+                >
+                  현재로 갱신
                 </button>
               </div>
             </div>

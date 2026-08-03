@@ -1,5 +1,4 @@
 import React from 'react';
-import { getDivisionName } from '../constants/division';
 
 const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
   return (
@@ -42,12 +41,10 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
           title={isDarkMode ? '라이트 모드로 변경' : '다크 모드로 변경'}
         >
           {isDarkMode ? (
-            /* Sun Icon (라이트모드 전환) */
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
           ) : (
-            /* Moon Icon (다크모드 전환) */
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
             </svg>
@@ -71,11 +68,20 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
             {user?.userName ? user.userName.charAt(0) : '관'}
           </div>
           <div className="flex flex-col leading-tight">
-            <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-              {user?.userName || '홍길동'}
-            </span>
+            {/* 이름 + 직급 (오른쪽 작게) */}
+            <div className="flex items-baseline gap-1.5">
+              <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                {user?.userName || '사용자'}
+              </span>
+              {user?.responsibility && (
+                <span className={`text-[11px] font-normal ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+                  {user.responsibility}
+                </span>
+              )}
+            </div>
+            {/* 부서명 */}
             <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
-              {getDivisionName(user?.divisionCode) || '관제1팀'}
+              {user?.divisionName || '관제팀'}
             </span>
           </div>
         </div>

@@ -4,29 +4,23 @@ import Header from '../components/Header';
 const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
-  // ★ 화면 진입 시 비밀번호 변경 필요 여부 & 24시간 팝업 차단 여부 체크
+  // ★ 화면 진입 시 user 객체 내의 mustChangePassword 상태 체크
   useEffect(() => {
-    const mustChange = sessionStorage.getItem('mustChangePassword');
-    const hideUntil = localStorage.getItem('hidePasswordModalUntil');
-    const now = Date.now();
+    // 1. Props로 받은 user 객체 확인, 없으면 sessionStorage에서 user 파싱
+    const savedUserStr = sessionStorage.getItem('user');
+    const currentUser = user || (savedUserStr ? JSON.parse(savedUserStr) : null);
 
-    // 1. mustChangePassword 상태 확인
-    const isMustChange = mustChange === 'true' || mustChange === true;
-    
-    // 2. 24시간 숨김 기한이 설정되지 않았거나 이미 지난 경우
-    const isExpired = !hideUntil || now > Number(hideUntil);
+    // 2. user 객체 안의 mustChangePassword 플래그 확인
+    const mustChange = currentUser?.mustChangePassword;
+    const isMustChange = mustChange === true || mustChange === 'true';
 
-    if (isMustChange && isExpired) {
+    if (isMustChange) {
       setShowPasswordModal(true);
     }
-  }, []);
+  }, [user]);
 
-  // ★ "나중에 하기 (하루 동안 보지 않기)" 클릭 핸들러
-  const handleDismissForADay = () => {
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 24시간 (밀리초)
-    const hideUntil = Date.now() + ONE_DAY_MS;
-
-    localStorage.setItem('hidePasswordModalUntil', hideUntil.toString());
+  // "나중에 하기" 클릭 핸들러
+  const handleDismiss = () => {
     setShowPasswordModal(false);
   };
 
@@ -34,7 +28,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
   const handleGoToChangePassword = () => {
     setShowPasswordModal(false);
     if (openMyPage) {
-      openMyPage(); // 기존 마이페이지 모달 호출
+      openMyPage('password'); // 마이페이지 모달을 비밀번호 변경 탭으로 호출
     }
   };
 
@@ -108,7 +102,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
 
       </div>
 
-      {/* ★ 비밀번호 변경 권장 안내 모달 */}
+      {/* 비밀번호 변경 권장 안내 모달 */}
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
           <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl transition-all ${
@@ -130,14 +124,14 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
 
             <div className="flex justify-end gap-3">
               <button
-                onClick={handleDismissForADay}
+                onClick={handleDismiss}
                 className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
                   isDarkMode 
                     ? 'bg-[#1A223D] text-[#8592AD] hover:text-[#EDF1FC] hover:bg-[#232B45]' 
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
-                24시간 동안 보지 않기
+                나중에 하기
               </button>
               <button
                 onClick={handleGoToChangePassword}
