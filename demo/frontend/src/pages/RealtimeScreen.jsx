@@ -32,7 +32,6 @@ const saveToDB = async (dataArray) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     
-    // 단일 객체이거나 배열인 경우 모두 처리
     const list = Array.isArray(dataArray) ? dataArray : [dataArray];
     list.forEach(item => store.put(item));
     
@@ -63,6 +62,13 @@ const clearDB = async () => {
   });
 };
 
+// datetime-local input 포맷 변환 (YYYY-MM-DDTHH:mm)
+const formatForDateTimeInput = (date) => {
+  if (!date) return '';
+  const tzoffset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
+};
+
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
@@ -88,71 +94,72 @@ const RealtimeScreen = ({
   const [accumulatedCount, setAccumulatedCount] = useState(0);
   const [flash, setFlash] = useState(false);
 
+  // ★ 시작 시각 & 종료 시각 State (기본값: 1시간 전 ~ 현재)
+  const [startTime, setStartTime] = useState(() => new Date(Date.now() - 60 * 60 * 1000));
+  const [endTime, setEndTime] = useState(() => new Date());
+
   const stompClientRef = useRef(null);
 
   // 1. 웹소켓(WebSocket) 연결 및 /topic/live/monitoring 구독
   useEffect(() => {
     const setupWebSocket = async () => {
-      // 페이지 진입 시 IndexedDB 초기화
       await clearDB();
       setAccumulatedCount(0);
 
-      // STOMP 클라이언트 생성
       const client = new Client({
-      webSocketFactory: () => new SockJS('http://localhost:8086/ws'),
+        webSocketFactory: () => new SockJS('http://localhost:8086/ws'),
 
-      connectHeaders: {
-        Authorization: user?.token ? `Bearer ${user.token}` : '',
-        token: user?.token || '',
-      },
-      debug: (str) => {
-        console.log('[STOMP]', str);
-      },
-      reconnectDelay: 5000, // 연결 끊길 시 5초 후 재연결
-      
-      onConnect: () => {
-        setIsConnected(true);
-        setLoadError('');
+        connectHeaders: {
+          Authorization: user?.token ? `Bearer ${user.token}` : '',
+          token: user?.token || '',
+        },
+        debug: (str) => {
+          console.log('[STOMP]', str);
+        },
+        reconnectDelay: 5000,
+        
+        onConnect: () => {
+          setIsConnected(true);
+          setLoadError('');
 
-        // 웹소켓 메시지 수신 구독
-        client.subscribe('/topic/live/monitoring', async (message) => {
-          try {
-            const parsedData = JSON.parse(message.body);
-            
-            let newDataList = [];
-            if (Array.isArray(parsedData)) {
-              newDataList = parsedData;
-            } else if (parsedData && Array.isArray(parsedData.data)) {
-              newDataList = parsedData.data;
-            } else if (parsedData) {
-              newDataList = [parsedData];
+          client.subscribe('/topic/live/monitoring', async (message) => {
+            try {
+              const parsedData = JSON.parse(message.body);
+              
+              let newDataList = [];
+              if (Array.isArray(parsedData)) {
+                newDataList = parsedData;
+              } else if (parsedData && Array.isArray(parsedData.data)) {
+                newDataList = parsedData.data;
+              } else if (parsedData) {
+                newDataList = [parsedData];
+              }
+
+              if (newDataList.length > 0) {
+                setEquipments(newDataList);
+
+                setFlash(true);
+                setTimeout(() => setFlash(false), 500);
+
+                await saveToDB(newDataList);
+                setAccumulatedCount(prev => prev + newDataList.length);
+              }
+            } catch (e) {
+              console.error('웹소켓 데이터 파싱 에러:', e);
             }
+          });
+        },
 
-            if (newDataList.length > 0) {
-              setEquipments(newDataList);
+        onStompError: (frame) => {
+          console.error('STOMP 에러:', frame.headers['message']);
+          setLoadError('STOMP 프로토콜 오류');
+          setIsConnected(false);
+        },
 
-              setFlash(true);
-              setTimeout(() => setFlash(false), 500);
-
-              await saveToDB(newDataList);
-              setAccumulatedCount(prev => prev + newDataList.length);
-            }
-          } catch (e) {
-            console.error('웹소켓 데이터 파싱 에러:', e);
-          }
-        });
-      },
-
-      onStompError: (frame) => {
-        console.error('STOMP 에러:', frame.headers['message']);
-        setLoadError('STOMP 프로토콜 오류');
-        setIsConnected(false);
-      },
-
-      onWebSocketClose: () => {
-        setIsConnected(false);
-      }
-    });
+        onWebSocketClose: () => {
+          setIsConnected(false);
+        }
+      });
 
       client.activate();
       stompClientRef.current = client;
@@ -160,7 +167,6 @@ const RealtimeScreen = ({
 
     setupWebSocket();
 
-    // 언마운트 시 소켓 연결 해제
     return () => {
       if (stompClientRef.current) {
         stompClientRef.current.deactivate();
@@ -179,8 +185,30 @@ const RealtimeScreen = ({
     }
   }, [tabMode, equipments]);
 
-  // 엑셀 내보내기 (IndexedDB 전체 누적 데이터)
+  // ★ 1시간 이내 시간 범위 퀵 선택 옵션
+  const handlePresetRange = (presetType) => {
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    if (presetType === 'FULL_1HR') {
+      setStartTime(oneHourAgo);
+      setEndTime(now);
+    } else if (presetType === 'FIRST_30M') {
+      setStartTime(oneHourAgo);
+      setEndTime(new Date(now.getTime() - 30 * 60 * 1000));
+    } else if (presetType === 'LAST_30M') {
+      setStartTime(new Date(now.getTime() - 30 * 60 * 1000));
+      setEndTime(now);
+    }
+  };
+
+  // ★ 엑셀 내보내기 (시작시간 ~ 종료시간 데이터 필터링 + 유효성 검사)
   const handleExport = async () => {
+    if (startTime >= endTime) {
+      alert('시작 시각은 종료 시각보다 빨라야 합니다.');
+      return;
+    }
+
     try {
       const accumulatedData = await getAllFromDB();
 
@@ -189,7 +217,24 @@ const RealtimeScreen = ({
         return;
       }
 
-      const exportData = accumulatedData.map(eq => {
+      const startMs = startTime.getTime();
+      const endMs = endTime.getTime();
+
+      // 지정한 [startTime ~ endTime] 유효 범위 데이터만 필터
+      const filteredData = accumulatedData.filter(item => {
+        if (!item.receivedAt) return true;
+        const itemMs = new Date(item.receivedAt).getTime();
+        return itemMs >= startMs && itemMs <= endMs;
+      });
+
+      if (filteredData.length === 0) {
+        const startStr = startTime.toLocaleTimeString('ko-KR');
+        const endStr = endTime.toLocaleTimeString('ko-KR');
+        alert(`지정한 시간 구간 (${startStr} ~ ${endStr}) 내 수신 데이터가 없습니다.`);
+        return;
+      }
+
+      const exportData = filteredData.map(eq => {
         const isTempOver = eq.threshold != null && eq.temperature != null && eq.temperature > eq.threshold;
         const isWarning = isTempOver || eq.status === 'WARNING' || eq.status === 'DANGER';
 
@@ -210,12 +255,12 @@ const RealtimeScreen = ({
       ];
 
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, '실시간_소켓_누적데이터');
+      XLSX.utils.book_append_sheet(workbook, worksheet, '시간범위_누적데이터');
 
       const today = new Date();
       const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
       const timeStr = today.toTimeString().slice(0, 5).replace(':', '');
-      const fileName = `설비모니터링_소켓누적_${dateStr}_${timeStr}.xlsx`;
+      const fileName = `설비모니터링_구간추출_${dateStr}_${timeStr}.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
     } catch (err) {
@@ -261,6 +306,12 @@ const RealtimeScreen = ({
     }
   };
 
+  // input 제약용 기준 시각 계산 (1시간 전 ~ 현재)
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const minTimeIso = formatForDateTimeInput(oneHourAgo);
+  const maxTimeIso = formatForDateTimeInput(now);
+
   const selectedEquipName = equipments.find(e => e.equipId === selectedEquipId)?.equipName;
   const displayedAlarms = selectedEquipName
     ? alarms.filter(alarm => alarm.equipName === selectedEquipName)
@@ -281,47 +332,109 @@ const RealtimeScreen = ({
 
       <div className="flex-1 p-3 sm:p-4 md:p-6 flex flex-col gap-4 max-w-[1920px] mx-auto w-full lg:overflow-hidden lg:h-full">
         {/* 상단 컨트롤 영역 */}
-        <div className={`flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl shrink-0 border transition-colors ${
+        <div className={`flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl shrink-0 border transition-colors ${
           isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
         }`}>
           
-          <div className={`relative flex items-center p-1 rounded-full border w-[260px] sm:w-[280px] shrink-0 transition-colors ${
-            isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-          }`}>
-            <div
-              className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
-                isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
-              } ${tabMode === 'threshold' ? 'translate-x-full' : 'translate-x-0'}`}
-            />
-            <button
-              onClick={() => setTabMode('stream')}
-              className={`relative z-10 w-1/2 py-1.5 sm:py-2 text-center rounded-full text-xs sm:text-[13px] font-bold tracking-wide transition-colors ${
-                tabMode === 'stream' 
-                  ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') 
-                  : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
-              }`}
-            >
-              실시간 스트림
-            </button>
-            <button
-              onClick={() => setTabMode('threshold')}
-              className={`relative z-10 w-1/2 py-1.5 sm:py-2 text-center rounded-full text-xs sm:text-[13px] font-bold tracking-wide transition-colors ${
-                tabMode === 'threshold' 
-                  ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') 
-                  : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
-              }`}
-            >
-              임계값설정
-            </button>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* 탭 전환 스위치 */}
+            <div className={`relative flex items-center p-1 rounded-full border w-[220px] shrink-0 transition-colors ${
+              isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
+            }`}>
+              <div
+                className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
+                  isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
+                } ${tabMode === 'threshold' ? 'translate-x-full' : 'translate-x-0'}`}
+              />
+              <button
+                onClick={() => setTabMode('stream')}
+                className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                  tabMode === 'stream' 
+                    ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') 
+                    : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                }`}
+              >
+                실시간 스트림
+              </button>
+              <button
+                onClick={() => setTabMode('threshold')}
+                className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                  tabMode === 'threshold' 
+                    ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') 
+                    : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                }`}
+              >
+                임계값설정
+              </button>
+            </div>
+
+            {/* ★ 1시간 슬롯 내 자유 범위 설정 영역 */}
+            <div className={`flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg border text-xs ${
+              isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#A2ACC9]' : 'bg-gray-50 border-gray-200 text-gray-700'
+            }`}>
+              <span className="font-bold shrink-0">추출 범위:</span>
+              
+              {/* 시작 시간 설정 (최소: 1시간 전, 최대: 현재) */}
+              <input
+                type="datetime-local"
+                min={minTimeIso}
+                max={maxTimeIso}
+                value={formatForDateTimeInput(startTime)}
+                onChange={(e) => e.target.value && setStartTime(new Date(e.target.value))}
+                className={`bg-transparent outline-none font-mono text-xs ${
+                  isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
+                }`}
+              />
+              <span>~</span>
+              {/* 종료 시간 설정 (최소: 1시간 전, 최대: 현재) */}
+              <input
+                type="datetime-local"
+                min={minTimeIso}
+                max={maxTimeIso}
+                value={formatForDateTimeInput(endTime)}
+                onChange={(e) => e.target.value && setEndTime(new Date(e.target.value))}
+                className={`bg-transparent outline-none font-mono text-xs ${
+                  isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
+                }`}
+              />
+
+              {/* 퀵 슬롯 버튼 */}
+              <div className="flex items-center gap-1 ml-1">
+                <button
+                  onClick={() => handlePresetRange('FULL_1HR')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  1시간 전체
+                </button>
+                <button
+                  onClick={() => handlePresetRange('FIRST_30M')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  전반 30분
+                </button>
+                <button
+                  onClick={() => handlePresetRange('LAST_30M')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  후반 30분
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 sm:gap-2.5 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 w-full xl:w-auto">
             <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
               <span className="relative flex h-2 w-2">
                 <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
                 <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
               </span>
-              DB 누적 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
+              DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
             </div>
 
             <button
@@ -333,7 +446,7 @@ const RealtimeScreen = ({
               <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
               </svg>
-              전체 누적데이터 내보내기
+              선택 구간 엑셀 내보내기
             </button>
           </div>
         </div>
