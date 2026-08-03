@@ -1,4 +1,5 @@
 export const DIVISION_MAP = {
+  '001': '관리자',
   '329': '개발2팀'
 };
 
