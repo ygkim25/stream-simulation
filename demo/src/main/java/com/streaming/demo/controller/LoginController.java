@@ -14,8 +14,6 @@ import com.streaming.demo.dto.UpdatePasswordDto;
 import com.streaming.demo.entity.Login;
 import com.streaming.demo.repository.LoginRepository;
 import com.streaming.demo.security.JwtUtil;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/auth")
