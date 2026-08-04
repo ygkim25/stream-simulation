@@ -28,7 +28,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class EquipmentStatusService {
 
-    // private static final Logger log = LoggerFactory.getLogger(EquipmentStatusService.class);
+    // private static final Logger log =
+    // LoggerFactory.getLogger(EquipmentStatusService.class);
 
     private final EquipmentStatusRepository repository;
     private final EquipmentHistoryRepository historyRepository;

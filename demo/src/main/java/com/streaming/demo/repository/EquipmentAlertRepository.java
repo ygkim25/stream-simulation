@@ -9,4 +9,5 @@ import java.util.List;
 public interface EquipmentAlertRepository extends JpaRepository<EquipmentAlert, Long> {
     List<EquipmentAlert> findByRecordedAtBetween(LocalDateTime from, LocalDateTime to);
     List<EquipmentAlert> findByEquipId(String equipId);
+    List<EquipmentAlert> findByRecordedAtAfterOrderByRecordedAtDesc(LocalDateTime since);
 }
