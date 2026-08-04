@@ -2,7 +2,6 @@ package com.streaming.demo.controller;
 
 import com.streaming.demo.dto.EquipmentAlertDto;
 import com.streaming.demo.dto.EquipmentStatusDto;
-import com.streaming.demo.entity.EquipmentAlert;
 import com.streaming.demo.service.AlertNotificationSettingService;
 import com.streaming.demo.service.EquipmentStatusService;
 
