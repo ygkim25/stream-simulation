@@ -1,24 +1,26 @@
 package com.streaming.demo.service;
 
 import com.streaming.demo.dto.EquipmentStatusDto;
+import com.streaming.demo.entity.EquipmentAlert;
 import com.streaming.demo.entity.EquipmentHistory;
 import com.streaming.demo.entity.EquipmentStatus;
+import com.streaming.demo.repository.EquipmentAlertRepository;
 import com.streaming.demo.repository.EquipmentHistoryRepository;
 import com.streaming.demo.repository.EquipmentStatusRepository;
 import jakarta.annotation.PostConstruct;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 
-// import org.slf4j.Logger;
-// import org.slf4j.LoggerFactory;
-// import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -26,17 +28,24 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class EquipmentStatusService {
 
-    // private static final Logger log = LoggerFactory.getLogger(EquipmentStatusService.class);
+    private static final long MIN_INTERVAL_MS = 3000;
+    private static final long MAX_INTERVAL_MS = 15000;
 
     private final EquipmentStatusRepository repository;
     private final EquipmentHistoryRepository historyRepository;
+    private final EquipmentAlertRepository alertRepository;
     private final SimpMessagingTemplate messagingTemplate;
 
+    @Qualifier("taskScheduler")
+    private final TaskScheduler taskScheduler;
+
     private final Map<String, EquipmentStatus> liveData = new ConcurrentHashMap<>();
+    private final Random random = new Random();
 
     @PostConstruct
     public void init() {
         repository.findAll().forEach(eq -> liveData.put(eq.getEquipId(), eq));
+        liveData.keySet().forEach(this::scheduleNext);
     }
 
     public List<EquipmentStatusDto> getAllEquipment() {
@@ -46,41 +55,50 @@ public class EquipmentStatusService {
                 .collect(Collectors.toList());
     }
 
-    @Scheduled(fixedRate = 10000)
-    public void simulateAndBroadcast() {
-        LocalDateTime now = LocalDateTime.now();
-
-        List<EquipmentStatus> fluctuated = liveData.values().stream()
-                .map(this::fluctuate)
-                .collect(Collectors.toList());
-
-        // 로그
-        // fluctuated.forEach(eq -> log.info("[{}] {} - 온도:{}, 전력:{}, 상태:{}",
-        // now, eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus()));
-
-        List<EquipmentStatusDto> dtos = fluctuated.stream()
-                .map(EquipmentStatusDto::new)
-                .collect(Collectors.toList());
-        messagingTemplate.convertAndSend("/topic/live/monitoring", dtos);
-
-        List<EquipmentHistory> histories = fluctuated.stream()
-                .map(eq -> new EquipmentHistory(
-                        eq.getEquipId(), eq.getTemperature(), eq.getPower(),
-                        eq.getStatus(), now))
-                .collect(Collectors.toList());
-        historyRepository.saveAll(histories);
+    // 설비별로 독립적인 다음 tick 예약 (1~15초 랜덤 간격)
+    private void scheduleNext(String equipId) {
+        long delayMs = MIN_INTERVAL_MS + random.nextInt((int) (MAX_INTERVAL_MS - MIN_INTERVAL_MS + 1));
+        taskScheduler.schedule(() -> tick(equipId), Instant.now().plusMillis(delayMs));
     }
 
-    private EquipmentStatus fluctuate(EquipmentStatus eq) {
-        double newTemp = round(eq.getTemperature() + (Math.random() - 0.5) * 3.0);
-        double newPower = round(eq.getPower() + (Math.random() - 0.5) * 6.0);
+    // 설비 1건에 대한 계산 + (변경 시에만) 전송/저장
+    private void tick(String equipId) {
+        try {
+            EquipmentStatus eq = liveData.get(equipId);
+            if (eq == null) {
+                return;
+            }
 
-        eq.setTemperature(newTemp);
-        eq.setPower(newPower);
-        eq.setStatus(determineStatus(newTemp, eq.getThreshold()));
-        eq.setReceivedAt(LocalDateTime.now());
+            double oldTemp1d = round1(eq.getTemperature());
 
-        return eq;
+            double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 0.5) * 3.0);
+            double newPower = round2(eq.getPower() + (random.nextDouble() - 0.5) * 6.0);
+            eq.setTemperature(newTemp);
+            eq.setPower(newPower);
+
+            if (round1(newTemp) != oldTemp1d) {
+                LocalDateTime now = LocalDateTime.now();
+                eq.setStatus(determineStatus(newTemp, eq.getThreshold()));
+                eq.setReceivedAt(now);
+
+                messagingTemplate.convertAndSend(
+                        "/topic/live/monitoring",
+                        List.of(new EquipmentStatusDto(eq)));
+
+                historyRepository.save(new EquipmentHistory(
+                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus(), now));
+
+                if ("경고".equals(eq.getStatus())) {
+                    alertRepository.save(new EquipmentAlert(
+                            eq.getEquipId(), eq.getTemperature(), eq.getPower(),
+                            eq.getThreshold(), eq.getStatus(), now));
+                }
+            }
+
+            liveData.put(equipId, eq);
+        } finally {
+            scheduleNext(equipId);
+        }
     }
 
     private String determineStatus(double temperature, double threshold) {
@@ -91,7 +109,13 @@ public class EquipmentStatusService {
         return "정상";
     }
 
-    private double round(double value) {
+    // 화면 표출 자리수(소수 1자리) 기준 변경 여부 판단용
+    private double round1(double value) {
+        return Math.round(value * 10.0) / 10.0;
+    }
+
+    // DB 저장 자리수(소수 2자리)
+    private double round2(double value) {
         return Math.round(value * 100.0) / 100.0;
     }
 
