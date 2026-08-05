@@ -51,34 +51,71 @@ const getAllFromDB = async () => {
   });
 };
 
-// 24시간이 지난 누적 데이터 자동 삭제 (receivedAt 기준). 삭제된 건수를 반환.
+// 24시간이 지난 누적 데이터를 JSON으로 백업(다운로드)한 뒤 DB에서 삭제 (하루 1회만 실행)
 const DATA_RETENTION_MS = 24 * 60 * 60 * 1000;
+const LAST_ARCHIVE_DATE_KEY = 'monitoringLastArchiveDate';
 
-const pruneOldData = async (maxAgeMs = DATA_RETENTION_MS) => {
+const downloadJson = (data, filename) => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+// 오늘 이미 백업을 실행했는지 확인 (날짜가 바뀌면 다시 실행되도록)
+const hasArchivedToday = () => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  return localStorage.getItem(LAST_ARCHIVE_DATE_KEY) === todayStr;
+};
+
+const markArchivedToday = () => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  localStorage.setItem(LAST_ARCHIVE_DATE_KEY, todayStr);
+};
+
+// 24시간 지난 데이터를 하나의 JSON 파일로 모아 다운로드하고 DB에서 삭제. 삭제 건수를 반환.
+const archiveOldData = async (maxAgeMs = DATA_RETENTION_MS) => {
   const db = await initDB();
-  return new Promise((resolve, reject) => {
+  const cutoff = Date.now() - maxAgeMs;
+
+  const expired = await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const all = request.result || [];
+      resolve(all.filter(item => item.receivedAt && new Date(item.receivedAt).getTime() < cutoff));
+    };
+    request.onerror = () => reject(request.error);
+  });
+
+  if (expired.length === 0) return 0;
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  downloadJson(expired, `설비모니터링_아카이브_${dateStr}.json`);
+
+  await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const cutoff = Date.now() - maxAgeMs;
-    let deletedCount = 0;
-
-    const cursorRequest = store.openCursor();
-    cursorRequest.onsuccess = (e) => {
-      const cursor = e.target.result;
-      if (cursor) {
-        const item = cursor.value;
-        if (item.receivedAt && new Date(item.receivedAt).getTime() < cutoff) {
-          cursor.delete();
-          deletedCount++;
-        }
-        cursor.continue();
-      }
-    };
-    cursorRequest.onerror = () => reject(cursorRequest.error);
-
-    tx.oncomplete = () => resolve(deletedCount);
+    expired.forEach(item => store.delete(item.id));
+    tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+
+  return expired.length;
+};
+
+// 하루 1회로 제한된 아카이브 실행 (이미 오늘 실행했으면 스킵)
+const runDailyArchiveIfNeeded = async () => {
+  if (hasArchivedToday()) return 0;
+  const archivedCount = await archiveOldData();
+  markArchivedToday();
+  return archivedCount;
 };
 
 // datetime-local input 포맷 변환 (YYYY-MM-DDTHH:mm)
@@ -86,6 +123,18 @@ const formatForDateTimeInput = (date) => {
   if (!date || isNaN(date.getTime())) return '';
   const tzoffset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
+};
+
+// 선택 구간 요약 라벨 (같은 날짜면 시간만, 다른 날짜면 날짜까지 표시)
+const formatRangeLabel = (start, end) => {
+  if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) return '-';
+  const timeFmt = (d) => d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const dateFmt = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+  const sameDay = start.toDateString() === end.toDateString();
+
+  return sameDay
+    ? `${dateFmt(start)} ${timeFmt(start)} ~ ${timeFmt(end)}`
+    : `${dateFmt(start)} ${timeFmt(start)} ~ ${dateFmt(end)} ${timeFmt(end)}`;
 };
 
 // ==========================================
@@ -116,6 +165,8 @@ const RealtimeScreen = ({
   // 시작 시각 & 종료 시각 State (기본값: 1시간 전 ~ 현재)
   const [startTime, setStartTime] = useState(() => new Date(Date.now() - 60 * 60 * 1000));
   const [endTime, setEndTime] = useState(() => new Date());
+  const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState('');
 
   const stompClientRef = useRef(null);
 
@@ -124,8 +175,8 @@ const RealtimeScreen = ({
     let isMounted = true;
 
     const setupWebSocket = async () => {
-      // 24시간 지난 데이터만 정리하고, 나머지 누적 데이터는 새로고침/재진입에도 유지
-      await pruneOldData();
+      // 24시간 지난 데이터는 하루 1회 JSON으로 백업 후 삭제, 나머지 누적 데이터는 새로고침/재진입에도 유지
+      await runDailyArchiveIfNeeded();
       if (!isMounted) return;
       const existing = await getAllFromDB();
       if (isMounted) setAccumulatedCount(existing.length);
@@ -206,17 +257,18 @@ const RealtimeScreen = ({
 
     setupWebSocket();
 
-    // 세션 유지 중에도 24시간 지난 데이터는 주기적으로 정리
-    const pruneIntervalId = setInterval(async () => {
-      const deleted = await pruneOldData();
-      if (deleted > 0 && isMounted) {
-        setAccumulatedCount(prev => Math.max(0, prev - deleted));
+    // 세션이 자정을 넘겨 유지되는 경우를 대비해 날짜가 바뀌었는지 주기적으로 점검
+    // (hasArchivedToday()로 하루 1회만 실제로 백업이 실행됨)
+    const archiveIntervalId = setInterval(async () => {
+      const archivedCount = await runDailyArchiveIfNeeded();
+      if (archivedCount > 0 && isMounted) {
+        setAccumulatedCount(prev => Math.max(0, prev - archivedCount));
       }
     }, 10 * 60 * 1000); // 10분마다 점검
 
     return () => {
       isMounted = false;
-      clearInterval(pruneIntervalId);
+      clearInterval(archiveIntervalId);
       if (stompClientRef.current) {
         stompClientRef.current.deactivate();
         stompClientRef.current = null;
@@ -253,30 +305,43 @@ const RealtimeScreen = ({
       setStartTime(oneHourAgo);
       setEndTime(now);
     }
+    setSelectedPreset(presetType);
   };
 
   // 시작 시간 변경 처리
   const handleStartTimeChange = (e) => {
     if (!e.target.value) return;
     const selectedStart = new Date(e.target.value);
-    
+
     if (selectedStart > endTime) {
       alert('시작 시각은 종료 시각보다 나중일 수 없습니다.');
       return;
     }
     setStartTime(selectedStart);
+    setSelectedPreset(''); // 수동으로 시간을 바꾸면 프리셋 선택 표시 해제
   };
 
   // 종료 시간 변경 처리
   const handleEndTimeChange = (e) => {
     if (!e.target.value) return;
     const selectedEnd = new Date(e.target.value);
-    
+
     if (selectedEnd < startTime) {
       alert('종료 시각은 시작 시각보다 빠를 수 없습니다.');
       return;
     }
     setEndTime(selectedEnd);
+    setSelectedPreset(''); // 수동으로 시간을 바꾸면 프리셋 선택 표시 해제
+  };
+
+  // ★ [임시 테스트용] 24시간을 기다리지 않고 아카이브 동작(JSON 다운로드 + DB 삭제)을 바로 확인. 확인 끝나면 버튼째로 제거 예정.
+  const handleTestArchive = async () => {
+    const archivedCount = await archiveOldData(0); // 0ms 기준 → 현재 DB의 모든 데이터를 "24h 지남"으로 간주
+    const existing = await getAllFromDB();
+    setAccumulatedCount(existing.length);
+    alert(archivedCount > 0
+      ? `[테스트] ${archivedCount}건을 JSON으로 백업하고 DB에서 삭제했습니다.`
+      : '[테스트] 백업할 데이터가 없습니다. (먼저 실시간 데이터가 좀 쌓인 뒤 눌러주세요)');
   };
 
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
@@ -495,74 +560,81 @@ const RealtimeScreen = ({
               </button>
             </div>
 
-            {/* 완전 자유로운 범위 선택 영역 */}
-            <div className={`flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg border text-xs ${
-              isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#A2ACC9]' : 'bg-gray-50 border-gray-200 text-gray-700'
-            }`}>
-              <span className="font-bold shrink-0">추출 범위:</span>
-
-              <input
-                type="datetime-local"
-                max={formatForDateTimeInput(endTime)}
-                value={formatForDateTimeInput(startTime)}
-                onChange={handleStartTimeChange}
-                style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                className={`bg-transparent outline-none font-mono text-xs cursor-pointer ${
-                  isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
+            {/* 기간 선택 (클릭하면 편집 팝오버) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsRangeEditorOpen(prev => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors ${
+                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#22D3EE] hover:border-[#2A335A]' : 'bg-gray-50 border-gray-200 text-green-700 font-bold hover:border-gray-300'
                 }`}
-              />
-              <span>~</span>
-              <input
-                type="datetime-local"
-                min={formatForDateTimeInput(startTime)}
-                max={currentNowIso}
-                value={formatForDateTimeInput(endTime)}
-                onChange={handleEndTimeChange}
-                style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                className={`bg-transparent outline-none font-mono text-xs cursor-pointer ${
-                  isDarkMode ? 'text-[#22D3EE]' : 'text-green-700 font-bold'
-                }`}
-              />
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                기간: {formatRangeLabel(startTime, endTime)}
+              </button>
 
-              {/* 퀵 슬롯 버튼 */}
-              <div className="flex items-center gap-1 ml-1">
-                <button
-                  onClick={() => handlePresetRange('FULL_1HR')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
-                  }`}
-                  title="최근 1시간 선택"
-                >
-                  최근 1시간
-                </button>
-                <button
-                  onClick={() => handlePresetRange('FIRST_30M')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  전반 30분
-                </button>
-                <button
-                  onClick={() => handlePresetRange('LAST_30M')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                    isDarkMode ? 'bg-[#151B30] border-[#2A335A] hover:bg-[#1E2745] text-[#EDF1FC]' : 'bg-white border-gray-300 hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  후반 30분
-                </button>
-                <button
-                  onClick={() => handlePresetRange('RESET_NOW')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                    isDarkMode
-                      ? 'bg-[#1E2A4A] border-[#22D3EE]/50 text-[#22D3EE] hover:bg-[#25355E]'
-                      : 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
-                  }`}
-                  title="종료 시각을 현재 시각으로 설정"
-                >
-                  현재로 갱신
-                </button>
-              </div>
+              {isRangeEditorOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsRangeEditorOpen(false)} />
+                  <div className={`absolute top-full left-0 mt-2 z-50 w-[260px] p-3 rounded-xl border shadow-2xl space-y-2.5 ${
+                    isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
+                  }`}>
+                    <div>
+                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>시작</label>
+                      <input
+                        type="datetime-local"
+                        max={formatForDateTimeInput(endTime)}
+                        value={formatForDateTimeInput(startTime)}
+                        onChange={handleStartTimeChange}
+                        style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>종료</label>
+                      <input
+                        type="datetime-local"
+                        min={formatForDateTimeInput(startTime)}
+                        max={currentNowIso}
+                        value={formatForDateTimeInput(endTime)}
+                        onChange={handleEndTimeChange}
+                        style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
+                        }`}
+                      />
+                    </div>
+
+                    <select
+                      value={selectedPreset}
+                      onChange={(e) => { if (e.target.value) handlePresetRange(e.target.value); }}
+                      className={`w-full rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border outline-none cursor-pointer ${
+                        isDarkMode ? 'bg-[#151B30] border-[#2A335A] text-[#EDF1FC]' : 'bg-white border-gray-300 text-gray-700'
+                      }`}
+                    >
+                      <option value="" disabled>빠른 선택</option>
+                      <option value="FULL_1HR">최근 1시간</option>
+                      <option value="FIRST_30M">이전 30분</option>
+                      <option value="LAST_30M">최근 30분</option>
+                      <option value="RESET_NOW">현재로 갱신</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsRangeEditorOpen(false)}
+                      className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                        isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
+                      }`}
+                    >
+                      적용
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -588,6 +660,17 @@ const RealtimeScreen = ({
                 <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
               </svg>
               엑셀 내보내기
+            </button>
+
+            {/* ★ [임시 테스트용 버튼] 아카이브 동작 확인 끝나면 제거 예정 */}
+            <button
+              onClick={handleTestArchive}
+              title="테스트: 현재 DB의 모든 데이터를 즉시 아카이브(JSON 다운로드 후 삭제)"
+              className={`px-3 sm:px-4 py-1.5 sm:py-2 border rounded-lg text-xs sm:text-[13px] font-semibold transition-colors flex items-center gap-1.5 ${
+                isDarkMode ? 'bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20' : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
+              }`}
+            >
+              [테스트] 아카이브 실행
             </button>
 
             <button
