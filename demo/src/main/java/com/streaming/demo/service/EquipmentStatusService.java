@@ -31,10 +31,12 @@ public class EquipmentStatusService {
 
     private static final long MIN_INTERVAL_MS = 3000;
     private static final long MAX_INTERVAL_MS = 15000;
+    private static final double WARNING_MARGIN = 5.0; // 임계값과의 차이가 이보다 작으면 "경고"
 
     private final EquipmentStatusRepository repository;
     private final EquipmentHistoryRepository historyRepository;
     private final EquipmentAlertRepository alertRepository;
+    private final EquipmentLogService equipmentLogService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Qualifier("taskScheduler")
@@ -71,6 +73,7 @@ public class EquipmentStatusService {
             }
 
             double oldTemp1d = round1(eq.getTemperature());
+            String oldStatus = eq.getStatus();
 
             double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 0.5) * 3.0);
             double newPower = round2(eq.getPower() + (random.nextDouble() - 0.5) * 6.0);
@@ -79,7 +82,8 @@ public class EquipmentStatusService {
 
             if (round1(newTemp) != oldTemp1d) {
                 LocalDateTime now = LocalDateTime.now();
-                eq.setStatus(determineStatus(newTemp, eq.getThreshold()));
+                String newStatus = determineStatus(newTemp, eq.getThreshold());
+                eq.setStatus(newStatus);
                 eq.setReceivedAt(now);
 
                 messagingTemplate.convertAndSend(
@@ -87,12 +91,16 @@ public class EquipmentStatusService {
                         List.of(new EquipmentStatusDto(eq)));
 
                 historyRepository.save(new EquipmentHistory(
-                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus(), now));
+                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), newStatus, now));
 
-                if ("경고".equals(eq.getStatus())) {
+                if ("Warning".equals(newStatus)) {
                     alertRepository.save(new EquipmentAlert(
                             eq.getEquipId(), eq.getTemperature(), eq.getPower(),
-                            eq.getThreshold(), eq.getStatus(), now));
+                            eq.getThreshold(), newStatus, now));
+                }
+
+                if (!newStatus.equals(oldStatus)) {
+                    equipmentLogService.recordStatusChange(eq, newStatus, now);
                 }
             }
 
@@ -103,11 +111,11 @@ public class EquipmentStatusService {
     }
 
     private String determineStatus(double temperature, double threshold) {
-        if (temperature >= threshold * 1.1)
-            return "위험";
         if (temperature >= threshold)
-            return "경고";
-        return "정상";
+            return "Critical";
+        if (threshold - temperature < WARNING_MARGIN)
+            return "Warning";
+        return "Normal";
     }
 
     // 화면 표출 자리수(소수 1자리) 기준 변경 여부 판단용
