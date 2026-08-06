@@ -69,7 +69,7 @@ public class UserInfoController {
         return ResponseEntity.ok(response);
     }
 
-    // 마이페이지 - 사용자 조회 탭: employee 테이블 전체 목록
+    // 마이페이지 - 사용자 조회
     @GetMapping("/users")
     public ResponseEntity<?> getAllUsers(@RequestHeader("Authorization") String authHeader) {
         System.out.println("========== UserInfoController ---- getAllUsers() ==========");
