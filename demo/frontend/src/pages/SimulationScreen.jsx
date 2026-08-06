@@ -333,14 +333,13 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       return { ...r, temperature: edited, status: computeStatus(edited, r.threshold) };
     });
 
-    // 1) 등록된 시뮬레이션 목록(IndexedDB)에도 수정 내용 반영
     const updatedScenario = { ...selectedScenario, rows: updatedRows };
     await saveScenario(updatedScenario);
     setRows(updatedRows);
     setEditedValues({});
     await loadScenarios();
 
-    // 2) 수정 데이터를 포함해서 엑셀 파일로 다시 내보내기
+    // 엑셀 파일로 내보내기
     const exportData = updatedRows.map(r => ({
       'ID': `#${r.equipId}`,
       '설비명': r.equipName,
