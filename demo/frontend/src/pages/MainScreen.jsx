@@ -75,7 +75,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
 
         {/* 시뮬레이션 모드 카드 */}
         <div 
-          onClick={() => alert('시뮬레이션 모니터링 페이지는 다음 단계에서 구현됩니다.')}
+          onClick={() => setRoute('simulation')}
           className={`w-full max-w-[450px] h-[480px] rounded-2xl transition-all duration-300 cursor-pointer border flex flex-col items-center justify-center p-8 group relative overflow-hidden ${
             isDarkMode 
               ? 'bg-[#12172A] border-[#1E253D] hover:border-[#34D399]/50 hover:bg-[#161D35] hover:shadow-[0_0_30px_rgba(52,211,153,0.1)]' 

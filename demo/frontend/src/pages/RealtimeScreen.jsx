@@ -392,6 +392,7 @@ const RealtimeScreen = ({
       const exportData = filteredData.map(eq => ({
         'ID': `#${String(eq.equipId).padStart(3, '0')}`,
         '설비명': eq.equipName,
+        '위치': eq.location || '-',
         '수신 시간': eq.receivedAt ? new Date(eq.receivedAt).toLocaleString('ko-KR') : '-',
         '온도(℃)': eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-',
         '전력': eq.power != null ? Number(eq.power).toFixed(1) : '-',
@@ -401,7 +402,7 @@ const RealtimeScreen = ({
 
       const worksheet = XLSX.utils.json_to_sheet(exportData);
       worksheet['!cols'] = [
-        { wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }
+        { wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }
       ];
 
       const workbook = XLSX.utils.book_new();
@@ -483,15 +484,14 @@ const RealtimeScreen = ({
   // 임계값 설정 탭에서 그리드 맨 위에 인라인으로 추가되는 "신규 설비 입력 행"
   const [newRows, setNewRows] = useState([]);
 
-  // 기존 설비 + 이미 추가된 신규 행들 중 가장 큰 숫자 ID + 1을 다음 ID로 사용 (시퀀스 자동 생성)
+  // 장비추가 시퀀스 자동 생성
   const getNextEquipId = () => {
     const allIds = [
       ...equipments.map(eq => eq.equipId),
       ...newRows.map(row => row.equipId),
     ].filter(Boolean);
 
-    // "EQ-021" 같이 접두사 + 숫자 조합 ID 파싱 (접두사/자릿수는 가장 큰 번호를 가진 ID 기준)
-    let prefix = 'EQ-';
+    let prefix = 'EQ-'; //EQ-001
     let pad = 3;
     let maxNum = 0;
 

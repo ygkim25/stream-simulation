@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import LoginScreen from './pages/LoginScreen';
 import MainScreen from './pages/MainScreen';
 import RealtimeScreen from './pages/RealtimeScreen';
+import SimulationScreen from './pages/SimulationScreen';
 import MyPageModal from './components/MyPageModal'; 
 import FullLogModal from './components/FullLogModal';
 
@@ -135,6 +136,16 @@ export default function App() {
           setAlarms={setAlarms}
           setLogs={setLogs}
           openLogs={handleLogOpen}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
+        />
+      )}
+
+      {route === 'simulation' && (
+        <SimulationScreen
+          user={user}
+          setRoute={setRoute}
+          openMyPage={handleMyPageOpen}
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
         />
