@@ -138,7 +138,7 @@ public class EquipmentStatusService {
                         || dto.getPower() == null || dto.getThreshold() == null
                         || dto.getLocation() == null) {
                     throw new IllegalArgumentException(
-                            dto.getEquipId() + " 신규 설비는 장비이름/온도/전력/임계값/위치가 모두 필요합니다.");
+                            "신규 설비는 장비이름/온도/전력/임계값/위치 값을 모두 입력해야 합니다.");
                 }
                 eq = new EquipmentStatus();
                 eq.setEquipId(dto.getEquipId());
