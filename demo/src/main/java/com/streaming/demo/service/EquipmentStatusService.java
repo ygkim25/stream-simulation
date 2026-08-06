@@ -70,6 +70,7 @@ public class EquipmentStatusService {
             }
 
             double oldTemp1d = round1(eq.getTemperature());
+            String oldStatus = eq.getStatus();
 
             double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 0.5) * 3.0);
             double newPower = round2(eq.getPower() + (random.nextDouble() - 0.5) * 6.0);
@@ -78,7 +79,8 @@ public class EquipmentStatusService {
 
             if (round1(newTemp) != oldTemp1d) {
                 LocalDateTime now = LocalDateTime.now();
-                eq.setStatus(determineStatus(newTemp, eq.getThreshold()));
+                String newStatus = determineStatus(newTemp, eq.getThreshold());
+                eq.setStatus(newStatus);
                 eq.setReceivedAt(now);
 
                 messagingTemplate.convertAndSend(
@@ -88,7 +90,10 @@ public class EquipmentStatusService {
                 historyRepository.save(new EquipmentHistory(
                         eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus(), now));
 
-                if ("경고".equals(eq.getStatus())) {
+                // 정상 → 경고/위험으로 "새로 진입"할 때만 알림 기록 (같은 경고 상태가 유지되는 동안은 중복 저장하지 않음)
+                boolean isWarningOrDanger = "경고".equals(newStatus) || "위험".equals(newStatus);
+                boolean statusChanged = !newStatus.equals(oldStatus);
+                if (isWarningOrDanger && statusChanged) {
                     alertRepository.save(new EquipmentAlert(
                             eq.getEquipId(), eq.getTemperature(), eq.getPower(),
                             eq.getThreshold(), eq.getStatus(), now));

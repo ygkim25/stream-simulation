@@ -18,6 +18,10 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
     }
   };
 
+  const scrollToBottom = () => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  };
+
   const typeBadge = {
     warning: { 
       label: '초과 감지', 
@@ -114,12 +118,13 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
         </div>
 
         {/* 팝업 본문 (로그 리스트 영역) */}
-        <div
-          ref={scrollRef}
-          className={`flex-1 overflow-y-auto p-0 flex flex-col justify-start transition-colors ${
-            isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50/50'
-          }`}
-        >
+        <div className="relative flex-1 min-h-0">
+          <div
+            ref={scrollRef}
+            className={`h-full overflow-y-auto p-0 flex flex-col justify-start transition-colors ${
+              isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50/50'
+            }`}
+          >
           {logs.length > 0 ? (
             <div className={`divide-y ${isDarkMode ? 'divide-[#1A2036]' : 'divide-gray-200'}`}>
               {logs.map((log) => {
@@ -183,6 +188,24 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
               <p className="font-medium text-[15px] m-0">기록된 로그 이력이 없습니다.</p>
             </div>
           )}
+        </div>
+
+        {/* 가장 아래(최신)로 이동하는 원형 플로팅 버튼 */}
+        {logs.length > 0 && (
+          <button
+            onClick={scrollToBottom}
+            title="최신 로그로 이동"
+            className={`absolute bottom-3 right-3 w-9 h-9 rounded-full flex items-center justify-center backdrop-blur-md border transition-all duration-200 cursor-pointer hover:scale-110 hover:shadow-lg active:scale-95 ${
+              isDarkMode
+                ? 'bg-[#12172A]/50 hover:bg-[#12172A]/90 border-[#232B45] hover:border-[#22D3EE]/60 text-[#22D3EE]'
+                : 'bg-white/50 hover:bg-white/90 border-gray-200 hover:border-green-400 text-green-700'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        )}
         </div>
       </div>
     </div>

@@ -55,6 +55,11 @@ const getAllFromDB = async () => {
 const DATA_RETENTION_MS = 24 * 60 * 60 * 1000;
 const LAST_ARCHIVE_DATE_KEY = 'monitoringLastArchiveDate';
 
+// 화면에 표시할 알람 최대 개수 (과거 누적분이 너무 많이 내려와도 렉 걸리지 않도록 제한)
+const MAX_ALARMS = 100;
+
+const isWarningStatus = (status) => status === '경고' || status === '위험';
+
 const downloadJson = (data, filename) => {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -140,15 +145,16 @@ const formatRangeLabel = (start, end) => {
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
-const RealtimeScreen = ({ 
-  user, 
-  setRoute, 
-  openMyPage, 
-  alarms = [], 
-  setAlarms, 
-  openLogs, 
-  isDarkMode, 
-  setIsDarkMode 
+const RealtimeScreen = ({
+  user,
+  setRoute,
+  openMyPage,
+  alarms = [],
+  setAlarms,
+  setLogs,
+  openLogs,
+  isDarkMode,
+  setIsDarkMode
 }) => {
   const [tabMode, setTabMode] = useState('stream');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
@@ -169,6 +175,12 @@ const RealtimeScreen = ({
   const [selectedPreset, setSelectedPreset] = useState('');
 
   const stompClientRef = useRef(null);
+
+  // 알림 매핑 시 최신 설비명/위치를 참조하기 위한 ref (폴링 interval의 stale closure 방지)
+  const equipmentsRef = useRef([]);
+  useEffect(() => {
+    equipmentsRef.current = equipments;
+  }, [equipments]);
 
   // ★ 웹소켓(WebSocket) 연결 및 중복 구독 방지 처리
   useEffect(() => {
@@ -203,12 +215,15 @@ const RealtimeScreen = ({
           setIsConnected(true);
           setLoadError('');
 
+          // 백엔드가 이제 설비별로 변경된 로우 1건씩만 보내주므로, 초기 전체 목록은 REST로 채워둠
+          fetchEquipments();
+
           client.subscribe('/topic/live/monitoring', async (message) => {
             if (!isMounted) return;
 
             try {
               const parsedData = JSON.parse(message.body);
-              
+
               let newDataList = [];
               if (Array.isArray(parsedData)) {
                 newDataList = parsedData;
@@ -219,7 +234,68 @@ const RealtimeScreen = ({
               }
 
               if (newDataList.length > 0) {
-                setEquipments(newDataList);
+                // 실시간 모니터링 스트림 기준으로, 임계값 초과(경고/위험) 상태에 "새로 진입"한 설비만 알람/로그에 반영
+                const newAlarms = [];
+                const newLogs = [];
+
+                newDataList.forEach(newItem => {
+                  const prevEq = equipmentsRef.current.find(eq => eq.equipId === newItem.equipId);
+                  const prevStatus = prevEq?.status;
+                  const wasWarning = isWarningStatus(prevStatus);
+                  const isNowWarning = isWarningStatus(newItem.status);
+                  const timeLabel = newItem.receivedAt
+                    ? new Date(newItem.receivedAt).toLocaleTimeString('ko-KR')
+                    : new Date().toLocaleTimeString('ko-KR');
+
+                  if (isNowWarning && newItem.status !== prevStatus) {
+                    newAlarms.push({
+                      id: `${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
+                      equipName: newItem.equipName,
+                      time: timeLabel,
+                      value: newItem.temperature,
+                      threshold: newItem.threshold,
+                      location: newItem.location || '-',
+                    });
+                    newLogs.push({
+                      id: `log-${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
+                      time: timeLabel,
+                      type: 'warning',
+                      equipName: newItem.equipName,
+                      message: `임계값 초과 감지 (${newItem.status})`,
+                      value: newItem.temperature,
+                      threshold: newItem.threshold,
+                    });
+                  } else if (!isNowWarning && wasWarning) {
+                    newLogs.push({
+                      id: `log-${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
+                      time: timeLabel,
+                      type: 'success',
+                      equipName: newItem.equipName,
+                      message: `정상 범위로 복구됨 (온도 ${newItem.temperature}℃)`,
+                    });
+                  }
+                });
+
+                if (newAlarms.length > 0) {
+                  setAlarms(prev => [...prev, ...newAlarms].slice(-MAX_ALARMS));
+                }
+                if (newLogs.length > 0) {
+                  setLogs(prev => [...prev, ...newLogs]);
+                }
+
+                // 설비 ID로 비교해서 변경된 로우만 갱신 (전체 목록을 덮어쓰지 않음)
+                setEquipments(prev => {
+                  const updated = [...prev];
+                  newDataList.forEach(newItem => {
+                    const idx = updated.findIndex(eq => eq.equipId === newItem.equipId);
+                    if (idx >= 0) {
+                      updated[idx] = newItem;
+                    } else {
+                      updated.push(newItem);
+                    }
+                  });
+                  return updated;
+                });
 
                 setFlash(true);
                 setTimeout(() => {
@@ -275,6 +351,11 @@ const RealtimeScreen = ({
       }
     };
   }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
+
+  // 알림 전체 지우기 (알람은 이제 실시간 웹소켓 스트림에서 직접 파생되므로 화면 상태만 비움)
+  const handleClearAlarms = () => {
+    setAlarms([]);
+  };
 
   // 임계값 탭 이동 시 값 세팅
   useEffect(() => {
@@ -625,12 +706,21 @@ const RealtimeScreen = ({
 
                     <button
                       type="button"
-                      onClick={() => setIsRangeEditorOpen(false)}
-                      className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      onClick={async () => {
+                        await handleExport();
+                        setIsRangeEditorOpen(false);
+                      }}
+                      className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
                         isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
                       }`}
                     >
-                      적용
+                      <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
+                        <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
+                        <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
+                        <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                      엑셀 내보내기
                     </button>
                   </div>
                 </>
@@ -646,21 +736,6 @@ const RealtimeScreen = ({
               </span>
               DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
             </div>
-
-            <button
-              onClick={handleExport}
-              className={`px-3 sm:px-4 py-1.5 sm:py-2 border rounded-lg text-xs sm:text-[13px] font-semibold transition-colors flex items-center gap-1.5 ${
-                isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#8592AD] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
-                <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
-                <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
-                <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-              엑셀 내보내기
-            </button>
 
             {/* ★ [임시 테스트용 버튼] 아카이브 동작 확인 끝나면 제거 예정 */}
             <button
@@ -846,7 +921,7 @@ const RealtimeScreen = ({
           <div className="w-full lg:w-[340px] xl:w-[380px] shrink-0">
             <AlarmSidebar
               alarms={displayedAlarms}
-              onClear={() => setAlarms([])}
+              onClear={handleClearAlarms}
               openLogs={openLogs}
               selectedEquipName={selectedEquipName}
               onClearFilter={() => setSelectedEquipId(null)}
