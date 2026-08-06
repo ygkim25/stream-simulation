@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -124,24 +125,47 @@ public class EquipmentStatusService {
         return Math.round(value * 100.0) / 100.0;
     }
 
-    // 설비 설정 업데이트
+    // 설비 설정 업데이트 (기존 설비면 수정, 없으면 신규 생성 - upsert)
     @Transactional
     public void updateAll(List<EquipmentStatusDto> updatedList) {
+        List<String> newEquipIds = new ArrayList<>();
+
         for (EquipmentStatusDto dto : updatedList) {
             if (dto.getEquipId() == null || dto.getEquipId().isBlank()) {
                 throw new IllegalArgumentException("설비 ID 값은 필수입니다.");
             }
-            EquipmentStatus eq = repository.findById(dto.getEquipId())
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            dto.getEquipId() + " 설비를 찾을 수 없습니다."));
+
+            EquipmentStatus eq = repository.findById(dto.getEquipId()).orElse(null);
+            boolean isNew = (eq == null);
+
+            if (isNew) {
+                if (dto.getEquipName() == null || dto.getTemperature() == null
+                        || dto.getPower() == null || dto.getThreshold() == null
+                        || dto.getLocation() == null) {
+                    throw new IllegalArgumentException(
+                            "신규 설비는 장비이름/온도/전력/임계값/위치 값을 모두 입력해야 합니다.");
+                }
+                eq = new EquipmentStatus();
+                eq.setEquipId(dto.getEquipId());
+            }
 
             if (dto.getEquipName() != null)
                 eq.setEquipName(dto.getEquipName());
             if (dto.getLocation() != null)
-                eq.setLocation(dto.getLocation()); // location 필드 추가 후
+                eq.setLocation(dto.getLocation());
             if (dto.getThreshold() != null)
                 eq.setThreshold(dto.getThreshold());
-            // temperature, power, status는 body에 없으면 건드리지 않음 → 기존 값 유지
+            if (dto.getTemperature() != null)
+                eq.setTemperature(dto.getTemperature());
+            if (dto.getPower() != null)
+                eq.setPower(dto.getPower());
+            // status는 body에 없으면 건드리지 않음 → 기존 값 유지 (신규는 아래에서 계산)
+
+            if (isNew) {
+                eq.setStatus(determineStatus(eq.getTemperature(), eq.getThreshold()));
+                eq.setReceivedAt(LocalDateTime.now());
+                newEquipIds.add(eq.getEquipId());
+            }
 
             liveData.put(eq.getEquipId(), eq);
         }
@@ -150,5 +174,8 @@ public class EquipmentStatusService {
                 updatedList.stream()
                         .map(dto -> liveData.get(dto.getEquipId()))
                         .collect(Collectors.toList()));
+
+        // 신규 설비는 곧바로 독립 tick 루프에 합류
+        newEquipIds.forEach(this::scheduleNext);
     }
 }
