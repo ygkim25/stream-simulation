@@ -36,7 +36,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
         mustChangePassword 
       } = response.data;
 
-      // 유저 정보 객체 생성
+      // 유저 정보
       const userData = {
         token,
         userId: resUserId,
@@ -47,10 +47,8 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
         mustChangePassword
       };
 
-      // ★ JSON 통째로 sessionStorage에 저장
       sessionStorage.setItem('user', JSON.stringify(userData));
       
-      // 상위 컴포넌트로 전달
       if (onLogin) {
         onLogin(userData);
       }

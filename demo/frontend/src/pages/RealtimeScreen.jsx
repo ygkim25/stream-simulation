@@ -5,169 +5,13 @@ import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
+import { saveToDB, getAllFromDB } from '../utils/indexedDb';
+import { formatForDateTimeInput, formatFullDateTime } from '../utils/dateFormat';
+import { isWarningStatus, STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
-// ==========================================
-// IndexedDB 유틸리티 (브라우저 로컬 DB 설정)
-// ==========================================
-const DB_NAME = 'MonitoringDB';
-const STORE_NAME = 'liveData';
-
-const initDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-const saveToDB = async (dataArray) => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    
-    const list = Array.isArray(dataArray) ? dataArray : [dataArray];
-    list.forEach(item => store.put(item));
-    
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-const getAllFromDB = async () => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-// 24시간이 지난 누적 데이터를 JSON으로 백업(다운로드)한 뒤 DB에서 삭제 (하루 1회만 실행)
-const DATA_RETENTION_MS = 24 * 60 * 60 * 1000;
-const LAST_ARCHIVE_DATE_KEY = 'monitoringLastArchiveDate';
-
-// 화면에 표시할 알람 최대 개수 (과거 누적분이 너무 많이 내려와도 렉 걸리지 않도록 제한)
+// 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
-
-// 로그는 localStorage에 계속 누적 저장되므로, 무한정 커지지 않도록 최대 개수를 제한
 const MAX_LOGS = 500;
-
-const isWarningStatus = (status) => status === '경고' || status === '위험';
-
-// 그리드 상태 3단계(정상/경고/위험) 색상 매핑
-const STATUS_STYLES = {
-  green: {
-    dark: { text: 'text-[#34D399]', dot: 'bg-[#34D399]' },
-    light: { text: 'text-green-600', dot: 'bg-green-600' },
-  },
-  amber: {
-    dark: { text: 'text-amber-400', dot: 'bg-amber-400' },
-    light: { text: 'text-amber-600', dot: 'bg-amber-500' },
-  },
-  red: {
-    dark: { text: 'text-[#FB5D75]', dot: 'bg-[#FB5D75]' },
-    light: { text: 'text-red-600', dot: 'bg-red-600' },
-  },
-};
-
-const getStatusMeta = (status) => {
-  if (status === '위험' || status === 'DANGER') return { label: '위험', color: 'red' };
-  if (status === '경고' || status === 'WARNING') return { label: '경고', color: 'amber' };
-  return { label: '정상', color: 'green' };
-};
-
-const downloadJson = (data, filename) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-};
-
-// 오늘 이미 백업을 실행했는지 확인 (날짜가 바뀌면 다시 실행되도록)
-const hasArchivedToday = () => {
-  const todayStr = new Date().toISOString().slice(0, 10);
-  return localStorage.getItem(LAST_ARCHIVE_DATE_KEY) === todayStr;
-};
-
-const markArchivedToday = () => {
-  const todayStr = new Date().toISOString().slice(0, 10);
-  localStorage.setItem(LAST_ARCHIVE_DATE_KEY, todayStr);
-};
-
-// 24시간 지난 데이터를 하나의 JSON 파일로 모아 다운로드하고 DB에서 삭제. 삭제 건수를 반환.
-const archiveOldData = async (maxAgeMs = DATA_RETENTION_MS) => {
-  const db = await initDB();
-  const cutoff = Date.now() - maxAgeMs;
-
-  const expired = await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
-    request.onsuccess = () => {
-      const all = request.result || [];
-      resolve(all.filter(item => item.receivedAt && new Date(item.receivedAt).getTime() < cutoff));
-    };
-    request.onerror = () => reject(request.error);
-  });
-
-  if (expired.length === 0) return 0;
-
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  downloadJson(expired, `설비모니터링_아카이브_${dateStr}.json`);
-
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    expired.forEach(item => store.delete(item.id));
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-
-  return expired.length;
-};
-
-// 하루 1회로 제한된 아카이브 실행 (이미 오늘 실행했으면 스킵)
-const runDailyArchiveIfNeeded = async () => {
-  if (hasArchivedToday()) return 0;
-  const archivedCount = await archiveOldData();
-  markArchivedToday();
-  return archivedCount;
-};
-
-// datetime-local input 포맷 변환 (YYYY-MM-DDTHH:mm)
-const formatForDateTimeInput = (date) => {
-  if (!date || isNaN(date.getTime())) return '';
-  const tzoffset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - tzoffset).toISOString().slice(0, 16);
-};
-
-// "YYYY-MM-DD 오전/오후 HH:mm" 형식으로 포맷
-const formatFullDateTime = (date) => {
-  if (!date || isNaN(date.getTime())) return '-';
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  const hours24 = date.getHours();
-  const period = hours24 < 12 ? '오전' : '오후';
-  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  const hh = String(hours12).padStart(2, '0');
-  const min = String(date.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${period} ${hh}:${min}`;
-};
 
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
@@ -189,12 +33,13 @@ const RealtimeScreen = ({
   const [equipments, setEquipments] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const [editedThresholds, setEditedThresholds] = useState({});
+  // 설정 탭 (설비명/위치/임계값)
+  const [editedFields, setEditedFields] = useState({});
   
-  // 누적 데이터 카운트 및 실시간 플래시 효과 State
+  // 누적 데이터 카운트
   const [accumulatedCount, setAccumulatedCount] = useState(0);
   const [flash, setFlash] = useState(false);
-  // 방금 값이 바뀐 설비(행)만 하이라이트하기 위한 ID 집합
+  // 바뀐행 하이라이트
   const [flashedIds, setFlashedIds] = useState(() => new Set());
 
   // 시작 시각 & 종료 시각 State (기본값: 올해 1월 1일 ~ 현재)
@@ -205,7 +50,7 @@ const RealtimeScreen = ({
   const [endTime, setEndTime] = useState(() => new Date());
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
 
-  // "기간" 버튼에 표시할 현재 날짜/시각 (1분마다 갱신되는 실시간 시계)
+  // 현재 날짜/시각
   const [clockNow, setClockNow] = useState(() => new Date());
   useEffect(() => {
     const clockIntervalId = setInterval(() => setClockNow(new Date()), 60 * 1000);
@@ -221,14 +66,56 @@ const RealtimeScreen = ({
     equipmentsRef.current = equipments;
   }, [equipments]);
 
-  // ★ 웹소켓(WebSocket) 연결 및 중복 구독 방지 처리
+  // 사용자가 개별 삭제(x)한 알람 id 목록 (새로고침해도 유지되도록 localStorage에 보관)
+  const dismissedAlarmIdsRef = useRef(null);
+  if (dismissedAlarmIdsRef.current === null) {
+    try {
+      const saved = localStorage.getItem('dismissedAlarmIds');
+      dismissedAlarmIdsRef.current = new Set(saved ? JSON.parse(saved) : []);
+    } catch (e) {
+      dismissedAlarmIdsRef.current = new Set();
+    }
+  }
+  const persistDismissedAlarmIds = () => {
+    try {
+      localStorage.setItem('dismissedAlarmIds', JSON.stringify([...dismissedAlarmIdsRef.current]));
+    } catch (e) {
+      console.error('알람 삭제 목록 저장 실패:', e);
+    }
+  };
+
+  // 알람 클릭 시 그리드에서 스크롤 이동 + 배경색으로 표시할 설비 ID
+  const [clickHighlightId, setClickHighlightId] = useState(null);
+  const clickHighlightTimeoutRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      if (clickHighlightTimeoutRef.current) clearTimeout(clickHighlightTimeoutRef.current);
+    };
+  }, []);
+
+  const handleAlarmClick = (alarm) => {
+    const rowEl = document.getElementById(`equip-row-${alarm.equipId}`);
+    if (rowEl) {
+      rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setClickHighlightId(alarm.equipId);
+    if (clickHighlightTimeoutRef.current) clearTimeout(clickHighlightTimeoutRef.current);
+    clickHighlightTimeoutRef.current = setTimeout(() => {
+      setClickHighlightId(null);
+    }, 1500);
+  };
+
+  const handleDismissAlarm = (id) => {
+    dismissedAlarmIdsRef.current.add(id);
+    persistDismissedAlarmIds();
+    setAlarms(prev => prev.filter(a => a.id !== id));
+  };
+
+  // 웹소켓 연결
   useEffect(() => {
     let isMounted = true;
 
     const setupWebSocket = async () => {
-      // 24시간 지난 데이터는 하루 1회 JSON으로 백업 후 삭제, 나머지 누적 데이터는 새로고침/재진입에도 유지
-      await runDailyArchiveIfNeeded();
-      if (!isMounted) return;
       const existing = await getAllFromDB();
       if (isMounted) setAccumulatedCount(existing.length);
 
@@ -254,8 +141,9 @@ const RealtimeScreen = ({
           setIsConnected(true);
           setLoadError('');
 
-          // 백엔드가 이제 설비별로 변경된 로우 1건씩만 보내주므로, 초기 전체 목록은 REST로 채워둠
+          // 초기목록
           fetchEquipments();
+          fetchAlerts();
 
           client.subscribe('/topic/live/monitoring', async (message) => {
             if (!isMounted) return;
@@ -273,9 +161,10 @@ const RealtimeScreen = ({
               }
 
               if (newDataList.length > 0) {
-                // 실시간 모니터링 스트림 기준으로, 임계값 초과(경고/위험) 상태에 "새로 진입"한 설비만 알람/로그에 반영
-                const newAlarms = [];
+                // 실시간 모니터링 스트림 기준으로, 임계값 초과(경고/위험) 상태에 "새로 진입"한 설비는 로그에 반영
+                // (알람 자체는 noti-warn API가 단일 진실 소스이므로, 전환 감지 시 그쪽을 재조회함)
                 const newLogs = [];
+                let hasNewWarningTransition = false;
 
                 newDataList.forEach(newItem => {
                   const prevEq = equipmentsRef.current.find(eq => eq.equipId === newItem.equipId);
@@ -287,14 +176,7 @@ const RealtimeScreen = ({
                     : new Date().toLocaleTimeString('ko-KR');
 
                   if (isNowWarning && newItem.status !== prevStatus) {
-                    newAlarms.push({
-                      id: `${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
-                      equipName: newItem.equipName,
-                      time: timeLabel,
-                      value: newItem.temperature,
-                      threshold: newItem.threshold,
-                      location: newItem.location || '-',
-                    });
+                    hasNewWarningTransition = true;
                     newLogs.push({
                       id: `log-${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
                       time: timeLabel,
@@ -315,11 +197,11 @@ const RealtimeScreen = ({
                   }
                 });
 
-                if (newAlarms.length > 0) {
-                  setAlarms(prev => [...prev, ...newAlarms].slice(-MAX_ALARMS));
-                }
                 if (newLogs.length > 0) {
                   setLogs(prev => [...prev, ...newLogs].slice(-MAX_LOGS));
+                }
+                if (hasNewWarningTransition) {
+                  fetchAlerts();
                 }
 
                 // 설비 ID로 비교해서 변경된 로우만 갱신 (전체 목록을 덮어쓰지 않음)
@@ -384,18 +266,8 @@ const RealtimeScreen = ({
 
     setupWebSocket();
 
-    // 세션이 자정을 넘겨 유지되는 경우를 대비해 날짜가 바뀌었는지 주기적으로 점검
-    // (hasArchivedToday()로 하루 1회만 실제로 백업이 실행됨)
-    const archiveIntervalId = setInterval(async () => {
-      const archivedCount = await runDailyArchiveIfNeeded();
-      if (archivedCount > 0 && isMounted) {
-        setAccumulatedCount(prev => Math.max(0, prev - archivedCount));
-      }
-    }, 10 * 60 * 1000); // 10분마다 점검
-
     return () => {
       isMounted = false;
-      clearInterval(archiveIntervalId);
       if (stompClientRef.current) {
         stompClientRef.current.deactivate();
         stompClientRef.current = null;
@@ -403,21 +275,40 @@ const RealtimeScreen = ({
     };
   }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
 
-  // 알림 전체 지우기 (알람은 이제 실시간 웹소켓 스트림에서 직접 파생되므로 화면 상태만 비움)
-  const handleClearAlarms = () => {
+  // 알림 전체 지우기 (백엔드 noti-warn 이력도 함께 초기화해야 재조회 시 다시 나타나지 않음)
+  const handleClearAlarms = async () => {
+    try {
+      await axios.post('http://localhost:8086/api/live/monitoring/noti-warn/clear', {}, {
+        headers: { Authorization: `Bearer ${user.token}` },
+      });
+    } catch (err) {
+      console.error('알람 초기화 실패:', err);
+    }
+    dismissedAlarmIdsRef.current = new Set();
+    try {
+      localStorage.removeItem('dismissedAlarmIds');
+    } catch (e) {
+      console.error('알람 삭제 목록 초기화 실패:', e);
+    }
     setAlarms([]);
   };
 
-  // 임계값 탭 이동 시 값 세팅
+  // 임계값 탭에 "진입할 때" 한 번만 값 세팅 (equipments를 deps에 넣으면 실시간 웹소켓
+  // 업데이트가 올 때마다 이 effect가 다시 돌면서 입력 중이던 값을 원래 값으로 덮어써버림)
   useEffect(() => {
     if (tabMode === 'threshold') {
       const initialMap = {};
       equipments.forEach(eq => {
-        initialMap[eq.equipId] = eq.threshold ?? '';
+        initialMap[eq.equipId] = {
+          equipName: eq.equipName ?? '',
+          location: eq.location ?? '',
+          threshold: eq.threshold ?? '',
+        };
       });
-      setEditedThresholds(initialMap);
+      setEditedFields(initialMap);
     }
-  }, [tabMode, equipments]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabMode]);
 
   // 시간 프리셋 조절 함수
   const handlePresetRange = (presetType) => {
@@ -464,16 +355,6 @@ const RealtimeScreen = ({
     }
     setEndTime(selectedEnd);
     setSelectedPreset(''); // 수동으로 시간을 바꾸면 프리셋 선택 표시 해제
-  };
-
-  // ★ [임시 테스트용] 24시간을 기다리지 않고 아카이브 동작(JSON 다운로드 + DB 삭제)을 바로 확인. 확인 끝나면 버튼째로 제거 예정.
-  const handleTestArchive = async () => {
-    const archivedCount = await archiveOldData(0); // 0ms 기준 → 현재 DB의 모든 데이터를 "24h 지남"으로 간주
-    const existing = await getAllFromDB();
-    setAccumulatedCount(existing.length);
-    alert(archivedCount > 0
-      ? `[테스트] ${archivedCount}건을 JSON으로 백업하고 DB에서 삭제했습니다.`
-      : '[테스트] 백업할 데이터가 없습니다. (먼저 실시간 데이터가 좀 쌓인 뒤 눌러주세요)');
   };
 
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
@@ -538,10 +419,13 @@ const RealtimeScreen = ({
     }
   };
 
-  const handleThresholdChange = (equipId, value) => {
-    setEditedThresholds(prev => ({
+  const handleFieldChange = (equipId, field, value) => {
+    setEditedFields(prev => ({
       ...prev,
-      [equipId]: value === '' ? '' : Number(value)
+      [equipId]: {
+        ...prev[equipId],
+        [field]: field === 'threshold' ? (value === '' ? '' : Number(value)) : value,
+      },
     }));
   };
 
@@ -556,6 +440,45 @@ const RealtimeScreen = ({
       console.error('설비 목록 갱신 실패:', err);
     }
   };
+
+  // 알람 조회
+  const fetchAlerts = async () => {
+    if (!user?.token) return;
+    try {
+      const response = await axios.get('http://localhost:8086/api/live/monitoring/noti-warn', {
+        headers: { Authorization: `Bearer ${user.token}` },
+      });
+      const mapped = (response.data || [])
+        .slice()
+        .reverse() // 백엔드는 최신순(DESC)으로 내려주므로, 오래된 것이 위 / 최신이 아래로 오도록 뒤집음
+        .map(item => {
+          const eq = equipmentsRef.current.find(e => e.equipId === item.equipId);
+          return {
+            id: `${item.equipId}-${item.recordedAt}`,
+            equipId: item.equipId,
+            equipName: eq?.equipName || item.equipId,
+            time: item.recordedAt ? new Date(item.recordedAt).toLocaleTimeString('ko-KR') : '-',
+            value: item.temperature,
+            threshold: item.threshold,
+            location: eq?.location || '-',
+          };
+        })
+        // 사용자가 개별 삭제(x)한 알람은 재조회 시 다시 나타나지 않도록 제외
+        .filter(a => !dismissedAlarmIdsRef.current.has(a.id));
+      setAlarms(mapped.slice(-MAX_ALARMS));
+    } catch (err) {
+      console.error('알람 조회 실패:', err);
+    }
+  };
+
+  // 알람 주기적 재동기화 (전환 감지 시 즉시 재조회하지만, 놓치는 경우에 대비한 안전망)
+  useEffect(() => {
+    if (!user?.token) return;
+    const alarmIntervalId = setInterval(() => {
+      fetchAlerts();
+    }, 15000);
+    return () => clearInterval(alarmIntervalId);
+  }, [user?.token]);
 
   // 임계값 설정 탭에서 그리드 맨 위에 인라인으로 추가되는 "신규 설비 입력 행"
   const [newRows, setNewRows] = useState([]);
@@ -618,9 +541,11 @@ const RealtimeScreen = ({
       }
     }
 
-    const existingPayload = Object.entries(editedThresholds).map(([equipId, threshold]) => ({
+    const existingPayload = Object.entries(editedFields).map(([equipId, fields]) => ({
       equipId,
-      threshold: threshold === '' ? null : Number(threshold)
+      equipName: fields.equipName,
+      location: fields.location,
+      threshold: fields.threshold === '' ? null : Number(fields.threshold),
     }));
 
     const newRowsPayload = newRows.map(row => ({
@@ -646,7 +571,7 @@ const RealtimeScreen = ({
       setNewRows([]);
       await fetchEquipments();
 
-      alert('DB에 저장되었습니다.');
+      alert('저장되었습니다.');
       setTabMode('stream');
     } catch (err) {
       console.error('DB 저장 실패:', err);
@@ -735,8 +660,18 @@ const RealtimeScreen = ({
                 설정
               </button>
             </div>
+          </div>
 
-            {/* 기간 선택 (클릭하면 편집 팝오버) */}
+          <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 w-full xl:w-auto">
+            <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+              <span className="relative flex h-2 w-2">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
+              </span>
+              DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
+            </div>
+
+            {/* 기간 선택 (클릭하면 편집 팝오버) - 맨 오른쪽 */}
             <div className="relative">
               <button
                 type="button"
@@ -766,7 +701,7 @@ const RealtimeScreen = ({
               {isRangeEditorOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setIsRangeEditorOpen(false)} />
-                  <div className={`absolute top-full left-0 mt-2 z-50 w-[260px] p-3 rounded-xl border shadow-2xl space-y-2.5 ${
+                  <div className={`absolute top-full right-0 mt-2 z-50 w-[260px] p-3 rounded-xl border shadow-2xl space-y-2.5 ${
                     isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
                   }`}>
                     <div>
@@ -834,27 +769,6 @@ const RealtimeScreen = ({
               )}
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 w-full xl:w-auto">
-            <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
-              <span className="relative flex h-2 w-2">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
-              </span>
-              DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
-            </div>
-
-            {/* ★ [임시 테스트용 버튼] 아카이브 동작 확인 끝나면 제거 예정 */}
-            <button
-              onClick={handleTestArchive}
-              title="테스트: 현재 DB의 모든 데이터를 즉시 아카이브(JSON 다운로드 후 삭제)"
-              className={`px-3 sm:px-4 py-1.5 sm:py-2 border rounded-lg text-xs sm:text-[13px] font-semibold transition-colors flex items-center gap-1.5 ${
-                isDarkMode ? 'bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20' : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
-              }`}
-            >
-              [테스트] 아카이브 실행
-            </button>
-          </div>
         </div>
 
         {/* 그리드 영역 */}
@@ -920,17 +834,18 @@ const RealtimeScreen = ({
 
             {/* 그리드 표 */}
             <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
-              <table className="w-full text-left border-collapse table-fixed min-w-[700px] sm:min-w-[800px]">
+              <table className="w-full text-center border-collapse table-fixed min-w-[700px] sm:min-w-[800px]">
                 <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
                   isDarkMode ? 'bg-[#0D1224] text-[#5C6584]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
-                    <th className={`w-[11%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
-                    <th className={`w-[18%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
-                    <th className={`w-[23%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                    <th className={`w-[13%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도</th>
-                    <th className={`w-[13%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                    <th className={`w-[12%] px-3 border-b font-semibold align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
+                    <th className={`w-[9%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
+                    <th className={`w-[19%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
+                    <th className={`w-[9%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
+                    <th className={`w-[14%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
+                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도</th>
+                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
+                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
                     <th className={`w-[10%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
                   </tr>
                 </thead>
@@ -939,9 +854,10 @@ const RealtimeScreen = ({
                 }`}>
                   {/* 신규 설비 인라인 입력 행 (장비추가 클릭 시 맨 위에 생성, 저장 시 함께 등록) */}
                   {newRows.map((row) => {
-                    const inputClass = `w-full h-[30px] rounded px-1.5 text-xs border outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                    const inputClass = `w-full h-[30px] rounded px-1.5 text-xs text-center border outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                     }`;
+                    const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
 
                     return (
                       <tr
@@ -950,7 +866,7 @@ const RealtimeScreen = ({
                           isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600'
                         }`}
                       >
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input
                             type="text"
                             value={row.equipId}
@@ -959,19 +875,22 @@ const RealtimeScreen = ({
                             className={`${inputClass} cursor-not-allowed opacity-70`}
                           />
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="text" value={row.equipName} onChange={(e) => handleNewRowChange(row.tempId, 'equipName', e.target.value)} placeholder="설비명" className={inputClass} />
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="text" value={row.location} onChange={(e) => handleNewRowChange(row.tempId, 'location', e.target.value)} placeholder="위치" className={inputClass} />
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                          -
+                        </td>
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="number" value={row.temperature} onChange={(e) => handleNewRowChange(row.tempId, 'temperature', e.target.value)} placeholder="온도" className={inputClass} />
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="number" value={row.power} onChange={(e) => handleNewRowChange(row.tempId, 'power', e.target.value)} placeholder="전력" className={inputClass} />
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="number" value={row.threshold} onChange={(e) => handleNewRowChange(row.tempId, 'threshold', e.target.value)} placeholder="임계값" className={inputClass} />
                         </td>
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
@@ -993,7 +912,7 @@ const RealtimeScreen = ({
 
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
                         {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
@@ -1003,51 +922,88 @@ const RealtimeScreen = ({
                     const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                     const isSelected = selectedEquipId === eq.equipId;
                     const isFlashed = flashedIds.has(eq.equipId);
+                    const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
+
+                    const isClickHighlighted = clickHighlightId === eq.equipId;
 
                     return (
                       <tr
                         key={`${eq.equipId}-${idx}`}
+                        id={`equip-row-${eq.equipId}`}
                         onClick={() => setSelectedEquipId(isSelected ? null : eq.equipId)}
                         className={`h-[52px] max-h-[52px] transition-colors duration-300 cursor-pointer border-l-2 ${
-                          isSelected
-                            ? (isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600')
-                            : isFlashed
-                              ? (isDarkMode ? 'bg-[#22D3EE]/10 border-l-transparent' : 'bg-green-50 border-l-transparent')
-                              : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
+                          isClickHighlighted
+                            ? (isDarkMode ? 'bg-amber-400/15 border-l-amber-400' : 'bg-amber-100 border-l-amber-500')
+                            : isSelected
+                              ? (isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600')
+                              : isFlashed
+                                ? (isDarkMode ? 'bg-[#22D3EE]/10 border-l-transparent' : 'bg-green-50 border-l-transparent')
+                                : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                         }`}
                       >
-                        <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
                           #{String(eq.equipId).padStart(3, '0')}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle ${
-                          isSelected ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800')
-                        }`}>
-                          {eq.equipName}
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
+                          {tabMode === 'threshold' ? (
+                            <input
+                              type="text"
+                              value={editedFields[eq.equipId]?.equipName ?? eq.equipName ?? ''}
+                              onChange={(e) => handleFieldChange(eq.equipId, 'equipName', e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
+                                isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                              }`}
+                            />
+                          ) : (
+                            <span className={`font-bold truncate ${
+                              isSelected ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800')
+                            }`}>
+                              {eq.equipName}
+                            </span>
+                          )}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] truncate align-middle ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
+                          {tabMode === 'threshold' ? (
+                            <input
+                              type="text"
+                              value={editedFields[eq.equipId]?.location ?? eq.location ?? ''}
+                              onChange={(e) => handleFieldChange(eq.equipId, 'location', e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
+                                isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                              }`}
+                            />
+                          ) : (
+                            <span className={`text-xs truncate ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+                              {eq.location ?? '-'}
+                            </span>
+                          )}
+                        </td>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
                           {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
                           <span className={`font-mono font-bold tabular-nums ${
                             statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
                           }`}>
                             {eq.temperature != null ? `${Number(eq.temperature).toFixed(1)}℃` : '–'}
                           </span>
                         </td>
-                        <td className="px-3 py-0 h-[52px] align-middle">
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
                           <span className={`font-mono font-bold tabular-nums ${
                             isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
                           }`}>
                             {eq.power != null ? Number(eq.power).toFixed(1) : '–'}
                           </span>
                         </td>
-                        <td className="px-3 py-0 h-[52px] font-mono align-middle">
-                          <div className="flex items-center h-full">
+                        <td className={`px-3 py-0 h-[52px] font-mono align-middle border-r ${cellBorder}`}>
+                          <div className="flex items-center justify-center h-full">
                             {tabMode === 'threshold' ? (
                               <input
                                 type="number"
-                                value={editedThresholds[eq.equipId] !== undefined ? editedThresholds[eq.equipId] : (eq.threshold ?? '')}
-                                onChange={(e) => handleThresholdChange(eq.equipId, e.target.value)}
+                                value={editedFields[eq.equipId]?.threshold !== undefined ? editedFields[eq.equipId].threshold : (eq.threshold ?? '')}
+                                onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
@@ -1081,6 +1037,8 @@ const RealtimeScreen = ({
             <AlarmSidebar
               alarms={displayedAlarms}
               onClear={handleClearAlarms}
+              onDismiss={handleDismissAlarm}
+              onAlarmClick={handleAlarmClick}
               openLogs={openLogs}
               selectedEquipName={selectedEquipName}
               onClearFilter={() => setSelectedEquipId(null)}

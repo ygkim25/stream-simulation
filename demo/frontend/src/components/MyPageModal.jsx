@@ -33,11 +33,12 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
     .map((keyword) => keyword.trim())
     .filter(Boolean);
 
-  const filteredEmployees = searchKeywords.length === 0
+  const filteredEmployees = (searchKeywords.length === 0
     ? employees
     : employees.filter((emp) =>
         searchKeywords.some((keyword) => emp.userName?.includes(keyword))
-      );
+      )
+  ).slice().sort((a, b) => (a.userName || '').localeCompare(b.userName || '', 'ko'));
 
   // 모달 외부 클릭 시 닫기
   const handleOverlayClick = (e) => {

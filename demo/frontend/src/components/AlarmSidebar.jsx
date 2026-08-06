@@ -3,7 +3,7 @@ import React, { useEffect, useRef } from 'react';
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
 // ==========================================
-const AlarmSidebar = ({ alarms, onClear, openLogs, selectedEquipName, onClearFilter, statusCounts, isDarkMode }) => {
+const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, selectedEquipName, onClearFilter, statusCounts, isDarkMode }) => {
   const counts = statusCounts || { normal: 0, warning: 0, danger: 0 };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
@@ -112,14 +112,28 @@ const AlarmSidebar = ({ alarms, onClear, openLogs, selectedEquipName, onClearFil
             alarms.map(alarm => (
               <div
                 key={alarm.id}
+                onClick={() => onAlarmClick?.(alarm)}
                 /* [수정] 다크모드 hover:border-l-[#5C6584] 적용 */
-                className={`rounded-lg p-3.5 transition-all duration-200 flex flex-col gap-1.5 border border-l-4 cursor-pointer ${
+                className={`group relative rounded-lg p-3.5 transition-all duration-200 flex flex-col gap-1.5 border border-l-4 cursor-pointer ${
                   isDarkMode
                     ? 'bg-[#12172A] hover:bg-[#182038] border-[#1E253D] hover:border-[#2E334D] border-l-[#FB5D75] hover:border-l-[#5C6584]'
                     : 'bg-white hover:bg-gray-50 border-gray-200 hover:border-gray-300 border-l-red-500 hover:border-l-gray-400 shadow-sm'
                 }`}
               >
-                <div className="flex justify-between items-center">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDismiss?.(alarm.id); }}
+                  title="알람 삭제"
+                  className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ${
+                    isDarkMode
+                      ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#8592AD] hover:text-[#EDF1FC]'
+                      : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                  }`}
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <div className="flex justify-between items-center pr-5">
                   <span className={`font-bold text-[13px] flex items-center gap-1.5 ${
                     isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'
                   }`}>
