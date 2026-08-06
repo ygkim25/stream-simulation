@@ -300,7 +300,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                 </div>
               )}
 
-              <div className={`flex-1 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5 content-start max-h-[50vh] custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+              <div className={`flex-1 overflow-y-auto pr-1 space-y-2.5 max-h-[50vh] custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                 {isEmployeesLoading ? (
                   <div className="col-span-full text-center text-xs py-10 text-gray-400">데이터를 불러오는 중...</div>
                 ) : employees.length === 0 ? (
