@@ -22,9 +22,22 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   // [탭 3] 사용자 조회 관련 State
   const [employees, setEmployees] = useState([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
+  const [employeeSearch, setEmployeeSearch] = useState('');
 
   // ★ 관리자 여부 확인
   const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin' || id === 'admin';
+
+  // ★ [탭 3] 사원 이름 검색 (쉼표로 구분하여 복수 검색)
+  const searchKeywords = employeeSearch
+    .split(',')
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
+
+  const filteredEmployees = searchKeywords.length === 0
+    ? employees
+    : employees.filter((emp) =>
+        searchKeywords.some((keyword) => emp.userName?.includes(keyword))
+      );
 
   // 모달 외부 클릭 시 닫기
   const handleOverlayClick = (e) => {
@@ -79,15 +92,15 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
             headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
           });
           setEmployees(response.data || [
-            { userId: 'admin', userName: '관리자', role: 'ADMIN' },
-            { userId: 'user1', userName: '홍길동', role: 'USER' }
+            { userId: 'admin', userName: '관리자', divisionName: '관제팀', responsibility: '팀장', role: 'ADMIN' },
+            { userId: 'user1', userName: '홍길동', divisionName: '설비1팀', responsibility: '사원', role: 'USER' }
           ]);
         } catch (error) {
           console.error('직원 목록 조회 실패:', error);
           setEmployees([
-            { userId: 'admin', userName: '시스템관리자', role: 'ADMIN' },
-            { userId: 'hykang@wemb.co.kr', userName: '강희연', role: 'USER' },
-            { userId: 'test_user', userName: '테스트계정', role: 'USER' }
+            { userId: 'admin', userName: '시스템관리자', divisionName: '관제팀', responsibility: '팀장', role: 'ADMIN' },
+            { userId: 'hykang@wemb.co.kr', userName: '강희연', divisionName: '개발팀', responsibility: '사원', role: 'USER' },
+            { userId: 'test_user', userName: '테스트계정', divisionName: '설비1팀', responsibility: '사원', role: 'USER' }
           ]);
         } finally {
           setIsEmployeesLoading(false);
@@ -265,33 +278,49 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
           {/* [탭 3] 사용자 조회 */}
           {activeTab === 'auth' && (
             <div className="flex flex-col h-full animate-fade-in">
-              <div className="flex items-center justify-between mb-4">
-                <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <input
+                  type="text"
+                  value={employeeSearch}
+                  onChange={(e) => setEmployeeSearch(e.target.value)}
+                  placeholder="사원 이름 검색 (쉼표로 복수 검색)"
+                  className={`flex-1 min-w-0 rounded-lg px-3 py-2 text-[13px] outline-none border transition-colors ${
+                    isDarkMode
+                      ? 'bg-[#0D1224] border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]'
+                      : 'bg-gray-50 border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
+                  }`}
+                />
+                <span className={`shrink-0 text-[13px] font-bold ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
                   전체 사용자 목록 (총 {employees.length}명)
                 </span>
-                {!isAdmin && (
-                  <span className={`text-[12px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-                    * 수정/삭제 권한은 관리자 전용입니다.
-                  </span>
-                )}
               </div>
-              
-              <div className={`flex-1 overflow-y-auto pr-1 space-y-2.5 max-h-[340px] custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+              {!isAdmin && (
+                <div className={`text-right text-[12px] mb-3 -mt-2 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                  * 수정/삭제 권한은 관리자 전용입니다.
+                </div>
+              )}
+
+              <div className={`flex-1 overflow-y-auto pr-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5 content-start max-h-[50vh] custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                 {isEmployeesLoading ? (
-                  <div className="text-center text-xs py-10 text-gray-400">데이터를 불러오는 중...</div>
+                  <div className="col-span-full text-center text-xs py-10 text-gray-400">데이터를 불러오는 중...</div>
                 ) : employees.length === 0 ? (
-                  <div className="text-center text-xs py-10 text-gray-400">등록된 사용자가 없습니다.</div>
+                  <div className="col-span-full text-center text-xs py-10 text-gray-400">등록된 사용자가 없습니다.</div>
+                ) : filteredEmployees.length === 0 ? (
+                  <div className="col-span-full text-center text-xs py-10 text-gray-400">검색 결과가 없습니다.</div>
                 ) : (
-                  employees.map((emp) => (
-                    <div key={emp.userId} className={`flex items-center justify-between p-3.5 rounded-xl border ${
+                  filteredEmployees.map((emp) => (
+                    <div key={emp.userId} className={`flex items-center justify-between gap-2 p-3.5 rounded-xl border ${
                       isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-50 border-gray-200'
                     }`}>
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-[14px] font-bold">{emp.userName}</span>
-                        <span className={`text-[12px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>{emp.userId}</span>
+                      <div className="flex flex-col gap-0.5 min-w-0">
+                        <span className="text-[14px] font-bold truncate">{emp.userName}</span>
+                        <span className={`text-[11px] font-normal truncate ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+                          {emp.divisionName || '-'} · {emp.responsibility || '-'}
+                        </span>
+                        <span className={`text-[12px] font-mono truncate ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>{emp.userId}</span>
                       </div>
-                      
-                      <div className="flex items-center gap-2">
+
+                      <div className="flex items-center gap-2 shrink-0">
                         {isAdmin ? (
                           <>
                             <select

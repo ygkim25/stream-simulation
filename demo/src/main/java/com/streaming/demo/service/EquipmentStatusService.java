@@ -93,13 +93,17 @@ public class EquipmentStatusService {
                 historyRepository.save(new EquipmentHistory(
                         eq.getEquipId(), eq.getTemperature(), eq.getPower(), newStatus, now));
 
-                if ("Warning".equals(newStatus)) {
+                // 정상 → 경고/위험으로 "새로 진입"할 때만 alert/log 기록 (같은 상태가 유지되는 동안은 중복 저장하지 않음)
+                boolean isWarningOrCritical = "Warning".equals(newStatus) || "Critical".equals(newStatus);
+                boolean statusChanged = !newStatus.equals(oldStatus);
+
+                if (isWarningOrCritical && statusChanged) {
                     alertRepository.save(new EquipmentAlert(
                             eq.getEquipId(), eq.getTemperature(), eq.getPower(),
                             eq.getThreshold(), newStatus, now));
                 }
 
-                if (!newStatus.equals(oldStatus)) {
+                if (statusChanged) {
                     equipmentLogService.recordStatusChange(eq, newStatus, now);
                 }
             }

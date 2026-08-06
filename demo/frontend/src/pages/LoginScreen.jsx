@@ -56,13 +56,11 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
       }
     } catch (err) {
       if (err.response) {
-        if (err.response.status === 401) {
-          setError(`[401] 아이디/비밀번호 불일치 (입력한 ID: ${loginData.userId})`);
-        } else if (err.response.status === 403) {
-          setError(`[403] 접근 권한이 없거나 Security 방화벽에 차단되었습니다.`);
-        } else {
-          setError(`[${err.response.status}] 로그인 처리 중 서버 에러가 발생했습니다.`);
-        }
+        const serverMessage = typeof err.response.data === 'string'
+          ? err.response.data
+          : err.response.data?.message;
+
+        setError(serverMessage || `[${err.response.status}] 로그인 처리 중 서버 에러가 발생했습니다.`);
       } else {
         setError('서버와 통신할 수 없습니다. 백엔드(8086 포트) 상태를 확인하세요.');
       }
