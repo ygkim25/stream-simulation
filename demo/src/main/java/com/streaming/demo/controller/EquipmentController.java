@@ -1,8 +1,10 @@
 package com.streaming.demo.controller;
 
 import com.streaming.demo.dto.EquipmentAlertDto;
+import com.streaming.demo.dto.EquipmentLogDto;
 import com.streaming.demo.dto.EquipmentStatusDto;
 import com.streaming.demo.service.AlertNotificationSettingService;
+import com.streaming.demo.service.EquipmentLogService;
 import com.streaming.demo.service.EquipmentStatusService;
 
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ public class EquipmentController {
     // private EquipmentStatusService service;
     private final EquipmentStatusService service;
     private final AlertNotificationSettingService settingService;
+    private final EquipmentLogService logService;
 
     @GetMapping
     public List<EquipmentStatusDto> getAllEquipment() {
@@ -50,6 +53,21 @@ public class EquipmentController {
         System.out.println("========== EquipmentController ---- clearAlerts() ==========");
         settingService.clearAlerts(userId);
         return ResponseEntity.ok(Map.of("message", "모든 알림을 지웠습니다."));
+    }
+
+    @GetMapping("/logs")
+    public ResponseEntity<List<EquipmentLogDto>> getAllLogs(
+            @AuthenticationPrincipal String userId) {
+        System.out.println("========== EquipmentController ---- getAllLogs() ==========");
+        return ResponseEntity.ok(logService.getLogsForUser(userId));
+    }
+
+    @PostMapping("/logs/clear")
+    public ResponseEntity<Map<String, String>> clearLogs(
+            @AuthenticationPrincipal String userId) {
+        System.out.println("========== EquipmentController ---- clearLogs() ==========");
+        logService.clearLogsForUser(userId);
+        return ResponseEntity.ok(Map.of("message", "모든 로그를 지웠습니다."));
     }
 
 }
