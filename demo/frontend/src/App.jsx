@@ -38,11 +38,29 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // 알람 데이터 (RealtimeScreen에서 GET /api/live/monitoring/noti-warn 폴링으로 채움)
+  // 알람 데이터 (RealtimeScreen에서 실시간 웹소켓 스트림 기준으로 채움, 새로고침 시 초기화됨)
   const [alarms, setAlarms] = useState([]);
 
   // 로그 데이터 (RealtimeScreen에서 실시간 웹소켓 스트림 기준으로 채움)
-  const [logs, setLogs] = useState([]);
+  // 새로고침해도 이력이 사라지지 않도록 localStorage에 저장/복원
+  const LOGS_STORAGE_KEY = 'monitoringLogs';
+  const [logs, setLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem(LOGS_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error('로그 복원 실패:', e);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOGS_STORAGE_KEY, JSON.stringify(logs));
+    } catch (e) {
+      console.error('로그 저장 실패:', e);
+    }
+  }, [logs]);
 
   // 로그인 처리
   const handleLogin = (userInfo) => {

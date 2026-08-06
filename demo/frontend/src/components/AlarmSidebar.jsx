@@ -3,7 +3,8 @@ import React, { useEffect, useRef } from 'react';
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
 // ==========================================
-const AlarmSidebar = ({ alarms, onClear, openLogs, selectedEquipName, onClearFilter, isDarkMode }) => {
+const AlarmSidebar = ({ alarms, onClear, openLogs, selectedEquipName, onClearFilter, statusCounts, isDarkMode }) => {
+  const counts = statusCounts || { normal: 0, warning: 0, danger: 0 };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
@@ -162,25 +163,33 @@ const AlarmSidebar = ({ alarms, onClear, openLogs, selectedEquipName, onClearFil
         )}
       </div>
 
-      {/* 알람 건수 요약 뱃지 영역 */}
+      {/* 설비 상태 요약 뱃지 영역 (정상/경고/위험 - 현재 설비 상태 기준) */}
       <div className={`p-3 border-t flex justify-end gap-2 text-[11px] shrink-0 mt-auto transition-colors ${
         isDarkMode ? 'bg-[#0F1526] border-[#1E253D]' : 'bg-gray-50 border-gray-200'
       }`}>
         <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
-          isDarkMode 
-            ? 'bg-[#FBBF24]/10 text-[#FBBF24]' 
+          isDarkMode
+            ? 'bg-[#34D399]/10 text-[#34D399]'
+            : 'bg-green-50 text-green-700 border border-green-200'
+        }`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          정상 {counts.normal}
+        </span>
+        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+          isDarkMode
+            ? 'bg-[#FBBF24]/10 text-[#FBBF24]'
             : 'bg-amber-50 text-amber-700 border border-amber-200'
         }`}>
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-          주의 {Math.floor(alarms.length * 1.5)}
+          경고 {counts.warning}
         </span>
         <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
-          isDarkMode 
-            ? 'bg-[#FB5D75]/10 text-[#FB5D75]' 
+          isDarkMode
+            ? 'bg-[#FB5D75]/10 text-[#FB5D75]'
             : 'bg-red-50 text-red-600 border border-red-200'
         }`}>
           <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-          경고 {alarms.length}
+          위험 {counts.danger}
         </span>
       </div>
     </div>
