@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 // import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -64,5 +67,31 @@ public class UserInfoController {
             );
 
         return ResponseEntity.ok(response);
+    }
+
+    // 마이페이지 - 사용자 조회
+    @GetMapping("/users")
+    public ResponseEntity<?> getAllUsers(@RequestHeader("Authorization") String authHeader) {
+        System.out.println("========== UserInfoController ---- getAllUsers() ==========");
+
+        String token = authHeader.replace("Bearer ", "");
+
+        if (!jwtUtil.isTokenValid(token)) {
+            return ResponseEntity.status(401).body("인증이 만료되었습니다.");
+        }
+
+        List<UserInfoDto> users = loginRepository.findAll().stream()
+                .map(login -> new UserInfoDto(
+                        login.getUserId(),
+                        login.getUserName(),
+                        login.getPhone(),
+                        login.getDivisionCode(),
+                        login.getRole(),
+                        login.getDivisionName(),
+                        login.getResponsibility()
+                ))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(users);
     }
 }
