@@ -7,7 +7,7 @@ import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
 import { saveToDB, getAllFromDB } from '../utils/indexedDb';
 import { formatForDateTimeInput, formatFullDateTime } from '../utils/dateFormat';
-import { isWarningStatus, STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
+import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
@@ -144,6 +144,7 @@ const RealtimeScreen = ({
           // 초기목록
           fetchEquipments();
           fetchAlerts();
+          fetchLogs();
 
           client.subscribe('/topic/live/monitoring', async (message) => {
             if (!isMounted) return;
@@ -161,47 +162,19 @@ const RealtimeScreen = ({
               }
 
               if (newDataList.length > 0) {
-                // 실시간 모니터링 스트림 기준으로, 임계값 초과(경고/위험) 상태에 "새로 진입"한 설비는 로그에 반영
-                // (알람 자체는 noti-warn API가 단일 진실 소스이므로, 전환 감지 시 그쪽을 재조회함)
-                const newLogs = [];
-                let hasNewWarningTransition = false;
-
+                // 실시간 모니터링 스트림에서 상태 전환(정상↔경고/위험)이 감지되면,
+                // 알람/로그 자체는 백엔드(noti-warn / logs API)가 단일 진실 소스이므로 그쪽을 재조회함
+                let hasTransition = false;
                 newDataList.forEach(newItem => {
                   const prevEq = equipmentsRef.current.find(eq => eq.equipId === newItem.equipId);
-                  const prevStatus = prevEq?.status;
-                  const wasWarning = isWarningStatus(prevStatus);
-                  const isNowWarning = isWarningStatus(newItem.status);
-                  const timeLabel = newItem.receivedAt
-                    ? new Date(newItem.receivedAt).toLocaleTimeString('ko-KR')
-                    : new Date().toLocaleTimeString('ko-KR');
-
-                  if (isNowWarning && newItem.status !== prevStatus) {
-                    hasNewWarningTransition = true;
-                    newLogs.push({
-                      id: `log-${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
-                      time: timeLabel,
-                      type: 'warning',
-                      equipName: newItem.equipName,
-                      message: `임계값 초과 감지 (${newItem.status})`,
-                      value: newItem.temperature,
-                      threshold: newItem.threshold,
-                    });
-                  } else if (!isNowWarning && wasWarning) {
-                    newLogs.push({
-                      id: `log-${newItem.equipId}-${newItem.receivedAt || Date.now()}`,
-                      time: timeLabel,
-                      type: 'success',
-                      equipName: newItem.equipName,
-                      message: `정상 범위로 복구됨 (온도 ${newItem.temperature}℃)`,
-                    });
+                  if (newItem.status !== prevEq?.status) {
+                    hasTransition = true;
                   }
                 });
 
-                if (newLogs.length > 0) {
-                  setLogs(prev => [...prev, ...newLogs].slice(-MAX_LOGS));
-                }
-                if (hasNewWarningTransition) {
+                if (hasTransition) {
                   fetchAlerts();
+                  fetchLogs();
                 }
 
                 // 설비 ID로 비교해서 변경된 로우만 갱신 (전체 목록을 덮어쓰지 않음)
@@ -472,11 +445,37 @@ const RealtimeScreen = ({
     }
   };
 
-  // 알람 주기적 재동기화 (전환 감지 시 즉시 재조회하지만, 놓치는 경우에 대비한 안전망)
+  // 로그 조회
+  const fetchLogs = async () => {
+    if (!user?.token) return;
+    try {
+      const response = await axios.get('http://localhost:8086/api/live/monitoring/logs', {
+        headers: { Authorization: `Bearer ${user.token}` },
+      });
+      const mapped = (response.data || [])
+        .slice()
+        .reverse() // 백엔드는 최신순(DESC)으로 내려주므로, 오래된 것이 위 / 최신이 아래로 오도록 뒤집음
+        .map(item => ({
+          id: `log-${item.equipId}-${item.createdAt}`,
+          time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
+          type: item.type,
+          equipName: item.equipName,
+          message: item.message,
+          value: item.type === 'warning' ? item.value : undefined,
+          threshold: item.type === 'warning' ? item.threshold : undefined,
+        }));
+      setLogs(mapped.slice(-MAX_LOGS));
+    } catch (err) {
+      console.error('로그 조회 실패:', err);
+    }
+  };
+
+  // 알람/로그 주기적 재동기화 (전환 감지 시 즉시 재조회하지만, 놓치는 경우에 대비한 안전망)
   useEffect(() => {
     if (!user?.token) return;
     const alarmIntervalId = setInterval(() => {
       fetchAlerts();
+      fetchLogs();
     }, 15000);
     return () => clearInterval(alarmIntervalId);
   }, [user?.token]);

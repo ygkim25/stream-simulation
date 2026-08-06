@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import LoginScreen from './pages/LoginScreen';
 import MainScreen from './pages/MainScreen';
 import RealtimeScreen from './pages/RealtimeScreen';
@@ -60,8 +61,8 @@ export default function App() {
     }
   }, [alarms]);
 
-  // 로그 데이터 (RealtimeScreen에서 실시간 웹소켓 스트림 기준으로 채움)
-  // 새로고침해도 이력이 사라지지 않도록 localStorage에 저장/복원
+  // 로그 데이터 (RealtimeScreen에서 백엔드 logs API 기준으로 채움)
+  // 새로고침해도 바로 비어보이지 않도록 localStorage에 저장/복원 (재연결 시 백엔드 데이터로 다시 동기화됨)
   const LOGS_STORAGE_KEY = 'monitoringLogs';
   const [logs, setLogs] = useState(() => {
     try {
@@ -105,7 +106,16 @@ export default function App() {
   const handleMyPageClose = () => setIsMyPageOpen(false);
   const handleLogOpen = () => setIsLogOpen(true);
   const handleLogClose = () => setIsLogOpen(false);
-  const handleClearLogs = () => setLogs([]);
+  const handleClearLogs = async () => {
+    try {
+      await axios.post('http://localhost:8086/api/live/monitoring/logs/clear', {}, {
+        headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
+      });
+    } catch (err) {
+      console.error('로그 초기화 실패:', err);
+    }
+    setLogs([]);
+  };
 
   return (
     <>

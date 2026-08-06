@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import CustomAlert from './CustomAlert';
 
 // ==========================================
 // 설정(Settings) 팝업 컴포넌트 (내 정보 / 비밀번호 / 사용자 조회)
@@ -8,16 +9,35 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   // 탭 상태 관리 (info, password, auth)
   const [activeTab, setActiveTab] = useState(initialTab || 'info');
 
-  // [탭 1] 내 정보 관련 State
-  const [name, setName] = useState(user?.userName || '');
-  const [dept, setDept] = useState(user?.divisionName || '');
-  const [duty, setDuty] = useState(user?.responsibility || '');
-  const [id, setId] = useState(user?.userId || 'admin');
+  // [탭 1] 내 정보 관련 State (읽기 전용 표시)
+  const [name] = useState(user?.userName || '');
+  const [dept] = useState(user?.divisionName || '');
+  const [duty] = useState(user?.responsibility || '');
+  const [id] = useState(user?.userId || 'admin');
 
   // [탭 2] 비밀번호 관련 State
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+
+  // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지 (확인 버튼을 눌렀을 때 실행할 후속 동작도 함께 저장)
+  const [alertMessage, setAlertMessage] = useState('');
+  const [alertOnConfirm, setAlertOnConfirm] = useState(null);
+
+  const showAlert = (message, onConfirm) => {
+    setAlertMessage(message);
+    setAlertOnConfirm(() => onConfirm || null);
+  };
+
+  const handleAlertClose = () => {
+    setAlertMessage('');
+    if (alertOnConfirm) {
+      const callback = alertOnConfirm;
+      setAlertOnConfirm(null);
+      callback();
+    }
+  };
 
   // [탭 3] 사용자 조회 관련 State
   const [employees, setEmployees] = useState([]);
@@ -55,9 +75,10 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
 
   // ★ [탭 2] 비밀번호 변경 처리 함수
   const handlePasswordSave = async () => {
-    if (!currentPassword) return alert('현재 비밀번호를 입력해주세요.');
-    if (!newPassword) return alert('새 비밀번호를 입력해주세요.');
-    if (newPassword !== confirmPassword) return alert('새 비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+    setPasswordError('');
+    if (!currentPassword) return setPasswordError('현재 비밀번호를 입력해주세요.');
+    if (!newPassword) return setPasswordError('새 비밀번호를 입력해주세요.');
+    if (newPassword !== confirmPassword) return setPasswordError('새 비밀번호와 비밀번호 확인이 일치하지 않습니다.');
 
     try {
       await axios.post(
@@ -71,15 +92,16 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
         }
       );
 
-      alert('비밀번호가 성공적으로 변경되었습니다.');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      onClose();
+      showAlert('비밀번호가 성공적으로 변경되었습니다.', onClose);
     } catch (err) {
       console.error('비밀번호 변경 실패:', err);
-      const serverMessage = err.response?.data?.message || '현재 비밀번호가 틀렸거나 오류가 발생했습니다.';
-      alert(serverMessage);
+      const serverMessage = typeof err.response?.data === 'string'
+        ? err.response.data
+        : err.response?.data?.message;
+      setPasswordError(serverMessage || '현재 비밀번호가 틀렸거나 오류가 발생했습니다.');
     }
   };
 
@@ -111,25 +133,45 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
     }
   }, [activeTab, employees.length, user]);
 
-  const handleRoleChange = (userId, newRole) => {
-    if (window.confirm(`${userId}의 권한을 [${newRole}]로 변경하시겠습니까?`)) {
-      alert('백엔드 연동 후 실제 권한이 변경됩니다.');
+  const handleRoleChange = async (userId, newRole) => {
+    const roleLabel = newRole === 'ADMIN' ? '관리자' : '일반';
+    if (!window.confirm(`${userId}의 권한을 [${roleLabel}]로 변경하시겠습니까?`)) return;
+
+    try {
+      await axios.patch(
+        `http://localhost:8086/api/users/${encodeURIComponent(userId)}/role`,
+        { role: newRole },
+        { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
+      );
       setEmployees(prev => prev.map(emp => emp.userId === userId ? { ...emp, role: newRole } : emp));
+    } catch (err) {
+      console.error('권한 변경 실패:', err);
+      const serverMessage = typeof err.response?.data === 'string'
+        ? err.response.data
+        : err.response?.data?.message;
+      showAlert(serverMessage || '권한 변경 중 오류가 발생했습니다.');
     }
   };
 
   const handleDeleteUser = (userId) => {
     if (window.confirm(`${userId} 계정을 정말 삭제하시겠습니까?`)) {
-      alert('백엔드 연동 후 실제 계정이 삭제됩니다.');
+      showAlert('백엔드 연동 후 실제 계정이 삭제됩니다.');
       setEmployees(prev => prev.filter(emp => emp.userId !== userId));
     }
   };
 
   // 공통 Input 스타일
   const inputClass = `w-full rounded-xl px-4 py-3.5 focus:outline-none text-[14px] transition-all box-border border ${
-    isDarkMode 
-      ? 'bg-[#0D1224] border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
+    isDarkMode
+      ? 'bg-[#0D1224] border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]'
       : 'bg-gray-50 border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
+  }`;
+
+  // 읽기 전용 Input 스타일 (클릭/포커스 시 테마 색상 border로 표시)
+  const readOnlyInputClass = `w-full rounded-xl px-4 py-3.5 focus:outline-none text-[14px] transition-colors box-border border cursor-not-allowed ${
+    isDarkMode
+      ? 'bg-[#0A0E1A] border-[#1E253D] text-[#5C6584] focus:border-[#22D3EE]/50'
+      : 'bg-gray-100 border-gray-200 text-gray-400 focus:border-green-500/50'
   }`;
 
   return (
@@ -206,8 +248,8 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
           </button>
         </div>
 
-        {/* 팝업 본문 */}
-        <div className="p-7 md:p-8 flex flex-col min-h-[340px]">
+        {/* 팝업 본문 (탭 전환/검색 시에도 높이가 바뀌지 않도록 고정) */}
+        <div className="p-7 md:p-8 flex flex-col h-[440px]">
           
           {/* [탭 1] 내 정보 */}
           {activeTab === 'info' && (
@@ -215,17 +257,17 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
               <div className="space-y-4">
                 <div>
                   <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>이름</label>
-                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="이름" />
+                  <input type="text" value={name} readOnly className={readOnlyInputClass} placeholder="이름" />
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>부서</label>
-                    <input type="text" value={dept} onChange={(e) => setDept(e.target.value)} className={inputClass} placeholder="부서명" />
+                    <input type="text" value={dept} readOnly className={readOnlyInputClass} placeholder="부서명" />
                   </div>
                   <div>
                     <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>직급</label>
-                    <input type="text" value={duty} onChange={(e) => setDuty(e.target.value)} className={inputClass} placeholder="직급" />
+                    <input type="text" value={duty} readOnly className={readOnlyInputClass} placeholder="직급" />
                   </div>
                 </div>
 
@@ -235,9 +277,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                     type="text"
                     value={id}
                     readOnly
-                    className={`w-full border rounded-xl px-4 py-3.5 font-mono text-[14px] cursor-not-allowed box-border ${
-                      isDarkMode ? 'bg-[#0A0E1A] border-[#1E253D] text-[#5C6584]' : 'bg-gray-100 border-gray-200 text-gray-400'
-                    }`}
+                    className={`${readOnlyInputClass} font-mono`}
                     placeholder="계정"
                   />
                 </div>
@@ -259,9 +299,14 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
           {activeTab === 'password' && (
             <div className="flex flex-col gap-5 h-full justify-between animate-fade-in">
               <div className="space-y-4">
-                <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className={inputClass} placeholder="현재 비밀번호" />
-                <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={inputClass} placeholder="새 비밀번호" />
-                <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={inputClass} placeholder="비밀번호 확인" />
+                <input type="password" value={currentPassword} onChange={(e) => { setCurrentPassword(e.target.value); setPasswordError(''); }} className={inputClass} placeholder="현재 비밀번호" />
+                <input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); setPasswordError(''); }} className={inputClass} placeholder="새 비밀번호" />
+                <input type="password" value={confirmPassword} onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(''); }} className={inputClass} placeholder="비밀번호 확인" />
+                {passwordError && (
+                  <p className="text-[#FB5D75] text-xs font-semibold whitespace-pre-line">
+                    {passwordError}
+                  </p>
+                )}
               </div>
               <div className="mt-4">
                 <button
@@ -301,7 +346,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                 </div>
               )}
 
-              <div className={`flex-1 overflow-y-auto pr-1 space-y-2.5 max-h-[50vh] custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+              <div className={`flex-1 overflow-y-auto pr-1 space-y-2.5 custom-scrollbar ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                 {isEmployeesLoading ? (
                   <div className="col-span-full text-center text-xs py-10 text-gray-400">데이터를 불러오는 중...</div>
                 ) : employees.length === 0 ? (
@@ -309,7 +354,10 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                 ) : filteredEmployees.length === 0 ? (
                   <div className="col-span-full text-center text-xs py-10 text-gray-400">검색 결과가 없습니다.</div>
                 ) : (
-                  filteredEmployees.map((emp) => (
+                  filteredEmployees.map((emp) => {
+                    // admin 계정은 role 값이 비어있어도(DB 미설정) 항상 관리자로 표시
+                    const empIsAdmin = emp.role === 'ADMIN' || emp.userId === 'admin';
+                    return (
                     <div key={emp.userId} className={`flex items-center justify-between gap-2 p-3.5 rounded-xl border ${
                       isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-50 border-gray-200'
                     }`}>
@@ -325,9 +373,10 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                         {isAdmin ? (
                           <>
                             <select
-                              value={emp.role}
+                              value={empIsAdmin ? 'ADMIN' : 'USER'}
                               onChange={(e) => handleRoleChange(emp.userId, e.target.value)}
-                              className={`text-[12px] font-bold px-3 py-1.5 rounded-lg outline-none border cursor-pointer ${
+                              disabled={emp.userId === 'admin'}
+                              className={`text-[12px] font-bold px-3 py-1.5 rounded-lg outline-none border cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
                                 isDarkMode ? 'bg-[#12172A] border-[#2A335A] text-[#EDF1FC]' : 'bg-white border-gray-300 text-gray-700'
                               }`}
                             >
@@ -348,16 +397,17 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                           </>
                         ) : (
                           <span className={`text-[12px] font-semibold px-3 py-1 rounded-lg border ${
-                            emp.role === 'ADMIN'
+                            empIsAdmin
                               ? (isDarkMode ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#22D3EE]' : 'bg-green-50 border-green-200 text-green-700')
                               : (isDarkMode ? 'bg-[#1A223D] border-[#2A335A] text-[#8592AD]' : 'bg-gray-100 border-gray-200 text-gray-600')
                           }`}>
-                            {emp.role === 'ADMIN' ? '관리자' : '일반'}
+                            {empIsAdmin ? '관리자' : '일반'}
                           </span>
                         )}
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -365,6 +415,8 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
 
         </div>
       </div>
+
+      <CustomAlert message={alertMessage} onClose={handleAlertClose} isDarkMode={isDarkMode} />
     </div>
   );
 };
