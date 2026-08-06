@@ -27,7 +27,7 @@ export default function App() {
   const [myPageInitialTab, setMyPageInitialTab] = useState('info');
   const [isLogOpen, setIsLogOpen] = useState(false); 
 
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
 
   // 다크모드 클래스 토글
   useEffect(() => {
