@@ -38,8 +38,26 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // 알람 데이터 (RealtimeScreen에서 실시간 웹소켓 스트림 기준으로 채움, 새로고침 시 초기화됨)
-  const [alarms, setAlarms] = useState([]);
+  // 알람 데이터 (RealtimeScreen에서 백엔드 noti-warn API 기준으로 채움)
+  // 새로고침해도 바로 비어보이지 않도록 localStorage에 저장/복원 (재연결 시 백엔드 데이터로 다시 동기화됨)
+  const ALARMS_STORAGE_KEY = 'monitoringAlarms';
+  const [alarms, setAlarms] = useState(() => {
+    try {
+      const saved = localStorage.getItem(ALARMS_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error('알람 복원 실패:', e);
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ALARMS_STORAGE_KEY, JSON.stringify(alarms));
+    } catch (e) {
+      console.error('알람 저장 실패:', e);
+    }
+  }, [alarms]);
 
   // 로그 데이터 (RealtimeScreen에서 실시간 웹소켓 스트림 기준으로 채움)
   // 새로고침해도 이력이 사라지지 않도록 localStorage에 저장/복원
