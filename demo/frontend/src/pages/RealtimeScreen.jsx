@@ -5,6 +5,8 @@ import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
+import CustomAlert from '../components/CustomAlert';
+import CustomConfirm from '../components/CustomConfirm';
 import { saveToDB, getAllFromDB } from '../utils/indexedDb';
 import { formatForDateTimeInput, formatFullDateTime } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
@@ -29,6 +31,28 @@ const RealtimeScreen = ({
 }) => {
   const [tabMode, setTabMode] = useState('stream');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
+
+  // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
+  const [alertMessage, setAlertMessage] = useState('');
+  const showAlert = (message) => setAlertMessage(message);
+
+  // 크롬 기본 confirm 대신 사용하는 커스텀 확인 메시지
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmCallback, setConfirmCallback] = useState(null);
+  const askConfirm = (message, onConfirm) => {
+    setConfirmMessage(message);
+    setConfirmCallback(() => onConfirm);
+  };
+  const handleConfirmYes = () => {
+    const callback = confirmCallback;
+    setConfirmMessage('');
+    setConfirmCallback(null);
+    callback?.();
+  };
+  const handleConfirmNo = () => {
+    setConfirmMessage('');
+    setConfirmCallback(null);
+  };
 
   const [equipments, setEquipments] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -130,9 +154,6 @@ const RealtimeScreen = ({
         connectHeaders: {
           Authorization: user?.token ? `Bearer ${user.token}` : '',
           token: user?.token || '',
-        },
-        debug: (str) => {
-          console.log('[STOMP]', str);
         },
         reconnectDelay: 5000,
         
@@ -310,7 +331,7 @@ const RealtimeScreen = ({
     const selectedStart = new Date(e.target.value);
 
     if (selectedStart > endTime) {
-      alert('시작 시각은 종료 시각보다 나중일 수 없습니다.');
+      showAlert('시작 시각은 종료 시각보다 나중일 수 없습니다.');
       return;
     }
     setStartTime(selectedStart);
@@ -323,7 +344,7 @@ const RealtimeScreen = ({
     const selectedEnd = new Date(e.target.value);
 
     if (selectedEnd < startTime) {
-      alert('종료 시각은 시작 시각보다 빠를 수 없습니다.');
+      showAlert('종료 시각은 시작 시각보다 빠를 수 없습니다.');
       return;
     }
     setEndTime(selectedEnd);
@@ -333,7 +354,7 @@ const RealtimeScreen = ({
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
   const handleExport = async () => {
     if (startTime >= endTime) {
-      alert('시작 시각은 종료 시각보다 빨라야 합니다.');
+      showAlert('시작 시각은 종료 시각보다 빨라야 합니다.');
       return;
     }
 
@@ -341,7 +362,7 @@ const RealtimeScreen = ({
       const accumulatedData = await getAllFromDB();
 
       if (!accumulatedData || accumulatedData.length === 0) {
-        alert('내보낼 누적 데이터가 없습니다.');
+        showAlert('내보낼 누적 데이터가 없습니다.');
         return;
       }
 
@@ -358,7 +379,7 @@ const RealtimeScreen = ({
       if (filteredData.length === 0) {
         const startStr = startTime.toLocaleString('ko-KR');
         const endStr = endTime.toLocaleString('ko-KR');
-        alert(`지정한 시간 구간 (${startStr} ~ ${endStr}) 내 수신 데이터가 없습니다.`);
+        showAlert(`지정한 시간 구간 (${startStr} ~ ${endStr}) 내 수신 데이터가 없습니다.`);
         return;
       }
 
@@ -389,7 +410,7 @@ const RealtimeScreen = ({
       XLSX.writeFile(workbook, fileName);
     } catch (err) {
       console.error('엑셀 내보내기 실패:', err);
-      alert('엑셀 파일 생성 실패');
+      showAlert('엑셀 파일 생성 실패');
     }
   };
 
@@ -461,8 +482,8 @@ const RealtimeScreen = ({
           type: item.type,
           equipName: item.equipName,
           message: item.message,
-          value: item.type === 'warning' ? item.value : undefined,
-          threshold: item.type === 'warning' ? item.threshold : undefined,
+          value: item.value,
+          threshold: item.threshold,
         }));
       setLogs(mapped.slice(-MAX_LOGS));
     } catch (err) {
@@ -535,7 +556,7 @@ const RealtimeScreen = ({
     for (const row of newRows) {
       if (!row.equipId.trim() || !row.equipName.trim() || !row.location.trim() ||
           row.temperature === '' || row.power === '' || row.threshold === '') {
-        alert('신규 설비는 ID / 설비명 / 위치 / 온도 / 전력 / 임계값을 모두 입력해야 합니다.');
+        showAlert('신규 설비는 ID / 설비명 / 위치 / 온도 / 전력 / 임계값을 모두 입력해야 합니다.');
         return;
       }
     }
@@ -570,14 +591,14 @@ const RealtimeScreen = ({
       setNewRows([]);
       await fetchEquipments();
 
-      alert('저장되었습니다.');
+      showAlert('저장되었습니다.');
       setTabMode('stream');
     } catch (err) {
       console.error('DB 저장 실패:', err);
       const serverMessage = typeof err.response?.data === 'string'
         ? err.response.data
         : err.response?.data?.message;
-      alert(serverMessage || 'DB 저장 중 오류 발생');
+      showAlert(serverMessage || 'DB 저장 중 오류 발생');
     }
   };
 
@@ -643,7 +664,7 @@ const RealtimeScreen = ({
                 className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
                   tabMode === 'stream'
                     ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                    : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
                 }`}
               >
                 실시간 스트림
@@ -653,7 +674,7 @@ const RealtimeScreen = ({
                 className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
                   tabMode === 'threshold'
                     ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                    : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
                 }`}
               >
                 설정
@@ -662,7 +683,7 @@ const RealtimeScreen = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 w-full xl:w-auto">
-            <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+            <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
               <span className="relative flex h-2 w-2">
                 <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
                 <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
@@ -704,7 +725,7 @@ const RealtimeScreen = ({
                     isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
                   }`}>
                     <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>시작</label>
+                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>시작</label>
                       <input
                         type="datetime-local"
                         max={formatForDateTimeInput(endTime)}
@@ -717,7 +738,7 @@ const RealtimeScreen = ({
                       />
                     </div>
                     <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>종료</label>
+                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>종료</label>
                       <input
                         type="datetime-local"
                         min={formatForDateTimeInput(startTime)}
@@ -788,7 +809,7 @@ const RealtimeScreen = ({
 
               <div className="flex items-center gap-3 h-8">
                 <span className={`flex items-center gap-1.5 text-[11px] font-mono ${
-                  isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'
+                  isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
                 }`}>
                   {isConnected ? (
                     <>
@@ -819,7 +840,7 @@ const RealtimeScreen = ({
                       장비추가
                     </button>
                     <button
-                      onClick={handleSaveThresholds}
+                      onClick={() => askConfirm('저장하시겠습니까?', handleSaveThresholds)}
                       className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors h-7 flex items-center justify-center ${
                         isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-600 hover:bg-green-700 text-white'
                       }`}
@@ -835,7 +856,7 @@ const RealtimeScreen = ({
             <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
               <table className="w-full text-center border-collapse table-fixed min-w-[700px] sm:min-w-[800px]">
                 <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
-                  isDarkMode ? 'bg-[#0D1224] text-[#5C6584]' : 'bg-gray-50 text-gray-500'
+                  isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
                     <th className={`w-[9%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
@@ -849,7 +870,7 @@ const RealtimeScreen = ({
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-xs sm:text-[13px] ${
-                  isDarkMode ? 'divide-[#1A2036] text-[#A2ACC9]' : 'divide-gray-100 text-gray-600'
+                  isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'
                 }`}>
                   {/* 신규 설비 인라인 입력 행 (장비추가 클릭 시 맨 위에 생성, 저장 시 함께 등록) */}
                   {newRows.map((row) => {
@@ -880,7 +901,7 @@ const RealtimeScreen = ({
                         <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="text" value={row.location} onChange={(e) => handleNewRowChange(row.tempId, 'location', e.target.value)} placeholder="위치" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           -
                         </td>
                         <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
@@ -911,7 +932,7 @@ const RealtimeScreen = ({
 
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                         {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
@@ -940,7 +961,7 @@ const RealtimeScreen = ({
                                 : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                         }`}
                       >
-                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           #{String(eq.equipId).padStart(3, '0')}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
@@ -974,12 +995,12 @@ const RealtimeScreen = ({
                               }`}
                             />
                           ) : (
-                            <span className={`text-xs truncate ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+                            <span className={`text-xs truncate ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                               {eq.location ?? '-'}
                             </span>
                           )}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                           {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
@@ -1010,7 +1031,7 @@ const RealtimeScreen = ({
                               />
                             ) : (
                               <span className={`inline-flex items-center justify-center w-[70px] h-[30px] text-xs shrink-0 ${
-                                isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'
+                                isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
                               }`}>
                                 {eq.threshold ?? '–'}
                               </span>
@@ -1047,6 +1068,9 @@ const RealtimeScreen = ({
           </div>
         </div>
       </div>
+
+      <CustomAlert message={alertMessage} onClose={() => setAlertMessage('')} isDarkMode={isDarkMode} />
+      <CustomConfirm message={confirmMessage} onConfirm={handleConfirmYes} onCancel={handleConfirmNo} isDarkMode={isDarkMode} />
     </div>
   );
 };

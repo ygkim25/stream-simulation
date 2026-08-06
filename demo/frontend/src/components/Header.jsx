@@ -22,7 +22,7 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
         </h1>
         {title && (
           <span className={`text-[13px] border-l pl-4 font-medium hidden sm:inline-block tracking-wide ${
-            isDarkMode ? 'border-[#232B45] text-[#8592AD]' : 'border-gray-200 text-gray-500'
+            isDarkMode ? 'border-[#232B45] text-[#9FACC9]' : 'border-gray-200 text-gray-500'
           }`}>
             {title}
           </span>
@@ -74,13 +74,13 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
                 {user?.userName || '사용자'}
               </span>
               {user?.responsibility && (
-                <span className={`text-[11px] font-normal ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+                <span className={`text-[11px] font-normal ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
                   {user.responsibility}
                 </span>
               )}
             </div>
             {/* 부서명 */}
-            <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+            <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
               {user?.divisionName || '관제팀'}
             </span>
           </div>

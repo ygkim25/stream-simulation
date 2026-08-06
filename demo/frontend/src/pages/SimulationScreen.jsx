@@ -3,6 +3,8 @@ import * as XLSX from 'xlsx';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
 import FullLogModal from '../components/FullLogModal';
+import CustomAlert from '../components/CustomAlert';
+import CustomConfirm from '../components/CustomConfirm';
 import { getAllScenarios, saveScenario, deleteScenario } from '../utils/simulationDb';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
@@ -30,6 +32,28 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [selectedEquipId, setSelectedEquipId] = useState(null);
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
+  const [alertMessage, setAlertMessage] = useState('');
+  const showAlert = (message) => setAlertMessage(message);
+
+  // 크롬 기본 confirm 대신 사용하는 커스텀 확인 메시지
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmCallback, setConfirmCallback] = useState(null);
+  const askConfirm = (message, onConfirm) => {
+    setConfirmMessage(message);
+    setConfirmCallback(() => onConfirm);
+  };
+  const handleConfirmYes = () => {
+    const callback = confirmCallback;
+    setConfirmMessage('');
+    setConfirmCallback(null);
+    callback?.();
+  };
+  const handleConfirmNo = () => {
+    setConfirmMessage('');
+    setConfirmCallback(null);
+  };
 
   const fileInputRef = useRef(null);
   const prevElapsedRef = useRef(0);
@@ -66,16 +90,17 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setTabMode('sheet');
   };
 
-  const handleDeleteScenario = async (e, id) => {
+  const handleDeleteScenario = (e, id) => {
     e.stopPropagation();
-    if (!window.confirm('이 시뮬레이션 시나리오를 삭제하시겠습니까?')) return;
-    await deleteScenario(id);
-    if (selectedScenarioId === id) {
-      resetPlayback();
-      setSelectedScenarioId(null);
-      setRows([]);
-    }
-    await loadScenarios();
+    askConfirm('이 시뮬레이션 시나리오를 삭제하시겠습니까?', async () => {
+      await deleteScenario(id);
+      if (selectedScenarioId === id) {
+        resetPlayback();
+        setSelectedScenarioId(null);
+        setRows([]);
+      }
+      await loadScenarios();
+    });
   };
 
   // 재생 구간의 전체 길이(ms) 및 시작 시각
@@ -116,6 +141,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               elapsedMs: r.time.getTime() - startTimeMs,
               kind: 'success',
               value: r.temperature,
+              threshold: r.threshold,
             });
           }
         }
@@ -142,8 +168,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     type: e.kind,
     equipName: e.equipName,
     message: e.kind === 'warning' ? '임계값 초과 감지' : '정상 범위로 복구됨',
-    value: e.kind === 'warning' ? e.value : undefined,
-    threshold: e.kind === 'warning' ? e.threshold : undefined,
+    value: e.value,
+    threshold: e.threshold,
   });
 
   // 재생 위치(elapsedMs)가 바뀔 때마다 지금까지 발생한 전환 이벤트를 알람/로그에 반영
@@ -279,11 +305,11 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     try {
       const { rows: parsedRows, missingTimeCount } = await parseSimulationFile(file);
       if (parsedRows.length === 0) {
-        alert('엑셀에서 유효한 데이터를 찾을 수 없습니다. ID 컬럼이 있는지 확인해 주세요.');
+        showAlert('엑셀에서 유효한 데이터를 찾을 수 없습니다. ID 컬럼이 있는지 확인해 주세요.');
         return;
       }
       if (missingTimeCount === parsedRows.length) {
-        alert('"수신 시간" 컬럼을 찾을 수 없어 업로드 순서 기준으로 임시 시간이 부여됩니다.');
+        showAlert('"수신 시간" 컬럼을 찾을 수 없어 업로드 순서 기준으로 임시 시간이 부여됩니다.');
       }
       const scenario = {
         id: `sim-${Date.now()}`,
@@ -296,7 +322,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       handleSelectScenario(scenario);
     } catch (err) {
       console.error('시뮬레이션 파일 업로드 실패:', err);
-      alert('엑셀 파일을 읽는 중 오류가 발생했습니다.');
+      showAlert('엑셀 파일을 읽는 중 오류가 발생했습니다.');
     }
   };
 
@@ -309,7 +335,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   // 현재 수정된 셀 값을 시나리오 원본에 반영해서 목록(IndexedDB)에 저장하고, 수정 내용이 포함된 엑셀 파일로 다시 내보냄
   const handleSaveScenario = async () => {
     if (!selectedScenario) {
-      alert('저장할 시나리오를 먼저 선택하세요.');
+      showAlert('저장할 시나리오를 먼저 선택하세요.');
       return;
     }
 
@@ -423,7 +449,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
                     tabMode === 'sheet'
                       ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
                   }`}
                 >
                   시트
@@ -433,7 +459,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
                     tabMode === 'upload'
                       ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#5C6584] hover:text-[#A2ACC9]' : 'text-gray-500 hover:text-gray-800')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
                   }`}
                 >
                   업로드
@@ -442,7 +468,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
               {selectedScenario && (
                 <span className={`text-xs font-mono px-2.5 py-1.5 rounded-lg border truncate max-w-[220px] ${
-                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#8592AD]' : 'bg-gray-50 border-gray-200 text-gray-600'
+                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#9FACC9]' : 'bg-gray-50 border-gray-200 text-gray-600'
                 }`}>
                   {selectedScenario.fileName}
                 </span>
@@ -475,7 +501,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               disabled={!rows.length}
               title="정지"
               className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                isDarkMode ? 'border-[#232B45] hover:bg-[#151B30] text-[#8592AD]' : 'border-gray-200 hover:bg-gray-100 text-gray-600'
+                isDarkMode ? 'border-[#232B45] hover:bg-[#151B30] text-[#9FACC9]' : 'border-gray-200 hover:bg-gray-100 text-gray-600'
               }`}
             >
               <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5" /></svg>
@@ -516,7 +542,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               className="flex-1 min-w-[120px] disabled:opacity-40"
             />
 
-            <span className={`text-xs font-mono shrink-0 ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+            <span className={`text-xs font-mono shrink-0 ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
               {formatMmSs(elapsedMs)} / {formatMmSs(durationMs)}
             </span>
 
@@ -525,7 +551,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 onClick={handleSaveScenario}
                 disabled={!selectedScenario}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#8592AD] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
+                  isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
                 }`}
               >
                 저장
@@ -540,10 +566,10 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           <div className={`w-full lg:w-[220px] shrink-0 rounded-xl border p-3 flex flex-col gap-2 lg:overflow-y-auto transition-colors ${
             isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
           }`}>
-            <h3 className={`text-xs font-bold px-1 mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>등록된 시뮬레이션</h3>
+            <h3 className={`text-xs font-bold px-1 mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>등록된 시뮬레이션</h3>
 
             {scenarios.length === 0 ? (
-              <p className={`text-xs px-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+              <p className={`text-xs px-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                 업로드 탭에서 엑셀 파일을 등록해 주세요.
               </p>
             ) : (
@@ -560,14 +586,14 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   <p className={`text-xs font-bold truncate pr-5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                     {s.fileName}
                   </p>
-                  <p className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                  <p className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                     {new Date(s.uploadedAt).toLocaleString('ko-KR')}
                   </p>
                   <button
                     onClick={(e) => handleDeleteScenario(e, s.id)}
                     title="삭제"
                     className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
-                      isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#8592AD] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                      isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
                     }`}
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -600,26 +626,26 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                     : (isDarkMode ? 'border-[#232B45] hover:border-[#2A335A]' : 'border-gray-300 hover:border-gray-400')
                 }`}
               >
-                <svg className={`w-12 h-12 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className={`w-12 h-12 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12m4.5-4.5v13.5" />
                 </svg>
                 <p className={`text-sm font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                   엑셀 파일을 드래그하거나 클릭해서 업로드
                 </p>
-                <p className={`text-xs text-center leading-relaxed max-w-[360px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                <p className={`text-xs text-center leading-relaxed max-w-[360px] ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                   ID / 설비명 / 위치 / 수신 시간 / 온도(℃) / 전력 / 임계값(온도) / 상태 컬럼을 포함한 .xlsx 파일을 업로드하세요.<br />
                   실시간 모니터링 화면의 "엑셀 내보내기" 결과 파일을 그대로 사용할 수 있습니다.
                 </p>
               </div>
             ) : !selectedScenario ? (
-              <div className={`flex-1 flex items-center justify-center text-sm ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+              <div className={`flex-1 flex items-center justify-center text-sm ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                 왼쪽에서 시뮬레이션을 선택하거나, 업로드 탭에서 새 엑셀 파일을 업로드하세요.
               </div>
             ) : (
               <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
                 <table className="w-full text-center border-collapse table-fixed min-w-[700px]">
                   <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
-                    isDarkMode ? 'bg-[#0D1224] text-[#5C6584]' : 'bg-gray-50 text-gray-500'
+                    isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                   }`}>
                     <tr className="h-[40px]">
                       <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
@@ -632,10 +658,10 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       <th className={`w-[10%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
                     </tr>
                   </thead>
-                  <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#A2ACC9]' : 'divide-gray-100 text-gray-600'}`}>
+                  <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
                     {currentEquipRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                        <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           재생을 시작하면 데이터가 표시됩니다.
                         </td>
                       </tr>
@@ -654,16 +680,16 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                 : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                             }`}
                           >
-                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                               #{eq.equipId}
                             </td>
                             <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                               {eq.equipName}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] text-xs truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+                            <td className={`px-3 py-0 h-[52px] text-xs truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                               {eq.location || '-'}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono text-[11px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono text-[11px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                               {eq.time.toLocaleString('ko-KR')}
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
@@ -680,7 +706,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                             <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                               {eq.power != null && !isNaN(eq.power) ? Number(eq.power).toFixed(1) : '-'}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                               {eq.threshold}
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle`}>
@@ -723,6 +749,9 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           isDarkMode={isDarkMode}
         />
       )}
+
+      <CustomAlert message={alertMessage} onClose={() => setAlertMessage('')} isDarkMode={isDarkMode} />
+      <CustomConfirm message={confirmMessage} onConfirm={handleConfirmYes} onCancel={handleConfirmNo} isDarkMode={isDarkMode} />
     </div>
   );
 };

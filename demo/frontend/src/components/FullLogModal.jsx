@@ -1,10 +1,12 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import CustomConfirm from './CustomConfirm';
 
 // ==========================================
 // 전체 로그 팝업 컴포넌트 (다크 / 라이트 모드 지원)
 // ==========================================
 const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
   const scrollRef = useRef(null);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -84,18 +86,14 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
           <div className="flex items-center gap-3">
             <h2 className="text-[16px] font-bold tracking-tight m-0">전체 로그 이력</h2>
             <span className={`text-[11px] px-2.5 py-1 rounded-full font-mono ${
-              isDarkMode ? 'bg-[#1A2036] text-[#8592AD]' : 'bg-gray-200 text-gray-600'
+              isDarkMode ? 'bg-[#1A2036] text-[#9FACC9]' : 'bg-gray-200 text-gray-600'
             }`}>
               총 {logs.length}건
             </span>
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={() => {
-                if (window.confirm('전체 로그 이력을 삭제하시겠습니까?')) {
-                  onClear();
-                }
-              }}
+              onClick={() => setIsClearConfirmOpen(true)}
               className={`px-3 py-1.5 text-[13px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer border disabled:opacity-40 disabled:cursor-not-allowed ${
                 isDarkMode 
                   ? 'bg-[#FB5D75]/10 hover:bg-[#FB5D75]/20 text-[#FB5D75] border-[#FB5D75]/30' 
@@ -109,7 +107,7 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
             <button
               onClick={onClose}
               className={`text-2xl leading-none transition-colors outline-none bg-transparent border-none cursor-pointer ${
-                isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-800'
+                isDarkMode ? 'text-[#7D87A8] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-800'
               }`}
             >
               &times;
@@ -128,59 +126,54 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
           {logs.length > 0 ? (
             <div className={`divide-y ${isDarkMode ? 'divide-[#1A2036]' : 'divide-gray-200'}`}>
               {logs.map((log) => {
-                const badge = typeBadge[log.type];
+                const badge = typeBadge[log.type] || typeBadge.info;
+                const isWarning = log.type === 'warning';
+                const hasReading = log.value !== undefined && log.value !== null
+                  && log.threshold !== undefined && log.threshold !== null;
+
                 return (
-                  <div key={log.id} className={`p-4 sm:p-5 transition-colors flex flex-col sm:flex-row gap-2 sm:gap-4 items-start sm:items-center ${
+                  <div key={log.id} className={`px-4 sm:px-5 py-3.5 grid grid-cols-[76px_1fr_auto] items-center gap-3 sm:gap-4 transition-colors ${
                     isDarkMode ? 'hover:bg-[#0F1526]' : 'hover:bg-white'
                   }`}>
 
-                    <div className="flex items-center gap-3 min-w-[150px]">
-                      <span className={`font-mono text-[13px] font-semibold ${
-                        isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'
+                    <div className="flex flex-col items-start gap-1 min-w-0">
+                      <span className={`font-mono text-[11px] ${
+                        isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'
                       }`}>
                         {log.time}
                       </span>
-                      {badge && (
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold border ${badge.className}`}>
-                          {badge.label}
-                        </span>
-                      )}
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border whitespace-nowrap ${badge.className}`}>
+                        {badge.label}
+                      </span>
                     </div>
 
-                    <div className="flex-1">
-                      <p className={`text-[13px] sm:text-[14px] font-medium m-0 leading-relaxed ${
-                        isDarkMode ? 'text-[#A2ACC9]' : 'text-gray-600'
+                    <div className="min-w-0">
+                      <p className={`text-[13px] sm:text-[14px] font-medium m-0 leading-snug ${
+                        isDarkMode ? 'text-[#B9C2DE]' : 'text-gray-600'
                       }`}>
-                        <span className={`font-bold mr-2 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                        <span className={`font-bold mr-1.5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                           {log.equipName || '시스템'}
                         </span>
                         {log.message}
                       </p>
                     </div>
 
-                    {log.value && log.threshold && (
-                      <div className={`border px-3 py-1.5 rounded-lg shrink-0 text-right min-w-[120px] transition-colors ${
-                        isDarkMode ? 'bg-[#0D1224] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
-                      }`}>
-                        <div className={`text-[10px] font-bold mb-0.5 uppercase tracking-wide ${
-                          isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'
-                        }`}>
-                          수치 / 임계값
-                        </div>
-                        <div className="font-mono font-bold text-[13px]">
-                          <span className={isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'}>{log.value}</span>{' '}
-                          <span className={isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}>/</span>{' '}
-                          <span className={isDarkMode ? 'text-[#A2ACC9]' : 'text-gray-700'}>{log.threshold}</span>
-                        </div>
-                      </div>
-                    )}
+                    <div className={`shrink-0 text-right font-mono text-[13px] font-bold whitespace-nowrap ${
+                      !hasReading
+                        ? (isDarkMode ? 'text-[#7D87A8]' : 'text-gray-300')
+                        : isWarning
+                          ? (isDarkMode ? 'text-[#FB5D75]' : 'text-red-600')
+                          : (isDarkMode ? 'text-[#34D399]' : 'text-green-600')
+                    }`}>
+                      {hasReading ? `${log.value} / ${log.threshold}` : '-'}
+                    </div>
                   </div>
                 );
               })}
             </div>
           ) : (
             <div className={`h-full flex flex-col items-center justify-center p-8 text-center gap-3 ${
-              isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'
+              isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'
             }`}>
               <svg className={`w-12 h-12 ${isDarkMode ? 'text-[#232B45]' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
@@ -208,6 +201,13 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
         )}
         </div>
       </div>
+
+      <CustomConfirm
+        message={isClearConfirmOpen ? '전체 로그 이력을 삭제하시겠습니까?' : ''}
+        onConfirm={() => { setIsClearConfirmOpen(false); onClear(); }}
+        onCancel={() => setIsClearConfirmOpen(false)}
+        isDarkMode={isDarkMode}
+      />
     </div>
   );
 };

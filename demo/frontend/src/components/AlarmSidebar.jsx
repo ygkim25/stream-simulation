@@ -49,7 +49,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
               onClick={onClear}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer border ${
                 isDarkMode 
-                  ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#8592AD] hover:text-[#EDF1FC]' 
+                  ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' 
                   : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
               }`}
             >
@@ -59,7 +59,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
               onClick={openLogs}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
                 isDarkMode 
-                  ? 'bg-[#1A2036] hover:bg-[#232B45] text-[#A2ACC9]' 
+                  ? 'bg-[#1A2036] hover:bg-[#232B45] text-[#B9C2DE]' 
                   : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
               }`}
             >
@@ -101,7 +101,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
         >
           {alarms.length === 0 ? (
             <div className={`h-full flex flex-col items-center justify-center text-sm gap-2 ${
-              isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'
+              isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'
             }`}>
               <svg className={`w-10 h-10 ${isDarkMode ? 'text-[#232B45]' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
@@ -125,7 +125,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
                   title="알람 삭제"
                   className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer ${
                     isDarkMode
-                      ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#8592AD] hover:text-[#EDF1FC]'
+                      ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]'
                       : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
                   }`}
                 >
@@ -142,16 +142,16 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
                     }`}></span>
                     {alarm.equipName}
                   </span>
-                  <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                  <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                     {alarm.time}
                   </span>
                 </div>
-                <p className={`text-[12px] font-medium ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+                <p className={`text-[12px] font-medium ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                   임계치 초과: <span className={`font-mono font-bold ${isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'}`}>{alarm.value}</span>
-                  <span className={isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}> / 기준 </span>
-                  <span className={`font-mono ${isDarkMode ? 'text-[#A2ACC9]' : 'text-gray-700'}`}>{alarm.threshold}</span>
+                  <span className={isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}> / 기준 </span>
+                  <span className={`font-mono ${isDarkMode ? 'text-[#B9C2DE]' : 'text-gray-700'}`}>{alarm.threshold}</span>
                 </p>
-                <span className={`text-[11px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                <span className={`text-[11px] ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                   위치: {alarm.location}
                 </span>
               </div>

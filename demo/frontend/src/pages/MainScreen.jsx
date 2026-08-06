@@ -68,7 +68,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
           <h2 className={`text-3xl font-bold mb-4 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
             실시간 모니터링
           </h2>
-          <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+          <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
             실시간으로 수집되는 설비 데이터를 모니터링하고 임계값을 설정하여 이상 징후를 감지합니다.
           </p>
         </div>
@@ -95,7 +95,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
           <h2 className={`text-3xl font-bold mb-4 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
             시뮬레이션 모드
           </h2>
-          <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+          <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
             과거 장애 이력 엑셀 파일을 업로드하여 상황을 재현하고 시나리오 데이터를 수정하여 테스트합니다.
           </p>
         </div>
@@ -117,7 +117,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
               <h3 className="text-lg font-bold">비밀번호 변경 안내</h3>
             </div>
 
-            <p className={`text-sm mb-6 leading-relaxed ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-600'}`}>
+            <p className={`text-sm mb-6 leading-relaxed ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
               보안을 위해 비밀번호 변경이 권장되는 계정입니다.<br />
               원활한 시스템 이용을 위해 지금 비밀번호를 변경하시겠습니까?
             </p>
@@ -127,7 +127,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
                 onClick={handleDismiss}
                 className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
                   isDarkMode 
-                    ? 'bg-[#1A223D] text-[#8592AD] hover:text-[#EDF1FC] hover:bg-[#232B45]' 
+                    ? 'bg-[#1A223D] text-[#9FACC9] hover:text-[#EDF1FC] hover:bg-[#232B45]' 
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >

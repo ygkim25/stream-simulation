@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import CustomAlert from './CustomAlert';
+import CustomConfirm from './CustomConfirm';
 
 // ==========================================
 // 설정(Settings) 팝업 컴포넌트 (내 정보 / 비밀번호 / 사용자 조회)
@@ -39,6 +40,24 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
     }
   };
 
+  // 크롬 기본 confirm 대신 사용하는 커스텀 확인 메시지
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmCallback, setConfirmCallback] = useState(null);
+  const askConfirm = (message, onConfirm) => {
+    setConfirmMessage(message);
+    setConfirmCallback(() => onConfirm);
+  };
+  const handleConfirmYes = () => {
+    const callback = confirmCallback;
+    setConfirmMessage('');
+    setConfirmCallback(null);
+    callback?.();
+  };
+  const handleConfirmNo = () => {
+    setConfirmMessage('');
+    setConfirmCallback(null);
+  };
+
   // [탭 3] 사용자 조회 관련 State
   const [employees, setEmployees] = useState([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
@@ -68,9 +87,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   };
 
   const handleLogoutClick = () => {
-    if (window.confirm('로그아웃 하시겠습니까?')) {
-      onLogout?.();
-    }
+    askConfirm('로그아웃 하시겠습니까?', () => onLogout?.());
   };
 
   // ★ [탭 2] 비밀번호 변경 처리 함수
@@ -133,31 +150,31 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
     }
   }, [activeTab, employees.length, user]);
 
-  const handleRoleChange = async (userId, newRole) => {
+  const handleRoleChange = (userId, newRole) => {
     const roleLabel = newRole === 'ADMIN' ? '관리자' : '일반';
-    if (!window.confirm(`${userId}의 권한을 [${roleLabel}]로 변경하시겠습니까?`)) return;
-
-    try {
-      await axios.patch(
-        `http://localhost:8086/api/users/${encodeURIComponent(userId)}/role`,
-        { role: newRole },
-        { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
-      );
-      setEmployees(prev => prev.map(emp => emp.userId === userId ? { ...emp, role: newRole } : emp));
-    } catch (err) {
-      console.error('권한 변경 실패:', err);
-      const serverMessage = typeof err.response?.data === 'string'
-        ? err.response.data
-        : err.response?.data?.message;
-      showAlert(serverMessage || '권한 변경 중 오류가 발생했습니다.');
-    }
+    askConfirm(`${userId}의 권한을 [${roleLabel}]로 변경하시겠습니까?`, async () => {
+      try {
+        await axios.patch(
+          `http://localhost:8086/api/users/${encodeURIComponent(userId)}/role`,
+          { role: newRole },
+          { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
+        );
+        setEmployees(prev => prev.map(emp => emp.userId === userId ? { ...emp, role: newRole } : emp));
+      } catch (err) {
+        console.error('권한 변경 실패:', err);
+        const serverMessage = typeof err.response?.data === 'string'
+          ? err.response.data
+          : err.response?.data?.message;
+        showAlert(serverMessage || '권한 변경 중 오류가 발생했습니다.');
+      }
+    });
   };
 
   const handleDeleteUser = (userId) => {
-    if (window.confirm(`${userId} 계정을 정말 삭제하시겠습니까?`)) {
+    askConfirm(`${userId} 계정을 정말 삭제하시겠습니까?`, () => {
       showAlert('백엔드 연동 후 실제 계정이 삭제됩니다.');
       setEmployees(prev => prev.filter(emp => emp.userId !== userId));
-    }
+    });
   };
 
   // 공통 Input 스타일
@@ -170,7 +187,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   // 읽기 전용 Input 스타일 (클릭/포커스 시 테마 색상 border로 표시)
   const readOnlyInputClass = `w-full rounded-xl px-4 py-3.5 focus:outline-none text-[14px] transition-colors box-border border cursor-not-allowed ${
     isDarkMode
-      ? 'bg-[#0A0E1A] border-[#1E253D] text-[#5C6584] focus:border-[#22D3EE]/50'
+      ? 'bg-[#0A0E1A] border-[#1E253D] text-[#7D87A8] focus:border-[#22D3EE]/50'
       : 'bg-gray-100 border-gray-200 text-gray-400 focus:border-green-500/50'
   }`;
 
@@ -196,7 +213,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
           <button
             onClick={onClose}
             className={`text-2xl leading-none transition-colors outline-none bg-transparent border-none cursor-pointer ${
-              isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-800'
+              isDarkMode ? 'text-[#7D87A8] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-800'
             }`}
           >
             &times;
@@ -212,7 +229,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
             className={`flex-1 py-4 text-center transition-colors relative cursor-pointer ${
               activeTab === 'info'
                 ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
+                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
             }`}
           >
             내 정보
@@ -225,7 +242,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
             className={`flex-1 py-4 text-center transition-colors relative cursor-pointer ${
               activeTab === 'password'
                 ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
+                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
             }`}
           >
             비밀번호 변경
@@ -238,7 +255,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
             className={`flex-1 py-4 text-center transition-colors relative cursor-pointer ${
               activeTab === 'auth'
                 ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
+                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
             }`}
           >
             사용자 조회
@@ -256,23 +273,23 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
             <div className="flex flex-col gap-6 h-full justify-between animate-fade-in">
               <div className="space-y-4">
                 <div>
-                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>이름</label>
+                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>이름</label>
                   <input type="text" value={name} readOnly className={readOnlyInputClass} placeholder="이름" />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>부서</label>
+                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>부서</label>
                     <input type="text" value={dept} readOnly className={readOnlyInputClass} placeholder="부서명" />
                   </div>
                   <div>
-                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>직급</label>
+                    <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>직급</label>
                     <input type="text" value={duty} readOnly className={readOnlyInputClass} placeholder="직급" />
                   </div>
                 </div>
 
                 <div>
-                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>계정 (ID)</label>
+                  <label className={`block text-xs font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>계정 (ID)</label>
                   <input
                     type="text"
                     value={id}
@@ -341,7 +358,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                 </span>
               </div>
               {!isAdmin && (
-                <div className={`text-right text-[12px] mb-3 -mt-2 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+                <div className={`text-right text-[12px] mb-3 -mt-2 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                   * 수정/삭제 권한은 관리자 전용입니다.
                 </div>
               )}
@@ -363,10 +380,10 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                     }`}>
                       <div className="flex flex-col gap-0.5 min-w-0">
                         <span className="text-[14px] font-bold truncate">{emp.userName}</span>
-                        <span className={`text-[11px] font-normal truncate ${isDarkMode ? 'text-[#8592AD]' : 'text-gray-500'}`}>
+                        <span className={`text-[11px] font-normal truncate ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
                           {emp.divisionName || '-'} · {emp.responsibility || '-'}
                         </span>
-                        <span className={`text-[12px] font-mono truncate ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-500'}`}>{emp.userId}</span>
+                        <span className={`text-[12px] font-mono truncate ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>{emp.userId}</span>
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
@@ -399,7 +416,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                           <span className={`text-[12px] font-semibold px-3 py-1 rounded-lg border ${
                             empIsAdmin
                               ? (isDarkMode ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#22D3EE]' : 'bg-green-50 border-green-200 text-green-700')
-                              : (isDarkMode ? 'bg-[#1A223D] border-[#2A335A] text-[#8592AD]' : 'bg-gray-100 border-gray-200 text-gray-600')
+                              : (isDarkMode ? 'bg-[#1A223D] border-[#2A335A] text-[#9FACC9]' : 'bg-gray-100 border-gray-200 text-gray-600')
                           }`}>
                             {empIsAdmin ? '관리자' : '일반'}
                           </span>
@@ -417,6 +434,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
       </div>
 
       <CustomAlert message={alertMessage} onClose={handleAlertClose} isDarkMode={isDarkMode} />
+      <CustomConfirm message={confirmMessage} onConfirm={handleConfirmYes} onCancel={handleConfirmNo} isDarkMode={isDarkMode} />
     </div>
   );
 };
