@@ -83,6 +83,7 @@ const RealtimeScreen = ({
   const [selectedPreset, setSelectedPreset] = useState('');
 
   const stompClientRef = useRef(null);
+  const gridScrollRef = useRef(null);
 
   // 알림 매핑 시 최신 설비명/위치를 참조하기 위한 ref (폴링 interval의 stale closure 방지)
   const equipmentsRef = useRef([]);
@@ -542,6 +543,7 @@ const RealtimeScreen = ({
         threshold: '',
       },
     ]);
+    gridScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleNewRowChange = (tempId, field, value) => {
@@ -853,7 +855,7 @@ const RealtimeScreen = ({
             </div>
 
             {/* 그리드 표 */}
-            <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
+            <div ref={gridScrollRef} className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
               <table className="w-full text-center border-collapse table-fixed min-w-[700px] sm:min-w-[800px]">
                 <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
