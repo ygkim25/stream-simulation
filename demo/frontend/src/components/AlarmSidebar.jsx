@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
@@ -8,15 +8,34 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
+  // 맨 아래에 있는지 여부 (맨 아래일 땐 "아래로" 버튼을 숨기고, 새 알람이 와도 자동으로 계속 아래에 붙어있음)
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
+
   const scrollToBottom = (behavior = 'smooth') => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior });
   };
 
+  const updateIsAtBottom = (value) => {
+    isAtBottomRef.current = value;
+    setIsAtBottom(value);
+  };
+
+  const handleScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    updateIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 30);
+  };
+
   // 알람이 처음 채워졌을 때는 맨 위(오래된 것)가 아니라 맨 아래(최신)부터 보이도록 즉시 이동
+  // 이미 맨 아래를 보고 있었다면, 새 알람이 추가돼도 계속 맨 아래에 붙어있게 함
   useEffect(() => {
     if (!hasScrolledInitially.current && alarms.length > 0) {
       scrollToBottom('auto');
       hasScrolledInitially.current = true;
+      updateIsAtBottom(true);
+    } else if (isAtBottomRef.current) {
+      scrollToBottom('smooth');
     }
   }, [alarms]);
 
@@ -95,6 +114,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
       <div className="relative flex-1 min-h-0">
         <div
           ref={listRef}
+          onScroll={handleScroll}
           className={`h-full overflow-y-auto p-3 space-y-2 transition-colors ${
             isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50/50'
           }`}
@@ -159,8 +179,8 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
           )}
         </div>
 
-        {/* 가장 아래(최신)로 이동하는 원형 플로팅 버튼 */}
-        {alarms.length > 0 && (
+        {/* 가장 아래(최신)로 이동하는 원형 플로팅 버튼 (맨 아래에 있을 땐 숨김) */}
+        {alarms.length > 0 && !isAtBottom && (
           <button
             onClick={() => scrollToBottom()}
             title="최신 알람으로 이동"

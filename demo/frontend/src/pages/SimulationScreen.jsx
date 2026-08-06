@@ -5,7 +5,7 @@ import AlarmSidebar from '../components/AlarmSidebar';
 import FullLogModal from '../components/FullLogModal';
 import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
-import { getAllScenarios, saveScenario, deleteScenario } from '../utils/simulationDb';
+import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
@@ -13,7 +13,7 @@ const SPEED_OPTIONS = [1, 2, 4, 8];
 
 // ==========================================
 // 시뮬레이션 모드 화면 (과거 장애 이력 엑셀을 업로드해 재생하며 시나리오를 테스트)
-// 백엔드 연동 없이 브라우저(IndexedDB)에만 시나리오를 저장함
+// 시나리오는 백엔드 simulation_scenario 테이블에 저장 (유저별 소유권 분리)
 // ==========================================
 const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [tabMode, setTabMode] = useState('sheet'); // 'sheet' | 'upload'
@@ -62,15 +62,21 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
   // 등록된 시나리오 목록 새로고침
   const loadScenarios = async () => {
-    const list = await getAllScenarios();
-    list.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-    setScenarios(list);
-    return list;
+    try {
+      const list = await listScenarios(user?.token);
+      list.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+      setScenarios(list);
+      return list;
+    } catch (err) {
+      console.error('시나리오 목록 조회 실패:', err);
+      return [];
+    }
   };
 
   useEffect(() => {
     loadScenarios();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.token]);
 
   // 재생 상태를 완전히 초기화 (시나리오 변경 / 정지 시 공통)
   const resetPlayback = () => {
@@ -83,17 +89,30 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setSelectedEquipId(null);
   };
 
-  const handleSelectScenario = (scenario) => {
+  const handleSelectScenario = async (scenario) => {
     resetPlayback();
     setSelectedScenarioId(scenario.id);
-    setRows(scenario.rows || []);
     setTabMode('sheet');
+    try {
+      const detail = await getScenarioDetail(scenario.id, user?.token);
+      setRows(detail.rows || []);
+    } catch (err) {
+      console.error('시나리오 상세 조회 실패:', err);
+      showAlert('시나리오를 불러오는 중 오류가 발생했습니다.');
+      setRows([]);
+    }
   };
 
   const handleDeleteScenario = (e, id) => {
     e.stopPropagation();
     askConfirm('이 시뮬레이션 시나리오를 삭제하시겠습니까?', async () => {
-      await deleteScenario(id);
+      try {
+        await deleteScenarioApi(id, user?.token);
+      } catch (err) {
+        console.error('시나리오 삭제 실패:', err);
+        showAlert('시나리오 삭제 중 오류가 발생했습니다.');
+        return;
+      }
       if (selectedScenarioId === id) {
         resetPlayback();
         setSelectedScenarioId(null);
@@ -299,7 +318,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setSimAlarms([]);
   };
 
-  // 시나리오 파일 업로드 및 파싱 -> IndexedDB 저장 -> 자동 선택
+  // 시나리오 파일 업로드 및 파싱 -> 백엔드 저장 -> 자동 선택
   const handleFileUpload = async (file) => {
     if (!file) return;
     try {
@@ -311,18 +330,15 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       if (missingTimeCount === parsedRows.length) {
         showAlert('"수신 시간" 컬럼을 찾을 수 없어 업로드 순서 기준으로 임시 시간이 부여됩니다.');
       }
-      const scenario = {
-        id: `sim-${Date.now()}`,
-        fileName: file.name,
-        uploadedAt: new Date(),
-        rows: parsedRows,
-      };
-      await saveScenario(scenario);
+      const saved = await uploadScenario(file.name, parsedRows, user?.token);
       await loadScenarios();
-      handleSelectScenario(scenario);
+      resetPlayback();
+      setSelectedScenarioId(saved.id);
+      setRows(saved.rows || parsedRows);
+      setTabMode('sheet');
     } catch (err) {
       console.error('시뮬레이션 파일 업로드 실패:', err);
-      showAlert('엑셀 파일을 읽는 중 오류가 발생했습니다.');
+      showAlert('엑셀 파일을 업로드하는 중 오류가 발생했습니다.');
     }
   };
 
@@ -332,7 +348,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     e.target.value = '';
   };
 
-  // 현재 수정된 셀 값을 시나리오 원본에 반영해서 목록(IndexedDB)에 저장하고, 수정 내용이 포함된 엑셀 파일로 다시 내보냄
+  // 현재 수정된 셀 값을 시나리오 원본에 반영해서 백엔드에 저장하고, 수정 내용이 포함된 엑셀 파일로 다시 내보냄
   const handleSaveScenario = async () => {
     if (!selectedScenario) {
       showAlert('저장할 시나리오를 먼저 선택하세요.');
@@ -359,8 +375,13 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       return { ...r, temperature: edited, status: computeStatus(edited, r.threshold) };
     });
 
-    const updatedScenario = { ...selectedScenario, rows: updatedRows };
-    await saveScenario(updatedScenario);
+    try {
+      await updateScenarioRows(selectedScenarioId, updatedRows, user?.token);
+    } catch (err) {
+      console.error('시나리오 저장 실패:', err);
+      showAlert('시나리오를 저장하는 중 오류가 발생했습니다.');
+      return;
+    }
     setRows(updatedRows);
     setEditedValues({});
     await loadScenarios();

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
-import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
@@ -85,11 +84,26 @@ const RealtimeScreen = ({
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
 
-  // 알림 매핑 시 최신 설비명/위치를 참조하기 위한 ref (폴링 interval의 stale closure 방지)
+  // 알림 매핑 시 최신 설비명/위치를 참조하기 위한 ref
+  // (useEffect로 state를 미러링하면 웹소켓 메시지가 연달아 도착할 때 ref가 한 렌더 뒤처져서
+  //  상태 전환이 아닌데도 전환으로 오탐지될 수 있어, 웹소켓 핸들러에서 직접 동기적으로 갱신함)
   const equipmentsRef = useRef([]);
+
+  // 짧은 시간에 상태 전환이 연달아 발생해도 noti-warn/logs 조회는 한 번으로 묶어서 보내기 위한 디바운스
+  const alertsFetchTimeoutRef = useRef(null);
+  const scheduleAlertsFetch = () => {
+    if (alertsFetchTimeoutRef.current) return; // 이미 예약돼 있으면 추가로 예약하지 않음
+    alertsFetchTimeoutRef.current = setTimeout(() => {
+      alertsFetchTimeoutRef.current = null;
+      fetchAlerts();
+      fetchLogs();
+    }, 3000);
+  };
   useEffect(() => {
-    equipmentsRef.current = equipments;
-  }, [equipments]);
+    return () => {
+      if (alertsFetchTimeoutRef.current) clearTimeout(alertsFetchTimeoutRef.current);
+    };
+  }, []);
 
   // 사용자가 개별 삭제(x)한 알람 id 목록 (새로고침해도 유지되도록 localStorage에 보관)
   const dismissedAlarmIdsRef = useRef(null);
@@ -150,7 +164,7 @@ const RealtimeScreen = ({
       }
 
       const client = new Client({
-        webSocketFactory: () => new SockJS('http://localhost:8086/ws'),
+        brokerURL: 'ws://localhost:8086/ws/websocket',
 
         connectHeaders: {
           Authorization: user?.token ? `Bearer ${user.token}` : '',
@@ -184,34 +198,30 @@ const RealtimeScreen = ({
               }
 
               if (newDataList.length > 0) {
-                // 실시간 모니터링 스트림에서 상태 전환(정상↔경고/위험)이 감지되면,
-                // 알람/로그 자체는 백엔드(noti-warn / logs API)가 단일 진실 소스이므로 그쪽을 재조회함
+                // 실시간 스트림에서 상태 전환(정상↔경고/위험)이 감지되면 noti-warn/logs를 재조회함
+                // (짧은 시간에 여러 건이 몰려도 scheduleAlertsFetch가 한 번으로 묶어서 요청함)
                 let hasTransition = false;
+                const updated = [...equipmentsRef.current];
                 newDataList.forEach(newItem => {
-                  const prevEq = equipmentsRef.current.find(eq => eq.equipId === newItem.equipId);
-                  if (newItem.status !== prevEq?.status) {
+                  const idx = updated.findIndex(eq => eq.equipId === newItem.equipId);
+                  const prevStatus = idx >= 0 ? updated[idx].status : undefined;
+                  if (idx >= 0 && newItem.status !== prevStatus) {
                     hasTransition = true;
                   }
+                  if (idx >= 0) {
+                    updated[idx] = newItem;
+                  } else {
+                    updated.push(newItem);
+                  }
                 });
+                equipmentsRef.current = updated;
 
                 if (hasTransition) {
-                  fetchAlerts();
-                  fetchLogs();
+                  scheduleAlertsFetch();
                 }
 
                 // 설비 ID로 비교해서 변경된 로우만 갱신 (전체 목록을 덮어쓰지 않음)
-                setEquipments(prev => {
-                  const updated = [...prev];
-                  newDataList.forEach(newItem => {
-                    const idx = updated.findIndex(eq => eq.equipId === newItem.equipId);
-                    if (idx >= 0) {
-                      updated[idx] = newItem;
-                    } else {
-                      updated.push(newItem);
-                    }
-                  });
-                  return updated;
-                });
+                setEquipments(updated);
 
                 setFlash(true);
                 setTimeout(() => {
@@ -431,7 +441,9 @@ const RealtimeScreen = ({
       const response = await axios.get('http://localhost:8086/api/live/monitoring', {
         headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
       });
-      setEquipments(response.data || []);
+      const data = response.data || [];
+      equipmentsRef.current = data;
+      setEquipments(data);
     } catch (err) {
       console.error('설비 목록 갱신 실패:', err);
     }
@@ -491,16 +503,6 @@ const RealtimeScreen = ({
       console.error('로그 조회 실패:', err);
     }
   };
-
-  // 알람/로그 주기적 재동기화 (전환 감지 시 즉시 재조회하지만, 놓치는 경우에 대비한 안전망)
-  useEffect(() => {
-    if (!user?.token) return;
-    const alarmIntervalId = setInterval(() => {
-      fetchAlerts();
-      fetchLogs();
-    }, 15000);
-    return () => clearInterval(alarmIntervalId);
-  }, [user?.token]);
 
   // 임계값 설정 탭에서 그리드 맨 위에 인라인으로 추가되는 "신규 설비 입력 행"
   const [newRows, setNewRows] = useState([]);
