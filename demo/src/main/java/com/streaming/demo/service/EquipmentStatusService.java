@@ -94,7 +94,7 @@ public class EquipmentStatusService {
                         eq.getEquipId(), eq.getTemperature(), eq.getPower(), newStatus, now));
 
                 // 정상 → 경고/위험으로 "새로 진입"할 때만 alert/log 기록 (같은 상태가 유지되는 동안은 중복 저장하지 않음)
-                boolean isWarningOrCritical = "Warning".equals(newStatus) || "Critical".equals(newStatus);
+                boolean isWarningOrCritical = "경고".equals(newStatus) || "위험".equals(newStatus);
                 boolean statusChanged = !newStatus.equals(oldStatus);
 
                 if (isWarningOrCritical && statusChanged) {
@@ -116,10 +116,10 @@ public class EquipmentStatusService {
 
     private String determineStatus(double temperature, double threshold) {
         if (temperature >= threshold)
-            return "Critical";
+            return "위험";
         if (threshold - temperature < WARNING_MARGIN)
-            return "Warning";
-        return "Normal";
+            return "경고";
+        return "정상";
     }
 
     // 화면 표출 자리수(소수 1자리) 기준 변경 여부 판단용

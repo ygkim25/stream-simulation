@@ -31,11 +31,11 @@ public class EquipmentLogService {
         String message;
 
         switch (newStatus) {
-            case "Critical" -> {
+            case "위험" -> {
                 type = LogType.WARNING;
                 message = eq.getEquipName() + "가 위험 상태입니다. (임계값 초과)";
             }
-            case "Warning" -> {
+            case "경고" -> {
                 type = LogType.WARNING;
                 message = eq.getEquipName() + "가 경고 상태입니다. (임계값 근접)";
             }
