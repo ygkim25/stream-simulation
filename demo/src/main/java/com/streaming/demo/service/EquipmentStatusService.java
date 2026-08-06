@@ -31,10 +31,12 @@ public class EquipmentStatusService {
 
     private static final long MIN_INTERVAL_MS = 3000;
     private static final long MAX_INTERVAL_MS = 15000;
+    private static final double WARNING_MARGIN = 5.0; // 임계값과의 차이가 이보다 작으면 "경고"
 
     private final EquipmentStatusRepository repository;
     private final EquipmentHistoryRepository historyRepository;
     private final EquipmentAlertRepository alertRepository;
+    private final EquipmentLogService equipmentLogService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Qualifier("taskScheduler")
@@ -89,15 +91,20 @@ public class EquipmentStatusService {
                         List.of(new EquipmentStatusDto(eq)));
 
                 historyRepository.save(new EquipmentHistory(
-                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), eq.getStatus(), now));
+                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), newStatus, now));
 
-                // 정상 → 경고/위험으로 "새로 진입"할 때만 알림 기록 (같은 경고 상태가 유지되는 동안은 중복 저장하지 않음)
-                boolean isWarningOrDanger = "경고".equals(newStatus) || "위험".equals(newStatus);
+                // 정상 → 경고/위험으로 "새로 진입"할 때만 alert/log 기록 (같은 상태가 유지되는 동안은 중복 저장하지 않음)
+                boolean isWarningOrCritical = "경고".equals(newStatus) || "위험".equals(newStatus);
                 boolean statusChanged = !newStatus.equals(oldStatus);
-                if (isWarningOrDanger && statusChanged) {
+
+                if (isWarningOrCritical && statusChanged) {
                     alertRepository.save(new EquipmentAlert(
                             eq.getEquipId(), eq.getTemperature(), eq.getPower(),
-                            eq.getThreshold(), eq.getStatus(), now));
+                            eq.getThreshold(), newStatus, now));
+                }
+
+                if (statusChanged) {
+                    equipmentLogService.recordStatusChange(eq, newStatus, now);
                 }
             }
 
@@ -108,9 +115,9 @@ public class EquipmentStatusService {
     }
 
     private String determineStatus(double temperature, double threshold) {
-        if (temperature >= threshold * 1.1)
-            return "위험";
         if (temperature >= threshold)
+            return "위험";
+        if (threshold - temperature < WARNING_MARGIN)
             return "경고";
         return "정상";
     }
