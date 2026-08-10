@@ -3,19 +3,35 @@
 // ==========================================
 export const DB_NAME = 'MonitoringDB';
 export const STORE_NAME = 'liveData';
+// v2: equipId 인덱스 추가 (설비별 조회 시 전체 스캔 없이 바로 찾기 위함)
+export const DB_VERSION = 2;
+
+// DB 연결을 매번 새로 열면(open) 호출할 때마다 오버헤드가 커서(초당 여러 번 호출되는
+// 실시간 저장/조회에서 특히 체감되는 렉의 원인이었음) 연결을 한 번만 열어서 재사용함
+let dbPromise = null;
 
 export const initDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+      const store = db.objectStoreNames.contains(STORE_NAME)
+        ? e.target.transaction.objectStore(STORE_NAME)
+        : db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+      if (!store.indexNames.contains('equipId')) {
+        store.createIndex('equipId', 'equipId', { unique: false });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      // 다른 탭에서 DB 버전이 바뀌는 등 연결이 끊기면 다음 호출에서 다시 열 수 있도록 캐시를 비움
+      db.onclose = () => { dbPromise = null; };
+      resolve(db);
+    };
+    request.onerror = () => { dbPromise = null; reject(request.error); };
   });
+  return dbPromise;
 };
 
 export const saveToDB = async (dataArray) => {
@@ -39,6 +55,29 @@ export const getAllFromDB = async () => {
     const store = tx.objectStore(STORE_NAME);
     const request = store.getAll();
     request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// 특정 설비의 "최근 N건"만 조회 (equipId 인덱스로 바로 찾고, 뒤에서부터 커서로 필요한 개수만 읽어서
+// 전체 데이터가 아무리 많이 쌓여도 항상 빠름 - 설비 클릭 시 뜨는 히스토리 차트에서 사용)
+export const getRecentByEquipIdFromDB = async (equipId, limit = 80) => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const index = store.index('equipId');
+    const results = [];
+    const request = index.openCursor(IDBKeyRange.only(equipId), 'prev');
+    request.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor && results.length < limit) {
+        results.push(cursor.value);
+        cursor.continue();
+      } else {
+        resolve(results.reverse()); // 과거 -> 최신 순으로 반환
+      }
+    };
     request.onerror = () => reject(request.error);
   });
 };
