@@ -6,8 +6,10 @@ import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
 import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
+import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
+import EquipmentTrendGrid from '../components/EquipmentTrendGrid';
 import { saveToDB, getAllFromDB } from '../utils/indexedDb';
-import { formatForDateTimeInput, formatFullDateTime } from '../utils/dateFormat';
+import { formatForDateTimeInput } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
 // 화면에 표시할 알람 최대 개수
@@ -30,6 +32,12 @@ const RealtimeScreen = ({
 }) => {
   const [tabMode, setTabMode] = useState('stream');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
+  // 설비 클릭 시 온도/전력 히스토리 차트 팝업에 띄울 설비 ID
+  const [historyEquipId, setHistoryEquipId] = useState(null);
+  // 추이 카드에서 특정 그래프(온도/전력)만 클릭해서 들어온 경우, 해당 그래프만 크게 보여주기 위한 값
+  const [historyMetric, setHistoryMetric] = useState(null);
+  // ID / 설비명 검색어
+  const [equipSearch, setEquipSearch] = useState('');
 
   // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
   const [alertMessage, setAlertMessage] = useState('');
@@ -73,12 +81,6 @@ const RealtimeScreen = ({
   const [endTime, setEndTime] = useState(() => new Date());
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
 
-  // 현재 날짜/시각
-  const [clockNow, setClockNow] = useState(() => new Date());
-  useEffect(() => {
-    const clockIntervalId = setInterval(() => setClockNow(new Date()), 60 * 1000);
-    return () => clearInterval(clockIntervalId);
-  }, []);
   const [selectedPreset, setSelectedPreset] = useState('');
 
   const stompClientRef = useRef(null);
@@ -622,6 +624,15 @@ const RealtimeScreen = ({
     return String(a.equipId).localeCompare(String(b.equipId));
   });
 
+  // ID / 설비명 검색 필터링
+  const filteredEquipments = (() => {
+    const q = equipSearch.trim().toLowerCase();
+    if (!q) return sortedEquipments;
+    return sortedEquipments.filter(eq =>
+      String(eq.equipId).toLowerCase().includes(q) || String(eq.equipName ?? '').toLowerCase().includes(q)
+    );
+  })();
+
   // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용)
   const statusCounts = equipments.reduce((acc, eq) => {
     const label = getStatusMeta(eq.status).label;
@@ -632,7 +643,7 @@ const RealtimeScreen = ({
   }, { normal: 0, warning: 0, danger: 0 });
 
   return (
-    <div className={`w-full min-w-[320px] flex flex-col transition-colors min-h-screen lg:h-screen lg:max-h-[1080px] lg:overflow-hidden ${
+    <div className={`w-full min-w-[320px] flex flex-col transition-colors h-screen max-h-[1080px] overflow-hidden ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
       <Header 
@@ -644,9 +655,9 @@ const RealtimeScreen = ({
         setIsDarkMode={setIsDarkMode}
       />
 
-      <div className="flex-1 p-3 sm:p-4 md:p-6 flex flex-col gap-4 max-w-[1920px] mx-auto w-full lg:overflow-hidden lg:h-full">
+      <div className="flex-1 p-3 sm:p-4 md:p-6 flex flex-col gap-4 max-w-[1920px] mx-auto w-full overflow-hidden h-full">
         {/* 상단 컨트롤 영역 */}
-        <div className={`flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl shrink-0 border transition-colors ${
+        <div className={`flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl shrink-0 border transition-colors ${
           isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
         }`}>
           
@@ -686,7 +697,7 @@ const RealtimeScreen = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 sm:gap-2.5 w-full xl:w-auto">
+          <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
             <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
               <span className="relative flex h-2 w-2">
                 <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
@@ -719,7 +730,7 @@ const RealtimeScreen = ({
                 <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
-                {formatFullDateTime(clockNow)}
+                엑셀 내보내기
               </button>
 
               {isRangeEditorOpen && (
@@ -735,9 +746,10 @@ const RealtimeScreen = ({
                         max={formatForDateTimeInput(endTime)}
                         value={formatForDateTimeInput(startTime)}
                         onChange={handleStartTimeChange}
+                        onMouseDown={(e) => { e.preventDefault(); e.target.showPicker?.(); }}
                         style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border ${
-                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
+                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border cursor-pointer transition-colors ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-green-400'
                         }`}
                       />
                     </div>
@@ -749,9 +761,10 @@ const RealtimeScreen = ({
                         max={currentNowIso}
                         value={formatForDateTimeInput(endTime)}
                         onChange={handleEndTimeChange}
+                        onMouseDown={(e) => { e.preventDefault(); e.target.showPicker?.(); }}
                         style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border ${
-                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
+                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border cursor-pointer transition-colors ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-green-400'
                         }`}
                       />
                     </div>
@@ -786,7 +799,7 @@ const RealtimeScreen = ({
                         <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
                         <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
                       </svg>
-                      엑셀 내보내기
+                      내보내기
                     </button>
                   </div>
                 </>
@@ -796,8 +809,8 @@ const RealtimeScreen = ({
         </div>
 
         {/* 그리드 영역 */}
-        <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 items-stretch lg:overflow-hidden">
-          <div className={`flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors min-h-[450px] lg:min-h-0 lg:overflow-hidden ${
+        <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 items-stretch overflow-hidden">
+          <div className={`flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors min-h-0 overflow-hidden ${
             isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
           }`}>
             <div className={`flex flex-wrap items-center justify-between gap-2 mb-3 sm:mb-4 pb-3 border-b shrink-0 min-h-[36px] ${
@@ -809,6 +822,33 @@ const RealtimeScreen = ({
                 }`}>
                   {tabMode === 'stream' ? '실시간 소켓 웹 모니터링' : '설비 설정'}
                 </h3>
+
+                {/* ID / 설비명 검색 */}
+                <div className="relative">
+                  <svg className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={equipSearch}
+                    onChange={(e) => setEquipSearch(e.target.value)}
+                    placeholder="ID / 설비명 검색"
+                    className={`w-[160px] sm:w-[200px] h-8 pl-8 pr-7 rounded-lg text-xs outline-none border transition-colors ${
+                      isDarkMode
+                        ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] placeholder:text-[#5C6584] focus:border-[#22D3EE]/60'
+                        : 'bg-gray-50 border-gray-200 text-gray-800 placeholder:text-gray-400 focus:border-green-400'
+                    }`}
+                  />
+                  {equipSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setEquipSearch('')}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 text-sm leading-none ${isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-700'}`}
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-3 h-8">
@@ -821,7 +861,7 @@ const RealtimeScreen = ({
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-60"></span>
                         <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#34D399]"></span>
                       </span>
-                      <span className="text-[#34D399] font-bold">SOCKET LIVE ({equipments.length}대)</span>
+                      <span className="text-[#34D399] font-bold">LIVE ({equipments.length}대)</span>
                     </>
                   ) : loadError ? (
                     <span className="text-[#FB5D75]">{loadError}</span>
@@ -941,7 +981,14 @@ const RealtimeScreen = ({
                       </td>
                     </tr>
                   )}
-                  {sortedEquipments.map((eq, idx) => {
+                  {equipments.length > 0 && filteredEquipments.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                        '{equipSearch}'에 대한 검색 결과가 없습니다.
+                      </td>
+                    </tr>
+                  )}
+                  {filteredEquipments.map((eq, idx) => {
                     const statusMeta = getStatusMeta(eq.status);
                     const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                     const isSelected = selectedEquipId === eq.equipId;
@@ -954,7 +1001,11 @@ const RealtimeScreen = ({
                       <tr
                         key={`${eq.equipId}-${idx}`}
                         id={`equip-row-${eq.equipId}`}
-                        onClick={() => setSelectedEquipId(isSelected ? null : eq.equipId)}
+                        onClick={() => {
+                          setSelectedEquipId(isSelected ? null : eq.equipId);
+                          setHistoryEquipId(eq.equipId);
+                          setHistoryMetric(null);
+                        }}
                         className={`h-[52px] max-h-[52px] transition-colors duration-300 cursor-pointer border-l-2 ${
                           isClickHighlighted
                             ? (isDarkMode ? 'bg-amber-400/15 border-l-amber-400' : 'bg-amber-100 border-l-amber-500')
@@ -1056,25 +1107,51 @@ const RealtimeScreen = ({
             </div>
           </div>
 
-          {/* 알람 사이드바 */}
-          <div className="w-full lg:w-[340px] xl:w-[380px] shrink-0">
-            <AlarmSidebar
-              alarms={displayedAlarms}
-              onClear={handleClearAlarms}
-              onDismiss={handleDismissAlarm}
-              onAlarmClick={handleAlarmClick}
-              openLogs={openLogs}
-              selectedEquipName={selectedEquipName}
-              onClearFilter={() => setSelectedEquipId(null)}
-              statusCounts={statusCounts}
-              isDarkMode={isDarkMode}
-            />
+          {/* 오른쪽: 그래프(상단) + 알람(하단) */}
+          <div className="w-full lg:w-[440px] xl:w-[520px] shrink-0 flex flex-col gap-4 h-[520px] lg:h-auto min-h-0">
+            <div className="flex-1 min-h-0">
+              <EquipmentTrendGrid
+                equipments={equipments}
+                isDarkMode={isDarkMode}
+                onSelectEquip={(id, metric) => {
+                  setHistoryEquipId(id);
+                  setHistoryMetric(metric);
+                }}
+              />
+            </div>
+            <div className="flex-1 min-h-0">
+              <AlarmSidebar
+                alarms={displayedAlarms}
+                onClear={handleClearAlarms}
+                onDismiss={handleDismissAlarm}
+                onAlarmClick={handleAlarmClick}
+                openLogs={openLogs}
+                selectedEquipName={selectedEquipName}
+                onClearFilter={() => setSelectedEquipId(null)}
+                statusCounts={statusCounts}
+                isDarkMode={isDarkMode}
+              />
+            </div>
           </div>
         </div>
       </div>
 
       <CustomAlert message={alertMessage} onClose={() => setAlertMessage('')} isDarkMode={isDarkMode} />
       <CustomConfirm message={confirmMessage} onConfirm={handleConfirmYes} onCancel={handleConfirmNo} isDarkMode={isDarkMode} />
+
+      {historyEquipId && (() => {
+        const historyEquip = equipments.find(eq => eq.equipId === historyEquipId);
+        return (
+          <EquipmentHistoryModal
+            equipId={historyEquipId}
+            equipName={historyEquip?.equipName}
+            threshold={historyEquip?.threshold}
+            focusMetric={historyMetric}
+            onClose={() => { setHistoryEquipId(null); setHistoryMetric(null); }}
+            isDarkMode={isDarkMode}
+          />
+        );
+      })()}
     </div>
   );
 };

@@ -39,3 +39,36 @@ html.dark ::-webkit-scrollbar-thumb {
 html.dark ::-webkit-scrollbar-thumb:hover {
   background: #22D3EE;
 }
+
+/* ------------------------------------------
+ * recharts 차트를 클릭했을 때 생기는 포커스 테두리 제거
+ * ------------------------------------------ */
+.recharts-wrapper:focus,
+.recharts-wrapper *:focus,
+.recharts-surface:focus {
+  outline: none;
+}
+
+/* ------------------------------------------
+ * 차트가 처음 뜰 때 선이 그려지는 것처럼 보이는 효과
+ * (recharts 자체 애니메이션 대신 CSS clip-path만 움직이므로 가볍고 렉이 없음)
+ * ------------------------------------------ */
+@keyframes chart-reveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+.chart-reveal {
+  animation: chart-reveal 900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ------------------------------------------
+ * 버튼 클릭 시 브라우저 기본 포커스 테두리 제거 (커스텀 스타일로 대체하므로 불필요)
+ * ------------------------------------------ */
+button {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus,
+button:focus-visible {
+  outline: none;
+}

@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
+  const [isAlarmOn, setIsAlarmOn] = useState(true);
   return (
     <header className={`h-[64px] border-b flex items-center justify-between px-6 shrink-0 transition-colors ${
       isDarkMode 
@@ -47,6 +48,27 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
           ) : (
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          )}
+        </button>
+
+        {/* 알람 on/off 토글 버튼 */}
+        <button
+          onClick={() => setIsAlarmOn(!isAlarmOn)}
+          className={`p-2 rounded-lg border transition-colors flex items-center justify-center ${
+            isDarkMode
+              ? 'bg-[#151B30] border-[#232B45] text-[#22D3EE] hover:bg-[#1A223D]'
+              : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200'
+          }`}
+          title={isAlarmOn ? '알람 끄기' : '알람 켜기'}
+        >
+          {isAlarmOn ? (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.143 17.082a24.248 24.248 0 003.844.148m-3.844-.148a23.856 23.856 0 01-5.455-1.31 8.964 8.964 0 002.3-5.542m3.155 6.852a3 3 0 005.667 1.97m1.965-2.277L21 21m-4.225-4.225a23.81 23.81 0 003.536-1.003A8.967 8.967 0 0118 9.75V9A6 6 0 006.53 5.66m8.75 8.75L6.53 5.66m0 0L3 3" />
             </svg>
           )}
         </button>

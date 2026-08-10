@@ -63,6 +63,10 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState('');
 
+  // [탭 3] 관리자 - 사용자 인적사항 수정 State
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [editForm, setEditForm] = useState({ userName: '', divisionName: '', responsibility: '', phone: '' });
+
   // ★ 관리자 여부 확인
   const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin' || id === 'admin';
 
@@ -171,10 +175,62 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
   };
 
   const handleDeleteUser = (userId) => {
-    askConfirm(`${userId} 계정을 정말 삭제하시겠습니까?`, () => {
-      showAlert('백엔드 연동 후 실제 계정이 삭제됩니다.');
-      setEmployees(prev => prev.filter(emp => emp.userId !== userId));
+    askConfirm(`${userId} 계정을 정말 삭제하시겠습니까?`, async () => {
+      try {
+        await axios.delete(
+          `http://localhost:8086/api/users/${encodeURIComponent(userId)}`,
+          { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
+        );
+        setEmployees(prev => prev.filter(emp => emp.userId !== userId));
+      } catch (err) {
+        console.error('계정 삭제 실패:', err);
+        const serverMessage = typeof err.response?.data === 'string'
+          ? err.response.data
+          : err.response?.data?.message;
+        showAlert(serverMessage || '계정 삭제 중 오류가 발생했습니다.');
+      }
     });
+  };
+
+  // ★ [탭 3] 관리자 - 다른 사용자 인적사항 수정
+  const startEditUser = (emp) => {
+    setEditingUserId(emp.userId);
+    setEditForm({
+      userName: emp.userName || '',
+      divisionName: emp.divisionName || '',
+      responsibility: emp.responsibility || '',
+      phone: emp.phone || '',
+    });
+  };
+
+  const cancelEditUser = () => {
+    setEditingUserId(null);
+  };
+
+  const handleEditFieldChange = (field, value) => {
+    setEditForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const saveEditUser = async (userId) => {
+    if (!editForm.userName.trim()) {
+      showAlert('이름을 입력해주세요.');
+      return;
+    }
+    try {
+      await axios.put(
+        `http://localhost:8086/api/users/${encodeURIComponent(userId)}`,
+        editForm,
+        { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
+      );
+      setEmployees(prev => prev.map(emp => emp.userId === userId ? { ...emp, ...editForm } : emp));
+      setEditingUserId(null);
+    } catch (err) {
+      console.error('사용자 정보 수정 실패:', err);
+      const serverMessage = typeof err.response?.data === 'string'
+        ? err.response.data
+        : err.response?.data?.message;
+      showAlert(serverMessage || '사용자 정보 수정 중 오류가 발생했습니다.');
+    }
   };
 
   // 공통 Input 스타일
@@ -374,6 +430,47 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                   filteredEmployees.map((emp) => {
                     // admin 계정은 role 값이 비어있어도(DB 미설정) 항상 관리자로 표시
                     const empIsAdmin = emp.role === 'ADMIN' || emp.userId === 'admin';
+                    const isEditing = editingUserId === emp.userId;
+                    const smallInputClass = `w-full rounded-lg px-2.5 py-1.5 text-[12px] outline-none border transition-colors ${
+                      isDarkMode
+                        ? 'bg-[#12172A] border-[#2A335A] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]'
+                        : 'bg-white border-gray-300 focus:border-green-600 text-gray-800 placeholder-gray-400'
+                    }`;
+
+                    if (isEditing) {
+                      return (
+                        <div key={emp.userId} className={`p-3.5 rounded-xl border space-y-2 ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#22D3EE]/40' : 'bg-gray-50 border-green-300'
+                        }`}>
+                          <span className={`text-[12px] font-mono truncate block ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>{emp.userId}</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input value={editForm.userName} onChange={(e) => handleEditFieldChange('userName', e.target.value)} placeholder="이름" className={smallInputClass} />
+                            <input value={editForm.phone} onChange={(e) => handleEditFieldChange('phone', e.target.value)} placeholder="전화번호" className={smallInputClass} />
+                            <input value={editForm.divisionName} onChange={(e) => handleEditFieldChange('divisionName', e.target.value)} placeholder="부서" className={smallInputClass} />
+                            <input value={editForm.responsibility} onChange={(e) => handleEditFieldChange('responsibility', e.target.value)} placeholder="직급" className={smallInputClass} />
+                          </div>
+                          <div className="flex gap-2 justify-end pt-1">
+                            <button
+                              onClick={cancelEditUser}
+                              className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors cursor-pointer border ${
+                                isDarkMode ? 'border-[#232B45] text-[#9FACC9] hover:bg-[#151B30]' : 'border-gray-200 text-gray-600 hover:bg-gray-100'
+                              }`}
+                            >
+                              취소
+                            </button>
+                            <button
+                              onClick={() => saveEditUser(emp.userId)}
+                              className={`px-3 py-1.5 rounded-lg text-[12px] font-bold transition-colors cursor-pointer border-none ${
+                                isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
+                              }`}
+                            >
+                              저장
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
                     <div key={emp.userId} className={`flex items-center justify-between gap-2 p-3.5 rounded-xl border ${
                       isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-50 border-gray-200'
@@ -400,6 +497,17 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
                               <option value="USER">일반</option>
                               <option value="ADMIN">관리자</option>
                             </select>
+                            <button
+                              onClick={() => startEditUser(emp)}
+                              className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                isDarkMode ? 'border-[#2A335A] text-[#9FACC9] hover:bg-[#151B30] hover:text-[#EDF1FC]' : 'border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-800'
+                              }`}
+                              title="인적사항 수정"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
                             <button
                               onClick={() => handleDeleteUser(emp.userId)}
                               className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${

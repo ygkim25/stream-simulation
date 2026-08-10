@@ -348,14 +348,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     e.target.value = '';
   };
 
-  // 현재 수정된 셀 값을 시나리오 원본에 반영해서 백엔드에 저장하고, 수정 내용이 포함된 엑셀 파일로 다시 내보냄
-  const handleSaveScenario = async () => {
-    if (!selectedScenario) {
-      showAlert('저장할 시나리오를 먼저 선택하세요.');
-      return;
-    }
-
-    // 수정값은 "현재 재생 시점에 화면에 보이는 로우"에 반영해야 함 (전체 시계열의 마지막 로우가 아님)
+  // 현재 재생 시점에 화면에 보이는 로우에 수정값을 반영한 전체 rows 계산 (전체 시계열의 마지막 로우가 아님)
+  const getRowsWithEdits = () => {
     const cutoff = startTimeMs + elapsedMs;
     const visibleRowByEquip = new Map();
     rows.forEach(r => {
@@ -367,13 +361,23 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       }
     });
 
-    const updatedRows = rows.map(r => {
+    return rows.map(r => {
       const edited = editedValues[r.equipId];
       if (edited === undefined || edited === '') return r;
       const visibleRow = visibleRowByEquip.get(r.equipId);
       if (!visibleRow || visibleRow.time.getTime() !== r.time.getTime()) return r;
       return { ...r, temperature: edited, status: computeStatus(edited, r.threshold) };
     });
+  };
+
+  // 현재 수정된 셀 값을 시나리오 원본에 반영해서 백엔드에 저장
+  const handleSaveScenario = async () => {
+    if (!selectedScenario) {
+      showAlert('저장할 시나리오를 먼저 선택하세요.');
+      return;
+    }
+
+    const updatedRows = getRowsWithEdits();
 
     try {
       await updateScenarioRows(selectedScenarioId, updatedRows, user?.token);
@@ -385,9 +389,20 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setRows(updatedRows);
     setEditedValues({});
     await loadScenarios();
+    showAlert('저장되었습니다.');
+  };
+
+  // 현재 화면에 보이는 데이터(수정 중인 값 포함)를 엑셀 파일로 내보내기 (저장 여부와 무관)
+  const handleExportScenario = () => {
+    if (!selectedScenario) {
+      showAlert('내보낼 시나리오를 먼저 선택하세요.');
+      return;
+    }
+
+    const exportRows = getRowsWithEdits();
 
     // 엑셀 파일로 내보내기
-    const exportData = updatedRows.map(r => ({
+    const exportData = exportRows.map(r => ({
       'ID': `#${r.equipId}`,
       '설비명': r.equipName,
       '위치': r.location || '-',
@@ -576,6 +591,15 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 }`}
               >
                 저장
+              </button>
+              <button
+                onClick={handleExportScenario}
+                disabled={!selectedScenario}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                내보내기
               </button>
             </div>
           </div>

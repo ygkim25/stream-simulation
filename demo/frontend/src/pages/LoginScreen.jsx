@@ -119,7 +119,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
                   ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
                   : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
               }`}
-              placeholder="ID (예: hykang@wemb.co.kr)"
+              placeholder="ID (예: wemb@wemb.co.kr)"
               value={id}
               onChange={(e) => setId(e.target.value)}
               disabled={isLoading}
