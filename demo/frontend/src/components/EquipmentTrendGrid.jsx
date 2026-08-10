@@ -19,7 +19,7 @@ const STATUS_COLOR = {
 // 설비마다 최근 흐름을 라인 형태로 보여줘서 "시간에 따른 변화"가 한눈에 보이게 함
 // (그리드 우측 상단, IndexedDB에 누적된 실시간 데이터 사용, 백엔드 미사용)
 // ==========================================
-const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip }) => {
+const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts }) => {
   const [metric, setMetric] = useState('temperature'); // 'temperature' | 'power'
   const [historyMap, setHistoryMap] = useState({}); // equipId -> 시간순 정렬된 최근 데이터 배열
 
@@ -207,6 +207,32 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip }) => {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* 정상/경고/위험 요약 (statusCounts가 전달된 경우에만 표시 - 일반 사용자용, 알람 패널 하단과 동일한 모양) */}
+      {statusCounts && (
+        <div className={`-mx-3.5 -mb-3.5 mt-3.5 px-3 py-3 border-t flex justify-end gap-2 text-[11px] shrink-0 transition-colors ${
+          isDarkMode ? 'bg-[#0F1526] border-[#1E253D]' : 'bg-gray-50 border-gray-200'
+        }`}>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode ? 'bg-[#34D399]/10 text-[#34D399]' : 'bg-green-50 text-green-700 border border-green-200'
+          }`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            정상 {statusCounts.normal}
+          </span>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode ? 'bg-[#FBBF24]/10 text-[#FBBF24]' : 'bg-amber-50 text-amber-700 border border-amber-200'
+          }`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+            경고 {statusCounts.warning}
+          </span>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode ? 'bg-[#FB5D75]/10 text-[#FB5D75]' : 'bg-red-50 text-red-600 border border-red-200'
+          }`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+            위험 {statusCounts.danger}
+          </span>
         </div>
       )}
     </div>

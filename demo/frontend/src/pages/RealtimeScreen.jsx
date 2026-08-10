@@ -32,6 +32,7 @@ const RealtimeScreen = ({
 }) => {
   const [tabMode, setTabMode] = useState('stream');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
+  const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin';
   // 설비 클릭 시 온도/전력 히스토리 차트 팝업에 띄울 설비 ID
   const [historyEquipId, setHistoryEquipId] = useState(null);
   // 추이 카드에서 특정 그래프(온도/전력)만 클릭해서 들어온 경우, 해당 그래프만 크게 보여주기 위한 값
@@ -662,39 +663,45 @@ const RealtimeScreen = ({
         }`}>
           
           <div className="flex flex-wrap items-center gap-3">
-            {/* 탭 전환 스위치 */}
-            <div className={`relative flex items-center p-1 rounded-full border w-[220px] shrink-0 transition-colors ${
-              isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-            }`}>
-              <div
-                className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
-                  isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
-                } ${tabMode === 'threshold' ? 'translate-x-full' : 'translate-x-0'}`}
-              />
-              <button
-                onClick={() => {
-                  setNewRows([]); // 저장하지 않고 다른 탭으로 이동하면 인라인으로 추가하던 신규 행은 버림
-                  setTabMode('stream');
-                }}
-                className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
-                  tabMode === 'stream'
-                    ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                }`}
-              >
+            {/* 탭 전환 스위치 (설비 설정/값 수정은 관리자 전용) */}
+            {isAdmin ? (
+              <div className={`relative flex items-center p-1 rounded-full border w-[220px] shrink-0 transition-colors ${
+                isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
+              }`}>
+                <div
+                  className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
+                    isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
+                  } ${tabMode === 'threshold' ? 'translate-x-full' : 'translate-x-0'}`}
+                />
+                <button
+                  onClick={() => {
+                    setNewRows([]); // 저장하지 않고 다른 탭으로 이동하면 인라인으로 추가하던 신규 행은 버림
+                    setTabMode('stream');
+                  }}
+                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                    tabMode === 'stream'
+                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                  }`}
+                >
+                  실시간 스트림
+                </button>
+                <button
+                  onClick={() => setTabMode('threshold')}
+                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                    tabMode === 'threshold'
+                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                  }`}
+                >
+                  설정
+                </button>
+              </div>
+            ) : (
+              <span className={`text-xs font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
                 실시간 스트림
-              </button>
-              <button
-                onClick={() => setTabMode('threshold')}
-                className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
-                  tabMode === 'threshold'
-                    ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                }`}
-              >
-                설정
-              </button>
-            </div>
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
@@ -1107,31 +1114,34 @@ const RealtimeScreen = ({
             </div>
           </div>
 
-          {/* 오른쪽: 그래프(상단) + 알람(하단) */}
+          {/* 오른쪽: 그래프(모두) + 알람(관리자 전용) */}
           <div className="w-full lg:w-[440px] xl:w-[520px] shrink-0 flex flex-col gap-4 h-[520px] lg:h-auto min-h-0">
-            <div className="flex-1 min-h-0">
-              <EquipmentTrendGrid
-                equipments={equipments}
-                isDarkMode={isDarkMode}
-                onSelectEquip={(id, metric) => {
-                  setHistoryEquipId(id);
-                  setHistoryMetric(metric);
-                }}
-              />
-            </div>
-            <div className="flex-1 min-h-0">
-              <AlarmSidebar
-                alarms={displayedAlarms}
-                onClear={handleClearAlarms}
-                onDismiss={handleDismissAlarm}
-                onAlarmClick={handleAlarmClick}
-                openLogs={openLogs}
-                selectedEquipName={selectedEquipName}
-                onClearFilter={() => setSelectedEquipId(null)}
-                statusCounts={statusCounts}
-                isDarkMode={isDarkMode}
-              />
-            </div>
+              <div className="flex-1 min-h-0">
+                <EquipmentTrendGrid
+                  equipments={equipments}
+                  isDarkMode={isDarkMode}
+                  onSelectEquip={(id, metric) => {
+                    setHistoryEquipId(id);
+                    setHistoryMetric(metric);
+                  }}
+                  statusCounts={!isAdmin ? statusCounts : undefined}
+                />
+              </div>
+              {isAdmin && (
+                <div className="flex-1 min-h-0">
+                  <AlarmSidebar
+                    alarms={displayedAlarms}
+                    onClear={handleClearAlarms}
+                    onDismiss={handleDismissAlarm}
+                    onAlarmClick={handleAlarmClick}
+                    openLogs={openLogs}
+                    selectedEquipName={selectedEquipName}
+                    onClearFilter={() => setSelectedEquipId(null)}
+                    statusCounts={statusCounts}
+                    isDarkMode={isDarkMode}
+                  />
+                </div>
+              )}
           </div>
         </div>
       </div>

@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import Header from '../components/Header';
 
+// "나중에 하기" 클릭 시 다시 안 뜨게 할 기간 (24시간)
+const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
+
 const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
@@ -14,13 +17,22 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
     const mustChange = currentUser?.mustChangePassword;
     const isMustChange = mustChange === true || mustChange === 'true';
 
-    if (isMustChange) {
-      setShowPasswordModal(true);
-    }
+    if (!isMustChange) return;
+
+    // 3. "나중에 하기"를 누른 지 24시간이 안 지났으면 다시 띄우지 않음
+    const dismissKey = `pwChangeReminderDismissedAt_${currentUser?.userId || 'unknown'}`;
+    const dismissedAt = Number(localStorage.getItem(dismissKey) || 0);
+    if (Date.now() - dismissedAt < DISMISS_DURATION_MS) return;
+
+    setShowPasswordModal(true);
   }, [user]);
 
-  // "나중에 하기" 클릭 핸들러
+  // "나중에 하기" 클릭 핸들러 - 24시간 동안 다시 뜨지 않도록 시각을 저장해둠
   const handleDismiss = () => {
+    const savedUserStr = sessionStorage.getItem('user');
+    const currentUser = user || (savedUserStr ? JSON.parse(savedUserStr) : null);
+    const dismissKey = `pwChangeReminderDismissedAt_${currentUser?.userId || 'unknown'}`;
+    localStorage.setItem(dismissKey, String(Date.now()));
     setShowPasswordModal(false);
   };
 

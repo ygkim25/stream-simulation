@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import axios from 'axios';
 
 const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
-  const [id, setId] = useState('');
-  const [pw, setPw] = useState('');
+  // 자동로그인 체크 시 저장해둔 아이디/비밀번호를 화면에 미리 채워둠
+  const [id, setId] = useState(() => localStorage.getItem('savedLoginId') || '');
+  const [pw, setPw] = useState(() => localStorage.getItem('savedLoginPw') || '');
+  const [rememberLogin, setRememberLogin] = useState(() => localStorage.getItem('savedLoginId') !== null);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -48,7 +51,16 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
       };
 
       sessionStorage.setItem('user', JSON.stringify(userData));
-      
+
+      // 자동로그인 체크 여부에 따라 아이디/비밀번호 저장 또는 삭제
+      if (rememberLogin) {
+        localStorage.setItem('savedLoginId', loginData.userId);
+        localStorage.setItem('savedLoginPw', loginData.password);
+      } else {
+        localStorage.removeItem('savedLoginId');
+        localStorage.removeItem('savedLoginPw');
+      }
+
       if (onLogin) {
         onLogin(userData);
       }
@@ -125,12 +137,12 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
               disabled={isLoading}
             />
           </div>
-          <div>
-            <input 
-              type="password" 
-              className={`w-full rounded-xl px-4 py-3.5 focus:outline-none transition-all text-sm font-medium ${
-                isDarkMode 
-                  ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]' 
+          <div className="relative flex items-center">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              className={`w-full rounded-xl pl-4 pr-12 py-3.5 focus:outline-none transition-all text-sm font-medium ${
+                isDarkMode
+                  ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]'
                   : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
               }`}
               placeholder="비밀번호"
@@ -138,8 +150,57 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
               onChange={(e) => setPw(e.target.value)}
               disabled={isLoading}
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              tabIndex={-1}
+              title={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
+              className={`absolute right-1 inset-y-0 my-auto w-7 h-7 flex items-center justify-center shrink-0 rounded-lg transition-colors ${
+                isDarkMode ? 'text-[#5C6584] hover:text-[#9FACC9]' : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {showPassword ? (
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" />
+                  <path d="M1 1l22 22" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+            </button>
           </div>
-          
+
+          <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none group w-fit">
+            <input
+              type="checkbox"
+              checked={rememberLogin}
+              onChange={(e) => setRememberLogin(e.target.checked)}
+              className="sr-only"
+            />
+            <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-all duration-200 ${
+              rememberLogin
+                ? (isDarkMode ? 'bg-[#22D3EE] border-[#22D3EE] shadow-[0_0_8px_rgba(34,211,238,0.5)]' : 'bg-green-600 border-green-600')
+                : (isDarkMode ? 'bg-[#0D1224] border-[#2A335A] group-hover:border-[#5C6584]' : 'bg-gray-50 border-gray-300 group-hover:border-gray-400')
+            }`}>
+              <svg
+                className={`w-3 h-3 transition-all duration-200 ${
+                  rememberLogin ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
+                } ${isDarkMode ? 'text-[#0A0E1A]' : 'text-white'}`}
+                fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </span>
+            <span className={`transition-colors ${
+              isDarkMode ? 'text-[#9FACC9] group-hover:text-[#EDF1FC]' : 'text-gray-600 group-hover:text-gray-800'
+            }`}>
+              자동 로그인
+            </span>
+          </label>
+
           {error && (
             <p className="text-[#FB5D75] text-xs font-semibold whitespace-pre-line pt-1">
               {error}

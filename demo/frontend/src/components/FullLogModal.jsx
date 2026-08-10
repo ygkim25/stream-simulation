@@ -106,7 +106,7 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
             : 'bg-gray-50 border-gray-200 text-gray-800'
         }`}>
           <div className="flex items-center gap-3">
-            <h2 className="text-[16px] font-bold tracking-tight m-0">전체 로그 이력</h2>
+            <h2 className="text-[16px] font-bold tracking-tight m-0">전체 로그</h2>
             <span className={`text-[11px] px-2.5 py-1 rounded-full font-mono ${
               isDarkMode ? 'bg-[#1A2036] text-[#9FACC9]' : 'bg-gray-200 text-gray-600'
             }`}>
@@ -226,7 +226,7 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
       </div>
 
       <CustomConfirm
-        message={isClearConfirmOpen ? '전체 로그 이력을 삭제하시겠습니까?' : ''}
+        message={isClearConfirmOpen ? '전체 로그를 삭제하시겠습니까?' : ''}
         onConfirm={() => { setIsClearConfirmOpen(false); onClear(); }}
         onCancel={() => setIsClearConfirmOpen(false)}
         isDarkMode={isDarkMode}

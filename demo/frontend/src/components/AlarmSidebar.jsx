@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import CustomConfirm from './CustomConfirm';
 
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
@@ -7,6 +8,14 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
   const counts = statusCounts || { normal: 0, warning: 0, danger: 0 };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
+
+  // "지우기" 버튼 클릭 시 바로 지우지 않고 확인 팝업을 먼저 띄움
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+  const handleClearClick = () => setIsClearConfirmOpen(true);
+  const handleClearConfirm = () => {
+    setIsClearConfirmOpen(false);
+    onClear?.();
+  };
 
   // 맨 아래에 있는지 여부 (맨 아래일 땐 "아래로" 버튼을 숨기고, 새 알람이 와도 자동으로 계속 아래에 붙어있음)
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -65,24 +74,24 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
           </div>
           <div className="flex gap-1.5 shrink-0">
             <button
-              onClick={onClear}
+              onClick={openLogs}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer border ${
-                isDarkMode 
-                  ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' 
+                isDarkMode
+                  ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]'
                   : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
               }`}
             >
-              전체 지우기
+              전체 로그
             </button>
             <button
-              onClick={openLogs}
+              onClick={handleClearClick}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
-                isDarkMode 
-                  ? 'bg-[#1A2036] hover:bg-[#232B45] text-[#B9C2DE]' 
+                isDarkMode
+                  ? 'bg-[#1A2036] hover:bg-[#232B45] text-[#B9C2DE]'
                   : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
               }`}
             >
-              전체 로그
+              지우기
             </button>
           </div>
         </div>
@@ -226,6 +235,13 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
           위험 {counts.danger}
         </span>
       </div>
+
+      <CustomConfirm
+        message={isClearConfirmOpen ? '전체 알람을 지우시겠습니까?' : ''}
+        onConfirm={handleClearConfirm}
+        onCancel={() => setIsClearConfirmOpen(false)}
+        isDarkMode={isDarkMode}
+      />
     </div>
   );
 };
