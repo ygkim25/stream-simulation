@@ -16,8 +16,6 @@ const SPEED_OPTIONS = [1, 2, 4, 8];
 // 시나리오는 백엔드 simulation_scenario 테이블에 저장 (유저별 소유권 분리)
 // ==========================================
 const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
-  const [tabMode, setTabMode] = useState('sheet'); // 'sheet' | 'upload'
-
   const [scenarios, setScenarios] = useState([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState(null);
   const [rows, setRows] = useState([]); // 선택된 시나리오의 정규화된 원본 로우 (시간순 정렬)
@@ -25,7 +23,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [playState, setPlayState] = useState('stopped'); // 'stopped' | 'playing' | 'paused'
   const [elapsedMs, setElapsedMs] = useState(0);
   const [speed, setSpeed] = useState(1);
-  const [editedValues, setEditedValues] = useState({}); // { equipId: 수정된 현재값 }
+  const [editedValues, setEditedValues] = useState({}); // { equipId: { temperature?, power?, threshold? } }
 
   const [simAlarms, setSimAlarms] = useState([]);
   const [simLogs, setSimLogs] = useState([]);
@@ -92,7 +90,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const handleSelectScenario = async (scenario) => {
     resetPlayback();
     setSelectedScenarioId(scenario.id);
-    setTabMode('sheet');
     try {
       const detail = await getScenarioDetail(scenario.id, user?.token);
       setRows(detail.rows || []);
@@ -251,6 +248,23 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setElapsedMs(Number(e.target.value));
   };
 
+  // 특정 설비/필드에 대해, 주어진 시각(timeMs) 기준으로 "그때까지 적용 중인" 수정값을 찾음
+  // (여러 시점에서 나눠서 수정했을 수 있으므로, timeMs 이전에 등록된 수정 중 가장 최근 것을 사용)
+  const resolveEditedValue = (equipId, field, timeMs) => {
+    const fieldEdits = editedValues[equipId]?.[field];
+    if (!fieldEdits) return undefined;
+    let bestValue;
+    let bestTime = -Infinity;
+    Object.keys(fieldEdits).forEach(key => {
+      const t = Number(key);
+      if (t <= timeMs && t > bestTime) {
+        bestTime = t;
+        bestValue = fieldEdits[key];
+      }
+    });
+    return bestValue;
+  };
+
   // 현재 재생 시점 기준, 설비별 가장 최근 값(수동 수정값 있으면 그 값으로 덮어씀)
   const currentEquipRows = useMemo(() => {
     if (!rows.length) return [];
@@ -267,24 +281,52 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
     return Array.from(latestByEquip.values())
       .map(r => {
-        const edited = editedValues[r.equipId];
-        const hasEdit = edited !== undefined && edited !== '';
-        const temperature = hasEdit ? edited : r.temperature;
-        const status = hasEdit ? computeStatus(temperature, r.threshold) : r.status;
-        return { ...r, temperature, status };
+        const rowTime = r.time.getTime();
+        const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
+        const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
+        const editedThreshold = resolveEditedValue(r.equipId, 'threshold', rowTime);
+        const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+        const power = editedPower !== undefined ? editedPower : r.power;
+        const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+        const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
+        return { ...r, temperature, power, threshold, status };
       })
       .sort((a, b) => String(a.equipId).localeCompare(String(b.equipId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, elapsedMs, editedValues, startTimeMs]);
 
-  // 온도 셀 직접 수정 -> 즉시 임계값 재판정하여, 새로 경고/위험에 진입하면 알람에도 바로 반영 (시나리오 테스트용)
-  const handleCellValueEdit = (equipId, rawValue) => {
+  // 셀 직접 수정 (온도/전력/임계값) -> 지금 화면에 보이는 그 설비의 행 시각을 "기준점"으로 등록해서
+  // 그 시점부터의 데이터에만 적용되게 함 (기준점 이전 과거 데이터, 그리고 그 뒤에 다른 시점에서
+  // 또 수정한 값은 영향받지 않음 - 여러 시점에서 나눠 수정해도 각자 자기 구간만 바뀜).
+  // 온도나 임계값이 바뀌면 즉시 재판정하여, 새로 경고/위험에 진입하면 알람에도 바로 반영 (시나리오 테스트용).
+  // 전력은 상태 판정에 영향 없음
+  const handleCellValueEdit = (equipId, field, rawValue) => {
+    const cutoff = startTimeMs + elapsedMs;
+    const visibleRow = rows
+      .filter(r => r.equipId === equipId && r.time.getTime() <= cutoff)
+      .sort((a, b) => b.time.getTime() - a.time.getTime())[0];
+    if (!visibleRow) return;
+    const anchorTime = visibleRow.time.getTime();
     const newValue = rawValue === '' ? '' : Number(rawValue);
-    setEditedValues(prev => ({ ...prev, [equipId]: newValue }));
 
+    setEditedValues(prev => {
+      const equipEdits = prev[equipId] || {};
+      const fieldEdits = { ...(equipEdits[field] || {}) };
+      if (newValue === '') {
+        delete fieldEdits[anchorTime];
+      } else {
+        fieldEdits[anchorTime] = newValue;
+      }
+      return { ...prev, [equipId]: { ...equipEdits, [field]: fieldEdits } };
+    });
+
+    if (field === 'power') return;
     if (newValue === '' || isNaN(newValue)) return;
     const current = currentEquipRows.find(r => r.equipId === equipId);
     if (!current) return;
-    const newStatus = computeStatus(newValue, current.threshold);
+    const temperature = field === 'temperature' ? newValue : current.temperature;
+    const threshold = field === 'threshold' ? newValue : current.threshold;
+    const newStatus = computeStatus(temperature, threshold);
     if (isWarningStatus(newStatus) && newStatus !== current.status) {
       const now = new Date();
       const timeLabel = now.toLocaleTimeString('ko-KR');
@@ -294,8 +336,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         equipId,
         equipName: current.equipName,
         time: timeLabel,
-        value: newValue,
-        threshold: current.threshold,
+        value: temperature,
+        threshold,
         location: current.location || '-',
       }]);
       setSimLogs(p => [...p, {
@@ -304,8 +346,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         type: 'warning',
         equipName: current.equipName,
         message: `임계값 초과 감지 (${newStatus}) [수동 수정]`,
-        value: newValue,
-        threshold: current.threshold,
+        value: temperature,
+        threshold,
       }]);
     }
   };
@@ -335,7 +377,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       resetPlayback();
       setSelectedScenarioId(saved.id);
       setRows(saved.rows || parsedRows);
-      setTabMode('sheet');
     } catch (err) {
       console.error('시뮬레이션 파일 업로드 실패:', err);
       showAlert('엑셀 파일을 업로드하는 중 오류가 발생했습니다.');
@@ -348,25 +389,19 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     e.target.value = '';
   };
 
-  // 현재 재생 시점에 화면에 보이는 로우에 수정값을 반영한 전체 rows 계산 (전체 시계열의 마지막 로우가 아님)
+  // 지금까지의 모든 수정을 각자 등록된 시점부터 반영한 전체 rows 계산
+  // (여러 시점에서 나눠 수정했으면, 각 구간마다 그 시점의 값이 유지됨)
   const getRowsWithEdits = () => {
-    const cutoff = startTimeMs + elapsedMs;
-    const visibleRowByEquip = new Map();
-    rows.forEach(r => {
-      if (r.time.getTime() <= cutoff) {
-        const existing = visibleRowByEquip.get(r.equipId);
-        if (!existing || r.time.getTime() > existing.time.getTime()) {
-          visibleRowByEquip.set(r.equipId, r);
-        }
-      }
-    });
-
     return rows.map(r => {
-      const edited = editedValues[r.equipId];
-      if (edited === undefined || edited === '') return r;
-      const visibleRow = visibleRowByEquip.get(r.equipId);
-      if (!visibleRow || visibleRow.time.getTime() !== r.time.getTime()) return r;
-      return { ...r, temperature: edited, status: computeStatus(edited, r.threshold) };
+      const rowTime = r.time.getTime();
+      const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
+      const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
+      const editedThreshold = resolveEditedValue(r.equipId, 'threshold', rowTime);
+      if (editedTemp === undefined && editedPower === undefined && editedThreshold === undefined) return r;
+      const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+      const power = editedPower !== undefined ? editedPower : r.power;
+      const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+      return { ...r, temperature, power, threshold, status: computeStatus(temperature, threshold) };
     });
   };
 
@@ -471,36 +506,19 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         }`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
-              {/* 탭 전환 스위치 */}
-              <div className={`relative flex items-center p-1 rounded-full border w-[180px] shrink-0 transition-colors ${
-                isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-              }`}>
-                <div
-                  className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
-                    isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
-                  } ${tabMode === 'upload' ? 'translate-x-full' : 'translate-x-0'}`}
-                />
-                <button
-                  onClick={() => setTabMode('sheet')}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
-                    tabMode === 'sheet'
-                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                  }`}
-                >
-                  시트
-                </button>
-                <button
-                  onClick={() => setTabMode('upload')}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
-                    tabMode === 'upload'
-                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                  }`}
-                >
-                  업로드
-                </button>
-              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold tracking-wide transition-colors border ${
+                  isDarkMode
+                    ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:bg-[#151B30] hover:border-[#2A335A]'
+                    : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-white hover:border-gray-300'
+                }`}
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12m4.5-4.5v13.5" />
+                </svg>
+                업로드
+              </button>
 
               {selectedScenario && (
                 <span className={`text-xs font-mono px-2.5 py-1.5 rounded-lg border truncate max-w-[220px] ${
@@ -650,41 +668,36 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
             )}
           </div>
 
-          {/* 중앙: 시트 그리드 또는 업로드 영역 */}
-          <div className={`flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors min-h-[450px] lg:min-h-0 lg:overflow-hidden ${
-            isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
-          }`}>
-            {tabMode === 'upload' ? (
-              <div
-                onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-                onDragLeave={() => setIsDragOver(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(false);
-                  const file = e.dataTransfer.files?.[0];
-                  if (file) handleFileUpload(file);
-                }}
-                onClick={() => fileInputRef.current?.click()}
-                className={`flex-1 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors ${
-                  isDragOver
-                    ? (isDarkMode ? 'border-[#22D3EE] bg-[#151B30]' : 'border-green-500 bg-green-50')
-                    : (isDarkMode ? 'border-[#232B45] hover:border-[#2A335A]' : 'border-gray-300 hover:border-gray-400')
-                }`}
-              >
-                <svg className={`w-12 h-12 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {/* 중앙: 시트 그리드 (엑셀 파일을 드래그하면 어디에 놓든 바로 업로드됨) */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) handleFileUpload(file);
+            }}
+            className={`relative flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors min-h-[450px] lg:min-h-0 lg:overflow-hidden ${
+              isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
+            }`}
+          >
+            {isDragOver && (
+              <div className={`absolute inset-2 z-20 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 pointer-events-none ${
+                isDarkMode ? 'border-[#22D3EE] bg-[#0A0E1A]/90' : 'border-green-500 bg-green-50/90'
+              }`}>
+                <svg className={`w-10 h-10 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12m4.5-4.5v13.5" />
                 </svg>
-                <p className={`text-sm font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                  엑셀 파일을 드래그하거나 클릭해서 업로드
-                </p>
-                <p className={`text-xs text-center leading-relaxed max-w-[360px] ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                  ID / 설비명 / 위치 / 수신 시간 / 온도(℃) / 전력 / 임계값(온도) / 상태 컬럼을 포함한 .xlsx 파일을 업로드하세요.<br />
-                  실시간 모니터링 화면의 "엑셀 내보내기" 결과 파일을 그대로 사용할 수 있습니다.
-                </p>
+                <p className={`text-sm font-bold ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>여기에 놓으면 업로드됩니다</p>
               </div>
-            ) : !selectedScenario ? (
-              <div className={`flex-1 flex items-center justify-center text-sm ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                왼쪽에서 시뮬레이션을 선택하거나, 업로드 탭에서 새 엑셀 파일을 업로드하세요.
+            )}
+            {!selectedScenario ? (
+              <div className={`flex-1 flex flex-col items-center justify-center gap-2 text-sm text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                <svg className={`w-10 h-10 mb-1 ${isDarkMode ? 'text-[#232B45]' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12m4.5-4.5v13.5" />
+                </svg>
+                왼쪽에서 시뮬레이션을 선택하거나,<br />엑셀 파일을 이 위에 드래그하거나 "엑셀 업로드" 버튼을 눌러 업로드하세요.
               </div>
             ) : (
               <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
@@ -740,19 +753,35 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                               <input
                                 type="number"
-                                value={editedValues[eq.equipId] !== undefined ? editedValues[eq.equipId] : eq.temperature}
-                                onChange={(e) => handleCellValueEdit(eq.equipId, e.target.value)}
+                                value={eq.temperature}
+                                onChange={(e) => handleCellValueEdit(eq.equipId, 'temperature', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                 } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                              {eq.power != null && !isNaN(eq.power) ? Number(eq.power).toFixed(1) : '-'}
+                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                              <input
+                                type="number"
+                                value={eq.power ?? ''}
+                                onChange={(e) => handleCellValueEdit(eq.equipId, 'power', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                }`}
+                              />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-                              {eq.threshold}
+                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                              <input
+                                type="number"
+                                value={eq.threshold ?? ''}
+                                onChange={(e) => handleCellValueEdit(eq.equipId, 'threshold', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
+                                }`}
+                              />
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle`}>
                               <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
