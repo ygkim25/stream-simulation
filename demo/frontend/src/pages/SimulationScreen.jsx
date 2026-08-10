@@ -5,11 +5,46 @@ import AlarmSidebar from '../components/AlarmSidebar';
 import FullLogModal from '../components/FullLogModal';
 import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
+import SimulationTrendChart from '../components/SimulationTrendChart';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
+
+// 상태(정상/경고/위험) 타임라인 바 색상
+const TIMELINE_COLOR = {
+  green: { dark: '#34D399', light: '#22C55E' },
+  amber: { dark: '#FBBF24', light: '#F59E0B' },
+  red: { dark: '#FB5D75', light: '#EF4444' },
+};
+
+// ==========================================
+// 설비 하나의 전체 시나리오 구간(시작~끝) 상태 흐름을 색 띠로 보여주는 미니 타임라인
+// 재생 위치(playheadPct)를 세로선으로 표시해서 "지금 이 지점"이 전체에서 어디쯤인지 보여줌
+// ==========================================
+const EquipTimelineBar = ({ segments, playheadPct, isDarkMode }) => {
+  const trackColor = isDarkMode ? '#0D1224' : '#F3F4F6';
+  if (!segments || segments.length === 0) {
+    return <div className="w-full h-3.5 rounded" style={{ backgroundColor: trackColor }} />;
+  }
+  return (
+    <div className="relative w-full h-3.5 rounded overflow-hidden flex" style={{ backgroundColor: trackColor }}>
+      {segments.map((seg, i) => (
+        <div
+          key={i}
+          style={{ width: `${seg.widthPct}%`, backgroundColor: TIMELINE_COLOR[seg.color][isDarkMode ? 'dark' : 'light'] }}
+        />
+      ))}
+      {playheadPct != null && (
+        <div
+          className={`absolute top-0 bottom-0 w-[2px] ${isDarkMode ? 'bg-white' : 'bg-gray-900'}`}
+          style={{ left: `${Math.min(Math.max(playheadPct, 0), 100)}%` }}
+        />
+      )}
+    </div>
+  );
+};
 
 // ==========================================
 // 시뮬레이션 모드 화면 (과거 장애 이력 엑셀을 업로드해 재생하며 시나리오를 테스트)
@@ -248,21 +283,11 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setElapsedMs(Number(e.target.value));
   };
 
-  // 특정 설비/필드에 대해, 주어진 시각(timeMs) 기준으로 "그때까지 적용 중인" 수정값을 찾음
-  // (여러 시점에서 나눠서 수정했을 수 있으므로, timeMs 이전에 등록된 수정 중 가장 최근 것을 사용)
+  // 특정 설비/필드/시각(timeMs)에 등록된 수정값을 찾음. 정확히 그 행(그 시각)에 등록된
+  // 수정만 적용되고, 다음 원본 데이터 행부터는 자동으로 원래 값으로 돌아감 (한 번의 스파이크처럼
+  // 동작 - 계속 유지하고 싶으면 그 이후 시점들도 각각 따로 수정하면 됨)
   const resolveEditedValue = (equipId, field, timeMs) => {
-    const fieldEdits = editedValues[equipId]?.[field];
-    if (!fieldEdits) return undefined;
-    let bestValue;
-    let bestTime = -Infinity;
-    Object.keys(fieldEdits).forEach(key => {
-      const t = Number(key);
-      if (t <= timeMs && t > bestTime) {
-        bestTime = t;
-        bestValue = fieldEdits[key];
-      }
-    });
-    return bestValue;
+    return editedValues[equipId]?.[field]?.[timeMs];
   };
 
   // 현재 재생 시점 기준, 설비별 가장 최근 값(수동 수정값 있으면 그 값으로 덮어씀)
@@ -295,18 +320,79 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, elapsedMs, editedValues, startTimeMs]);
 
-  // 셀 직접 수정 (온도/전력/임계값) -> 지금 화면에 보이는 그 설비의 행 시각을 "기준점"으로 등록해서
-  // 그 시점부터의 데이터에만 적용되게 함 (기준점 이전 과거 데이터, 그리고 그 뒤에 다른 시점에서
-  // 또 수정한 값은 영향받지 않음 - 여러 시점에서 나눠 수정해도 각자 자기 구간만 바뀜).
+  // 설비별 "시작~끝" 전체 상태 흐름을 색 구간으로 미리 계산 (재생 위치와 무관하게 한 번만 계산됨 -
+  // elapsedMs가 deps에 없어서 재생 중에도 매 틱마다 다시 계산되지 않음)
+  const equipTimelines = useMemo(() => {
+    if (!rows.length || durationMs <= 0) return {};
+    const byEquip = new Map();
+    rows.forEach(r => {
+      if (!byEquip.has(r.equipId)) byEquip.set(r.equipId, []);
+      byEquip.get(r.equipId).push(r);
+    });
+
+    const scenarioEndMs = startTimeMs + durationMs;
+    const result = {};
+    byEquip.forEach((list, equipId) => {
+      const sorted = [...list].sort((a, b) => a.time.getTime() - b.time.getTime());
+      const resolved = sorted.map(r => {
+        const rowTime = r.time.getTime();
+        const editedTemp = resolveEditedValue(equipId, 'temperature', rowTime);
+        const editedThreshold = resolveEditedValue(equipId, 'threshold', rowTime);
+        const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+        const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+        const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
+        return { time: rowTime, color: getStatusMeta(status).color };
+      });
+
+      const segments = [];
+      resolved.forEach((point, idx) => {
+        const segEnd = idx < resolved.length - 1 ? resolved[idx + 1].time : scenarioEndMs;
+        const widthPct = ((segEnd - point.time) / durationMs) * 100;
+        if (widthPct <= 0) return;
+        const last = segments[segments.length - 1];
+        if (last && last.color === point.color) {
+          last.widthPct += widthPct;
+        } else {
+          segments.push({ color: point.color, widthPct });
+        }
+      });
+      result[equipId] = segments;
+    });
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, editedValues, startTimeMs, durationMs]);
+
+  // 선택한 설비의 "지금까지" 추이 (재생 위치가 앞으로 갈수록 점이 이어져 그려짐)
+  const selectedEquipSeries = useMemo(() => {
+    if (!selectedEquipId || !rows.length) return [];
+    const cutoff = startTimeMs + elapsedMs;
+    return rows
+      .filter(r => r.equipId === selectedEquipId && r.time.getTime() <= cutoff)
+      .sort((a, b) => a.time.getTime() - b.time.getTime())
+      .map(r => {
+        const rowTime = r.time.getTime();
+        const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
+        const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
+        return {
+          time: formatMmSs(rowTime - startTimeMs),
+          temperature: editedTemp !== undefined ? editedTemp : r.temperature,
+          power: editedPower !== undefined ? editedPower : r.power,
+        };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, selectedEquipId, elapsedMs, editedValues, startTimeMs]);
+
+  // 셀 직접 수정 (온도/전력/임계값) -> 지금 화면에 보이는 그 설비의 행 시각에만 값을 덮어씀.
+  // 다음 원본 데이터 행부터는 자동으로 원래 값으로 돌아감 (한 번의 스파이크처럼 동작).
   // 온도나 임계값이 바뀌면 즉시 재판정하여, 새로 경고/위험에 진입하면 알람에도 바로 반영 (시나리오 테스트용).
   // 전력은 상태 판정에 영향 없음
   const handleCellValueEdit = (equipId, field, rawValue) => {
-    const cutoff = startTimeMs + elapsedMs;
-    const visibleRow = rows
-      .filter(r => r.equipId === equipId && r.time.getTime() <= cutoff)
-      .sort((a, b) => b.time.getTime() - a.time.getTime())[0];
-    if (!visibleRow) return;
-    const anchorTime = visibleRow.time.getTime();
+    // 지금 화면에 "표시 중인" 그 행(currentEquipRows)의 시간을 그대로 기준점으로 삼음.
+    // (재생 위치 자체를 기준점으로 쓰면, 재생 위치는 보통 데이터 행의 시간보다 앞서 있어서
+    //  나중에 그 행의 시간으로 조회할 때 "기준점 <= 조회 시간" 조건을 만족 못 해 수정이 안 보였음)
+    const currentRow = currentEquipRows.find(r => r.equipId === equipId);
+    if (!currentRow) return;
+    const anchorTime = currentRow.time.getTime();
     const newValue = rawValue === '' ? '' : Number(rawValue);
 
     setEditedValues(prev => {
@@ -389,8 +475,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     e.target.value = '';
   };
 
-  // 지금까지의 모든 수정을 각자 등록된 시점부터 반영한 전체 rows 계산
-  // (여러 시점에서 나눠 수정했으면, 각 구간마다 그 시점의 값이 유지됨)
+  // 지금까지의 모든 수정을 각자 등록된 그 행에만 반영한 전체 rows 계산
+  // (수정하지 않은 다른 행들은 원본 값 그대로 유지됨)
   const getRowsWithEdits = () => {
     return rows.map(r => {
       const rowTime = r.time.getTime();
@@ -700,31 +786,44 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 왼쪽에서 시뮬레이션을 선택하거나,<br />엑셀 파일을 이 위에 드래그하거나 "엑셀 업로드" 버튼을 눌러 업로드하세요.
               </div>
             ) : (
+              <>
+                {/* 실시간 추이 그래프 (표에서 설비를 클릭해 선택) */}
+                <div className={`shrink-0 mb-3 pb-3 border-b ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>
+                  <SimulationTrendChart
+                    data={selectedEquipSeries}
+                    threshold={currentEquipRows.find(r => r.equipId === selectedEquipId)?.threshold}
+                    equipName={selectedEquipName}
+                    isDarkMode={isDarkMode}
+                  />
+                </div>
+
               <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
-                <table className="w-full text-center border-collapse table-fixed min-w-[700px]">
+                <table className="w-full text-center border-collapse table-fixed min-w-[820px]">
                   <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
                     isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                   }`}>
                     <tr className="h-[40px]">
-                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
-                      <th className={`w-[15%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
-                      <th className={`w-[10%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
-                      <th className={`w-[17%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                      <th className={`w-[13%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
-                      <th className={`w-[12%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                      <th className={`w-[14%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
-                      <th className={`w-[10%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
+                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
+                      <th className={`w-[12%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
+                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
+                      <th className={`w-[13%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
+                      <th className={`w-[10%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
+                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
+                      <th className={`w-[10%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
+                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
+                      <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전체 흐름</th>
                     </tr>
                   </thead>
                   <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
                     {currentEquipRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                        <td colSpan={9} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           재생을 시작하면 데이터가 표시됩니다.
                         </td>
                       </tr>
                     ) : (
                       currentEquipRows.map(eq => {
+                        const playheadPct = durationMs > 0 ? (elapsedMs / durationMs) * 100 : null;
                         const statusMeta = getStatusMeta(eq.status);
                         const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                         const isSelected = selectedEquipId === eq.equipId;
@@ -783,11 +882,14 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                 }`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] align-middle`}>
+                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                               <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
                                 <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                                 {statusMeta.label}
                               </span>
+                            </td>
+                            <td className="px-3 py-0 h-[52px] align-middle">
+                              <EquipTimelineBar segments={equipTimelines[eq.equipId]} playheadPct={playheadPct} isDarkMode={isDarkMode} />
                             </td>
                           </tr>
                         );
@@ -796,11 +898,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 
           {/* 우측: 알람 사이드바 */}
-          <div className="w-full lg:w-[340px] xl:w-[380px] shrink-0">
+          <div className="w-full lg:w-[300px] xl:w-[330px] shrink-0">
             <AlarmSidebar
               alarms={displayedAlarms}
               onClear={handleClearAlarms}
