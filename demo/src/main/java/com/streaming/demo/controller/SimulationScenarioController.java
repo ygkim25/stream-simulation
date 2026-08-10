@@ -1,5 +1,6 @@
 package com.streaming.demo.controller;
 
+import com.streaming.demo.dto.SimulationEditRequestDto;
 import com.streaming.demo.dto.SimulationScenarioDetailDto;
 import com.streaming.demo.dto.SimulationScenarioSummaryDto;
 import com.streaming.demo.service.SimulationScenarioService;
@@ -41,6 +42,16 @@ public class SimulationScenarioController {
                                                @RequestBody SimulationScenarioDetailDto request,
                                                @AuthenticationPrincipal String userId) {
         return service.updateScenarioRows(id, userId, request.getRows());
+    }
+
+    // 재생 중 정지 후 값 편집 저장. 원본 rows_json은 안 건드리고 편집 이력만 기록한 뒤,
+    // 지금까지의 편집을 원본 위에 재생(replay)한 결과를 돌려줘서 그 세션의 재생에 반영되게 함.
+    // 시나리오를 목록에서 다시 열면(GET /{id}) 이 편집은 보이지 않고 원본 그대로 조회됨.
+    @PatchMapping("/{id}/edit")
+    public SimulationScenarioDetailDto edit(@PathVariable("id") Long id,
+                                             @RequestBody SimulationEditRequestDto request,
+                                             @AuthenticationPrincipal String userId) {
+        return service.applyEdit(id, userId, request);
     }
 
     @DeleteMapping("/{id}")
