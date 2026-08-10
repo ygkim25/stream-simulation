@@ -43,7 +43,6 @@ public class EquipmentController {
     @GetMapping("/noti-warn")
     public ResponseEntity<List<EquipmentAlertDto>> getWarningAlerts(
             @AuthenticationPrincipal String userId) {
-        System.out.println("========== EquipmentController ---- getWarningAlerts() ==========");
         return ResponseEntity.ok(settingService.getAlertsForUser(userId));
     }
 
@@ -58,7 +57,6 @@ public class EquipmentController {
     @GetMapping("/logs")
     public ResponseEntity<List<EquipmentLogDto>> getAllLogs(
             @AuthenticationPrincipal String userId) {
-        System.out.println("========== EquipmentController ---- getAllLogs() ==========");
         return ResponseEntity.ok(logService.getLogsForUser(userId));
     }
 

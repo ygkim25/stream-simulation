@@ -6,11 +6,16 @@ import com.streaming.demo.repository.LoginRepository;
 import com.streaming.demo.security.JwtUtil;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 // import org.springframework.web.bind.annotation.*;
@@ -93,5 +98,44 @@ public class UserInfoController {
                 .collect(Collectors.toList());
 
         return ResponseEntity.ok(users);
+    }
+
+    private static final Set<String> VALID_ROLES = Set.of("ADMIN", "USER");
+
+    // 마이페이지 - 사용자 조회 탭에서 권한 변경 (관리자만 가능)
+    @PatchMapping("/users/{userId}/role")
+    public ResponseEntity<?> updateUserRole(
+            @PathVariable("userId") String userId,
+            @RequestBody Map<String, String> body,
+            @RequestHeader("Authorization") String authHeader) {
+        System.out.println("========== UserInfoController ---- updateUserRole() ==========");
+
+        String token = authHeader.replace("Bearer ", "");
+
+        if (!jwtUtil.isTokenValid(token)) {
+            return ResponseEntity.status(401).body("인증이 만료되었습니다.");
+        }
+
+        String requesterId = jwtUtil.extractUserId(token);
+        var requesterOpt = loginRepository.findByUserId(requesterId);
+        if (requesterOpt.isEmpty() || !"ADMIN".equals(requesterOpt.get().getRole())) {
+            return ResponseEntity.status(403).body("관리자만 권한을 변경할 수 있습니다.");
+        }
+
+        String newRole = body.get("role");
+        if (!VALID_ROLES.contains(newRole)) {
+            return ResponseEntity.badRequest().body("role 값은 ADMIN 또는 USER여야 합니다.");
+        }
+
+        var targetOpt = loginRepository.findByUserId(userId);
+        if (targetOpt.isEmpty()) {
+            return ResponseEntity.status(404).body("사용자를 찾을 수 없습니다.");
+        }
+ 
+        Login target = targetOpt.get();
+        target.setRole(newRole);
+        loginRepository.save(target);
+
+        return ResponseEntity.ok(Map.of("userId", userId, "role", newRole));
     }
 }

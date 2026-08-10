@@ -25,7 +25,7 @@ public class SimulationScenarioController {
     }
 
     @GetMapping("/{id}")
-    public SimulationScenarioDetailDto detail(@PathVariable Long id,
+    public SimulationScenarioDetailDto detail(@PathVariable("id") Long id,
                                                @AuthenticationPrincipal String userId) {
         return service.getScenarioDetail(id, userId);
     }
@@ -37,14 +37,14 @@ public class SimulationScenarioController {
     }
 
     @PutMapping("/{id}")
-    public SimulationScenarioDetailDto update(@PathVariable Long id,
+    public SimulationScenarioDetailDto update(@PathVariable("id") Long id,
                                                @RequestBody SimulationScenarioDetailDto request,
                                                @AuthenticationPrincipal String userId) {
         return service.updateScenarioRows(id, userId, request.getRows());
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id,
+    public ResponseEntity<Void> delete(@PathVariable("id") Long id,
                                         @AuthenticationPrincipal String userId) {
         service.deleteScenario(id, userId);
         return ResponseEntity.noContent().build();
