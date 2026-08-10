@@ -47,6 +47,26 @@ const EquipTimelineBar = ({ segments, playheadPct, isDarkMode }) => {
 };
 
 // ==========================================
+// 값 수정 셀 (온도/전력/임계값 입력창)
+// 입력 중에 부모가 재계산한 값으로 되돌아가 버리면(지워도 바로 원래 숫자로 튀는 등) 편집이
+// 매끄럽지 않아서, 자체 로컬 상태로 입력값을 들고 있음. key를 "그 행 자체의 시간"으로 줘서
+// 재생이 다음 데이터 행으로 넘어갈 때만 리마운트되어 새 값으로 갱신되고,
+// 같은 행에서 수정만 하는 동안에는 부모 리렌더링에 영향받지 않고 그대로 유지됨
+// ==========================================
+const EditableCell = ({ initialValue, onChangeValue, className }) => {
+  const [value, setValue] = useState(initialValue);
+  return (
+    <input
+      type="number"
+      value={value}
+      onChange={(e) => { setValue(e.target.value); onChangeValue(e.target.value); }}
+      onClick={(e) => e.stopPropagation()}
+      className={className}
+    />
+  );
+};
+
+// ==========================================
 // 시뮬레이션 모드 화면 (과거 장애 이력 엑셀을 업로드해 재생하며 시나리오를 테스트)
 // 시나리오는 백엔드 simulation_scenario 테이블에 저장 (유저별 소유권 분리)
 // ==========================================
@@ -850,33 +870,30 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                               {eq.time.toLocaleString('ko-KR')}
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
-                              <input
-                                type="number"
-                                value={eq.temperature}
-                                onChange={(e) => handleCellValueEdit(eq.equipId, 'temperature', e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
+                              <EditableCell
+                                key={`temp-${eq.equipId}-${eq.time.getTime()}`}
+                                initialValue={eq.temperature}
+                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'temperature', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                 } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                               />
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
-                              <input
-                                type="number"
-                                value={eq.power ?? ''}
-                                onChange={(e) => handleCellValueEdit(eq.equipId, 'power', e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
+                              <EditableCell
+                                key={`power-${eq.equipId}-${eq.time.getTime()}`}
+                                initialValue={eq.power ?? ''}
+                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'power', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
                               />
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
-                              <input
-                                type="number"
-                                value={eq.threshold ?? ''}
-                                onChange={(e) => handleCellValueEdit(eq.equipId, 'threshold', e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
+                              <EditableCell
+                                key={`threshold-${eq.equipId}-${eq.time.getTime()}`}
+                                initialValue={eq.threshold ?? ''}
+                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'threshold', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                 }`}
