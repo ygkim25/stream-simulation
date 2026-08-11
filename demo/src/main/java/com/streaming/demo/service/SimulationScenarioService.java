@@ -4,6 +4,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import com.streaming.demo.dto.SimulationEditRequestDto;
+import com.streaming.demo.dto.SimulationRenameRequestDto;
 import com.streaming.demo.dto.SimulationScenarioDetailDto;
 import com.streaming.demo.dto.SimulationScenarioSummaryDto;
 import com.streaming.demo.entity.SimulationScenario;
@@ -55,6 +56,16 @@ public class SimulationScenarioService {
         SimulationScenario s = findOwned(id, userId);
         s.setRowsJson(writeJson(rows));
         return toDetail(s);
+    }
+
+    @Transactional
+    public SimulationScenarioSummaryDto renameScenario(String userId, SimulationRenameRequestDto req) {
+        if (req.getFileName() == null || req.getFileName().isBlank()) {
+            throw new IllegalArgumentException("파일 이름을 입력해주세요.");
+        }
+        SimulationScenario s = findOwned(req.getId(), userId);
+        s.setFileName(req.getFileName());
+        return new SimulationScenarioSummaryDto(s);
     }
 
     @Transactional

@@ -1,6 +1,7 @@
 package com.streaming.demo.controller;
 
 import com.streaming.demo.dto.SimulationEditRequestDto;
+import com.streaming.demo.dto.SimulationRenameRequestDto;
 import com.streaming.demo.dto.SimulationScenarioDetailDto;
 import com.streaming.demo.dto.SimulationScenarioSummaryDto;
 import com.streaming.demo.service.SimulationScenarioService;
@@ -52,6 +53,13 @@ public class SimulationScenarioController {
                                              @RequestBody SimulationEditRequestDto request,
                                              @AuthenticationPrincipal String userId) {
         return service.applyEdit(id, userId, request);
+    }
+
+    // 시나리오 이름 변경. id를 path가 아닌 body로 받음 (요청하신 스펙)
+    @PatchMapping("/rename")
+    public SimulationScenarioSummaryDto rename(@RequestBody SimulationRenameRequestDto request,
+                                                @AuthenticationPrincipal String userId) {
+        return service.renameScenario(userId, request);
     }
 
     @DeleteMapping("/{id}")
