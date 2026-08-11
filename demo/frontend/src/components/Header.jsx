@@ -78,37 +78,33 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
 
         {/* 내 정보 메뉴 */}
         <div
-          className={`flex items-center gap-3 cursor-pointer px-2.5 py-1.5 rounded-lg transition-colors border ${
-            isDarkMode 
-              ? 'hover:bg-[#151B30] border-transparent hover:border-[#232B45]' 
+          className={`flex items-center gap-2.5 cursor-pointer pl-2.5 pr-2 py-1.5 rounded-lg transition-colors border ${
+            isDarkMode
+              ? 'hover:bg-[#151B30] border-transparent hover:border-[#232B45]'
               : 'hover:bg-gray-100 border-transparent hover:border-gray-200'
           }`}
           onClick={() => openMyPage()}
         >
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 font-mono border ${
-            isDarkMode 
-              ? 'bg-[#1A2036] border-[#2A335A] text-[#22D3EE]' 
-              : 'bg-green-100 border-green-200 text-green-700'
-          }`}>
-            {user?.userName ? user.userName.charAt(0) : '관'}
-          </div>
           <div className="flex flex-col leading-tight">
             {/* 이름 + 직급 (오른쪽 작게) */}
-            <div className="flex items-baseline gap-1.5">
+            <div className="flex items-baseline gap-1">
               <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                 {user?.userName || '사용자'}
               </span>
               {user?.responsibility && (
-                <span className={`text-[11px] font-normal ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
-                  {user.responsibility}
+                <span className={`text-[11px] font-medium ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                  · {user.responsibility}
                 </span>
               )}
             </div>
             {/* 부서명 */}
-            <span className={`text-[11px] font-mono ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+            <span className={`text-[11px] ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
               {user?.divisionName || '관제팀'}
             </span>
           </div>
+          <svg className={`w-3.5 h-3.5 shrink-0 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+          </svg>
         </div>
       </div>
     </header>

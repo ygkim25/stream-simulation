@@ -59,6 +59,45 @@ export const getAllFromDB = async () => {
   });
 };
 
+// 저장된 전체 건수만 확인 (전체 데이터를 읽지 않고 개수만 세므로, 데이터가 아무리 쌓여도 항상 빠름)
+export const countFromDB = async () => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.count();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// [startMs, endMs] 구간에 해당하는 데이터만 커서로 훑으며 골라냄
+// (getAllFromDB처럼 전체를 먼저 배열로 올리지 않고 조건에 맞는 것만 결과에 담아서,
+//  누적량이 아무리 커도 최종적으로 메모리에 남는 건 실제 구간 안의 데이터뿐임)
+export const getByDateRangeFromDB = async (startMs, endMs) => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const results = [];
+    const request = store.openCursor();
+    request.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) {
+        resolve(results);
+        return;
+      }
+      const item = cursor.value;
+      const itemMs = item.receivedAt ? new Date(item.receivedAt).getTime() : null;
+      if (itemMs === null || (itemMs >= startMs && itemMs <= endMs)) {
+        results.push(item);
+      }
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
 // 특정 설비의 "최근 N건"만 조회 (equipId 인덱스로 바로 찾고, 뒤에서부터 커서로 필요한 개수만 읽어서
 // 전체 데이터가 아무리 많이 쌓여도 항상 빠름 - 설비 클릭 시 뜨는 히스토리 차트에서 사용)
 export const getRecentByEquipIdFromDB = async (equipId, limit = 80) => {

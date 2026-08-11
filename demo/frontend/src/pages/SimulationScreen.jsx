@@ -110,6 +110,20 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isEquipDropdownOpen]);
 
+  // 재생 속도 커스텀 드롭다운
+  const [isSpeedDropdownOpen, setIsSpeedDropdownOpen] = useState(false);
+  const speedDropdownRef = useRef(null);
+  useEffect(() => {
+    if (!isSpeedDropdownOpen) return;
+    const handleClickOutside = (e) => {
+      if (speedDropdownRef.current && !speedDropdownRef.current.contains(e.target)) {
+        setIsSpeedDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSpeedDropdownOpen]);
+
   // 시나리오 이름 수정 (PATCH /api/simulation/scenarios/rename)
   const [renamingScenarioId, setRenamingScenarioId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -747,7 +761,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, viewEquipId, editedValues]);
 
-  const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
   // 설비별 이력 표에서, 지금 재생 위치에 해당하는 행(전체보기에 표시되는 것과 같은 행)을 테두리로 표시
   const currentViewEquipTime = currentEquipRows.find(r => r.equipId === viewEquipId)?.time?.getTime();
 
@@ -785,7 +798,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
         }`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-col gap-0.5">
               {selectedScenario && (
                 renamingScenarioId === selectedScenario.id ? (
                   <input
@@ -807,13 +820,20 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                     type="button"
                     onClick={(e) => startRename(e, selectedScenario)}
                     title="클릭하면 이름을 수정할 수 있습니다"
-                    className={`text-base font-semibold whitespace-nowrap px-2 py-1 rounded-lg border border-transparent cursor-pointer transition-colors ${
+                    className={`self-start text-base font-semibold whitespace-nowrap px-2 py-1 rounded-lg border border-transparent cursor-pointer transition-colors ${
                       isDarkMode ? 'text-[#EDF1FC] hover:bg-[#0D1224] hover:border-[#232B45]' : 'text-gray-800 hover:bg-gray-50 hover:border-gray-200'
                     }`}
                   >
                     {selectedScenario.fileName}
                   </button>
                 )
+              )}
+
+              {/* 이 시나리오 데이터의 실제 시간 범위 (시작 ~ 끝) */}
+              {selectedScenario && rows.length > 0 && (
+                <span className={`text-[11px] font-mono whitespace-nowrap px-2 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                  {new Date(startTimeMs).toLocaleString('ko-KR')} ~ {new Date(startTimeMs + durationMs).toLocaleString('ko-KR')}
+                </span>
               )}
             </div>
 
@@ -956,15 +976,47 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               )}
             </button>
 
-            <select
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-              className={`rounded-lg px-2 py-1.5 text-xs font-bold border outline-none cursor-pointer ${
-                isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-white border-gray-300 text-gray-700'
-              }`}
-            >
-              {SPEED_OPTIONS.map(s => <option key={s} value={s}>{s}x</option>)}
-            </select>
+            <div className="relative" ref={speedDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setIsSpeedDropdownOpen(o => !o)}
+                className={`flex items-center justify-between gap-1.5 rounded-lg px-2 py-1.5 text-xs font-bold border outline-none cursor-pointer w-[64px] transition-colors ${
+                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#2A335A]' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
+                }`}
+              >
+                <span>{speed}x</span>
+                <svg
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${isSpeedDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {isSpeedDropdownOpen && (
+                <div className={`absolute z-30 mt-1 w-[64px] rounded-lg border shadow-lg custom-scrollbar ${
+                  isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
+                }`}>
+                  {SPEED_OPTIONS.map(s => (
+                    <button
+                      type="button"
+                      key={s}
+                      onClick={() => {
+                        setSpeed(s);
+                        setIsSpeedDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
+                        speed === s
+                          ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
+                          : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
+                      }`}
+                    >
+                      {s}x
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <input
               type="range"
@@ -1111,14 +1163,14 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                     }`}>
                       <tr className="h-[40px]">
-                        <th className={`w-[24%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
-                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
-                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
+                        <th className={`w-[24%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
+                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도(℃)</th>
+                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
+                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
+                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>상태</th>
                       </tr>
                     </thead>
-                    <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
+                    <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#2A335A] text-[#B9C2DE]' : 'divide-gray-300 text-gray-600'}`}>
                       {equipHistoryRows.length === 0 ? (
                         <tr>
                           <td colSpan={5} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
@@ -1146,36 +1198,36 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                     : ''
                               }`}
                             >
-                              <td className={`px-3 py-0 h-[44px] font-mono text-[13px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                              <td className={`px-3 py-0 h-[44px] font-mono text-[13px] truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                                 {r.time.toLocaleString('ko-KR')}
                               </td>
-                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                              <td className={`px-3 py-0 h-[44px] align-middle`}>
                                 <EditableCell
                                   key={`hist-temp-${r.equipId}-${r.time.getTime()}`}
                                   initialValue={r.temperature}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'temperature', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
+                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 focus:bg-white focus:border-green-600'
                                   } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                                 />
                               </td>
-                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                              <td className={`px-3 py-0 h-[44px] align-middle`}>
                                 <EditableCell
                                   key={`hist-power-${r.equipId}-${r.time.getTime()}`}
                                   initialValue={r.power ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'power', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
                                   }`}
                                 />
                               </td>
-                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                              <td className={`px-3 py-0 h-[44px] align-middle`}>
                                 <EditableCell
                                   key={`hist-threshold-${r.equipId}-${r.time.getTime()}`}
                                   initialValue={r.threshold ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'threshold', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
+                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#7D87A8] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-500 focus:bg-white focus:border-green-600'
                                   }`}
                                 />
                               </td>
@@ -1200,18 +1252,18 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                     isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                   }`}>
                     <tr className="h-[40px]">
-                      <th className={`w-[7%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
-                      <th className={`w-[11%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
-                      <th className={`w-[5%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
-                      <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
-                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
-                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
-                      <th className={`w-[14%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전체 흐름</th>
+                      <th className={`w-[7%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>ID</th>
+                      <th className={`w-[11%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>설비명</th>
+                      <th className={`w-[5%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>위치</th>
+                      <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
+                      <th className={`w-[9%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도(℃)</th>
+                      <th className={`w-[8%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
+                      <th className={`w-[9%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
+                      <th className={`w-[8%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>상태</th>
+                      <th className={`w-[14%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
                     </tr>
                   </thead>
-                  <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
+                  <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#2A335A] text-[#B9C2DE]' : 'divide-gray-300 text-gray-600'}`}>
                     {currentEquipRows.length === 0 ? (
                       <tr>
                         <td colSpan={9} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
@@ -1244,49 +1296,49 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                       : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                             }`}
                           >
-                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                               #{eq.equipId}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                               {eq.equipName}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] text-[10px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
+                            <td className={`px-3 py-0 h-[52px] text-[10px] truncate align-middle ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                               {eq.location || '-'}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono text-[13px] whitespace-nowrap align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono text-[13px] whitespace-nowrap align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                               {eq.time.toLocaleString('ko-KR')}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                            <td className={`px-3 py-0 h-[52px] align-middle`}>
                               <EditableCell
                                 key={`temp-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.temperature}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'temperature', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 focus:bg-white focus:border-green-600'
                                 } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                            <td className={`px-3 py-0 h-[52px] align-middle`}>
                               <EditableCell
                                 key={`power-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.power ?? ''}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'power', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
                                 }`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                            <td className={`px-3 py-0 h-[52px] align-middle`}>
                               <EditableCell
                                 key={`threshold-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.threshold ?? ''}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'threshold', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#7D87A8] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-500 focus:bg-white focus:border-green-600'
                                 }`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] border-r ${cellBorder}`}>
+                            <td className={`px-3 py-0 h-[52px]`}>
                               <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
                                 <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                                 {statusMeta.label}

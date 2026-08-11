@@ -8,13 +8,21 @@ import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentTrendGrid from '../components/EquipmentTrendGrid';
-import { saveToDB, getAllFromDB } from '../utils/indexedDb';
+import { saveToDB, countFromDB, getByDateRangeFromDB } from '../utils/indexedDb';
 import { formatForDateTimeInput } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
+
+// 기간 선택 팝오버의 "빠른 선택" 프리셋 목록
+const PRESET_OPTIONS = [
+  { value: 'FULL_1HR', label: '최근 1시간' },
+  { value: 'FIRST_30M', label: '이전 30분' },
+  { value: 'LAST_30M', label: '최근 30분' },
+  { value: 'RESET_NOW', label: '현재로 갱신' },
+];
 
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
@@ -83,6 +91,20 @@ const RealtimeScreen = ({
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState('');
+
+  // 빠른 선택 커스텀 드롭다운
+  const [isPresetDropdownOpen, setIsPresetDropdownOpen] = useState(false);
+  const presetDropdownRef = useRef(null);
+  useEffect(() => {
+    if (!isPresetDropdownOpen) return;
+    const handleClickOutside = (e) => {
+      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target)) {
+        setIsPresetDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isPresetDropdownOpen]);
 
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
@@ -158,8 +180,8 @@ const RealtimeScreen = ({
     let isMounted = true;
 
     const setupWebSocket = async () => {
-      const existing = await getAllFromDB();
-      if (isMounted) setAccumulatedCount(existing.length);
+      const existingCount = await countFromDB();
+      if (isMounted) setAccumulatedCount(existingCount);
 
       // 기존 클라이언트가 살아있다면 해제 후 재연결
       if (stompClientRef.current) {
@@ -373,9 +395,9 @@ const RealtimeScreen = ({
     }
 
     try {
-      const accumulatedData = await getAllFromDB();
+      const totalCount = await countFromDB();
 
-      if (!accumulatedData || accumulatedData.length === 0) {
+      if (totalCount === 0) {
         showAlert('내보낼 누적 데이터가 없습니다.');
         return;
       }
@@ -383,12 +405,8 @@ const RealtimeScreen = ({
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
 
-      // 지정한 [startTime ~ endTime] 유효 범위 데이터 필터링
-      const filteredData = accumulatedData.filter(item => {
-        if (!item.receivedAt) return true;
-        const itemMs = new Date(item.receivedAt).getTime();
-        return itemMs >= startMs && itemMs <= endMs;
-      });
+      // 지정한 [startTime ~ endTime] 구간만 커서로 훑어서 가져옴 (전체 데이터를 먼저 다 읽지 않음)
+      const filteredData = await getByDateRangeFromDB(startMs, endMs);
 
       if (filteredData.length === 0) {
         const startStr = startTime.toLocaleString('ko-KR');
@@ -678,7 +696,7 @@ const RealtimeScreen = ({
                     setNewRows([]); // 저장하지 않고 다른 탭으로 이동하면 인라인으로 추가하던 신규 행은 버림
                     setTabMode('stream');
                   }}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-sm font-bold tracking-wide transition-colors ${
                     tabMode === 'stream'
                       ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
                       : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
@@ -688,7 +706,7 @@ const RealtimeScreen = ({
                 </button>
                 <button
                   onClick={() => setTabMode('threshold')}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-xs font-bold tracking-wide transition-colors ${
+                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-sm font-bold tracking-wide transition-colors ${
                     tabMode === 'threshold'
                       ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
                       : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
@@ -698,7 +716,7 @@ const RealtimeScreen = ({
                 </button>
               </div>
             ) : (
-              <span className={`text-xs font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
+              <span className={`text-sm font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
                 실시간 스트림
               </span>
             )}
@@ -707,8 +725,8 @@ const RealtimeScreen = ({
           <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
             <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
               <span className="relative flex h-2 w-2">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? 'bg-blue-500' : 'bg-transparent'}`}></span>
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-transparent'}`}></span>
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-gray-400'}`}></span>
               </span>
               DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
             </div>
@@ -776,19 +794,47 @@ const RealtimeScreen = ({
                       />
                     </div>
 
-                    <select
-                      value={selectedPreset}
-                      onChange={(e) => { if (e.target.value) handlePresetRange(e.target.value); }}
-                      className={`w-full rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border outline-none cursor-pointer ${
-                        isDarkMode ? 'bg-[#151B30] border-[#2A335A] text-[#EDF1FC]' : 'bg-white border-gray-300 text-gray-700'
-                      }`}
-                    >
-                      <option value="" disabled>빠른 선택</option>
-                      <option value="FULL_1HR">최근 1시간</option>
-                      <option value="FIRST_30M">이전 30분</option>
-                      <option value="LAST_30M">최근 30분</option>
-                      <option value="RESET_NOW">현재로 갱신</option>
-                    </select>
+                    <div className="relative" ref={presetDropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => setIsPresetDropdownOpen(o => !o)}
+                        className={`w-full flex items-center justify-between gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border outline-none cursor-pointer transition-colors ${
+                          isDarkMode ? 'bg-[#151B30] border-[#2A335A] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
+                        }`}
+                      >
+                        <span>{PRESET_OPTIONS.find(p => p.value === selectedPreset)?.label ?? '빠른 선택'}</span>
+                        <svg
+                          className={`w-3.5 h-3.5 shrink-0 transition-transform ${isPresetDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
+                          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {isPresetDropdownOpen && (
+                        <div className={`absolute z-30 mt-1 w-full rounded-lg border shadow-lg ${
+                          isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
+                        }`}>
+                          {PRESET_OPTIONS.map(p => (
+                            <button
+                              type="button"
+                              key={p.value}
+                              onClick={() => {
+                                handlePresetRange(p.value);
+                                setIsPresetDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-[11px] font-semibold truncate cursor-pointer transition-colors ${
+                                selectedPreset === p.value
+                                  ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
+                                  : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
                     <button
                       type="button"
@@ -824,12 +870,6 @@ const RealtimeScreen = ({
               isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'
             }`}>
               <div className="flex items-center gap-2.5 h-8">
-                <h3 className={`font-bold text-sm sm:text-[15px] tracking-tight ${
-                  isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
-                }`}>
-                  {tabMode === 'stream' ? '실시간 소켓 웹 모니터링' : '설비 설정'}
-                </h3>
-
                 {/* ID / 설비명 검색 */}
                 <div className="relative">
                   <svg className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -910,25 +950,24 @@ const RealtimeScreen = ({
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
-                    <th className={`w-[9%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
-                    <th className={`w-[19%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
-                    <th className={`w-[9%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
-                    <th className={`w-[14%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도</th>
-                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                    <th className={`w-[13%] px-3 border-b border-r font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
-                    <th className={`w-[10%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
+                    <th className={`w-[9%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>ID</th>
+                    <th className={`w-[19%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>설비명</th>
+                    <th className={`w-[9%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>위치</th>
+                    <th className={`w-[14%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
+                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도</th>
+                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
+                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
+                    <th className={`w-[10%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>상태</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
-                  isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'
+                  isDarkMode ? 'divide-[#2A335A] text-[#B9C2DE]' : 'divide-gray-300 text-gray-600'
                 }`}>
                   {/* 신규 설비 인라인 입력 행 (장비추가 클릭 시 맨 위에 생성, 저장 시 함께 등록) */}
                   {newRows.map((row) => {
                     const inputClass = `w-full h-[30px] rounded px-1.5 text-xs text-center border outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                     }`;
-                    const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
 
                     return (
                       <tr
@@ -937,7 +976,7 @@ const RealtimeScreen = ({
                           isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600'
                         }`}
                       >
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input
                             type="text"
                             value={row.equipId}
@@ -946,22 +985,22 @@ const RealtimeScreen = ({
                             className={`${inputClass} cursor-not-allowed opacity-70`}
                           />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="text" value={row.equipName} onChange={(e) => handleNewRowChange(row.tempId, 'equipName', e.target.value)} placeholder="설비명" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="text" value={row.location} onChange={(e) => handleNewRowChange(row.tempId, 'location', e.target.value)} placeholder="위치" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           -
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="number" value={row.temperature} onChange={(e) => handleNewRowChange(row.tempId, 'temperature', e.target.value)} placeholder="온도" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="number" value={row.power} onChange={(e) => handleNewRowChange(row.tempId, 'power', e.target.value)} placeholder="전력" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="number" value={row.threshold} onChange={(e) => handleNewRowChange(row.tempId, 'threshold', e.target.value)} placeholder="임계값" className={inputClass} />
                         </td>
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
@@ -1000,7 +1039,6 @@ const RealtimeScreen = ({
                     const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                     const isSelected = selectedEquipId === eq.equipId;
                     const isFlashed = flashedIds.has(eq.equipId);
-                    const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
 
                     const isClickHighlighted = clickHighlightId === eq.equipId;
                     const isDanger = statusMeta.color === 'red';
@@ -1029,63 +1067,69 @@ const RealtimeScreen = ({
                                     : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                         }`}
                       >
-                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           #{String(eq.equipId).padStart(3, '0')}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
-                          {tabMode === 'threshold' ? (
-                            <input
-                              type="text"
-                              value={editedFields[eq.equipId]?.equipName ?? eq.equipName ?? ''}
-                              onChange={(e) => handleFieldChange(eq.equipId, 'equipName', e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
-                                isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                              }`}
-                            />
-                          ) : (
-                            <span className={`font-bold truncate ${
-                              isSelected ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800')
-                            }`}>
-                              {eq.equipName}
-                            </span>
-                          )}
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
+                          <div className="flex items-center justify-center h-full">
+                            {tabMode === 'threshold' ? (
+                              <input
+                                type="text"
+                                value={editedFields[eq.equipId]?.equipName ?? eq.equipName ?? ''}
+                                onChange={(e) => handleFieldChange(eq.equipId, 'equipName', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                }`}
+                              />
+                            ) : (
+                              <span className={`font-bold truncate ${
+                                isSelected ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800')
+                              }`}>
+                                {eq.equipName}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
-                          {tabMode === 'threshold' ? (
-                            <input
-                              type="text"
-                              value={editedFields[eq.equipId]?.location ?? eq.location ?? ''}
-                              onChange={(e) => handleFieldChange(eq.equipId, 'location', e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
-                                isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                              }`}
-                            />
-                          ) : (
-                            <span className={`text-xs truncate ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
-                              {eq.location ?? '-'}
-                            </span>
-                          )}
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
+                          <div className="flex items-center justify-center h-full">
+                            {tabMode === 'threshold' ? (
+                              <input
+                                type="text"
+                                value={editedFields[eq.equipId]?.location ?? eq.location ?? ''}
+                                onChange={(e) => handleFieldChange(eq.equipId, 'location', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                }`}
+                              />
+                            ) : (
+                              <span className={`text-xs truncate ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
+                                {eq.location ?? '-'}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                           {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
-                          <span className={`font-mono font-bold tabular-nums ${
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
+                          <span className={`text-[14px] font-mono font-bold tabular-nums ${
                             statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
                           }`}>
-                            {eq.temperature != null ? `${Number(eq.temperature).toFixed(1)}℃` : '–'}
+                            {eq.temperature != null ? (
+                              <>{Number(eq.temperature).toFixed(1)}<span className="text-[12px] font-normal">℃</span></>
+                            ) : '–'}
                           </span>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
-                          <span className={`font-mono font-bold tabular-nums ${
+                        <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
+                          <span className={`text-[14px] font-mono font-bold tabular-nums ${
                             isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
                           }`}>
                             {eq.power != null ? Number(eq.power).toFixed(1) : '–'}
                           </span>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono align-middle border-r ${cellBorder}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
                           <div className="flex items-center justify-center h-full">
                             {tabMode === 'threshold' ? (
                               <input
@@ -1094,7 +1138,7 @@ const RealtimeScreen = ({
                                 onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
                                 }`}
                               />
                             ) : (

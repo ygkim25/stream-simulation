@@ -69,7 +69,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
       <div className="flex items-center justify-between gap-2 mb-2.5 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-          <span className={`text-[13px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+          <span className={`text-[15px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
             설비별 {metric === 'temperature' ? '온도' : '전력'} 추이
           </span>
         </div>
