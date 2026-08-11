@@ -112,3 +112,12 @@ export const formatMmSs = (ms) => {
   const ss = String(totalSec % 60).padStart(2, '0');
   return `${mm}:${ss}`;
 };
+
+// Date -> "HH:mm:ss" 표기 (엑셀의 실제 수신 시간을 그대로 보여줄 때 사용)
+export const formatClockTime = (date) => {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '--:--:--';
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+};

@@ -7,7 +7,7 @@ import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import SimulationTrendChart from '../components/SimulationTrendChart';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi } from '../utils/simulationApi';
-import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs } from '../utils/simulationParse';
+import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
@@ -55,6 +55,12 @@ const EquipTimelineBar = ({ segments, playheadPct, isDarkMode }) => {
 // ==========================================
 const EditableCell = ({ initialValue, onChangeValue, className }) => {
   const [value, setValue] = useState(initialValue);
+  // "이후 전체 적용"으로 다른 행을 수정하면 이 행의 계산된 값도 바뀌는데, 이 행 자체의 key는
+  // 그대로라 컴포넌트가 리마운트되지 않음 -> prop이 바뀌면 화면에 보이는 값도 따라가도록 동기화
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setValue(initialValue);
+  }, [initialValue]);
   return (
     <input
       type="number"
@@ -78,13 +84,73 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [playState, setPlayState] = useState('stopped'); // 'stopped' | 'playing' | 'paused'
   const [elapsedMs, setElapsedMs] = useState(0);
   const [speed, setSpeed] = useState(1);
-  const [editedValues, setEditedValues] = useState({}); // { equipId: { temperature?, power?, threshold? } }
+  const [editedValues, setEditedValues] = useState({}); // { equipId: { temperature?, power?, threshold? } -> { [timeMs]: { value, forward } } }
+  // 셀 수정 시 적용 범위: false=그 시점만(스파이크), true=그 시점 이후 전체
+  const [applyForward, setApplyForward] = useState(false);
 
   const [simAlarms, setSimAlarms] = useState([]);
   const [simLogs, setSimLogs] = useState([]);
   const [selectedEquipId, setSelectedEquipId] = useState(null);
+  // 드롭다운에서 설비를 고르면 그 설비의 전체 시간별 이력을 쭉 나열해서 보여줌 (읽기 전용 보기)
+  const [viewEquipId, setViewEquipId] = useState('');
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // 설비별 이력 보기 커스텀 드롭다운
+  const [isEquipDropdownOpen, setIsEquipDropdownOpen] = useState(false);
+  const equipDropdownRef = useRef(null);
+  useEffect(() => {
+    if (!isEquipDropdownOpen) return;
+    const handleClickOutside = (e) => {
+      if (equipDropdownRef.current && !equipDropdownRef.current.contains(e.target)) {
+        setIsEquipDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isEquipDropdownOpen]);
+
+  // 시나리오 이름 수정 (UI 미리보기용 - 백엔드에 저장 컬럼이 아직 없어 화면에서만 바뀌고,
+  // 목록을 다시 불러오면(loadScenarios) 원래 이름으로 되돌아감)
+  const [renamingScenarioId, setRenamingScenarioId] = useState(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const startRename = (e, s) => {
+    e.stopPropagation();
+    setRenamingScenarioId(s.id);
+    setRenameDraft(s.fileName);
+  };
+  const cancelRename = () => {
+    setRenamingScenarioId(null);
+    setRenameDraft('');
+  };
+  const confirmRename = (id) => {
+    const trimmed = renameDraft.trim();
+    if (trimmed) {
+      setScenarios(prev => prev.map(s => (s.id === id ? { ...s, fileName: trimmed } : s)));
+    }
+    setRenamingScenarioId(null);
+    setRenameDraft('');
+  };
+
+  // 알람 클릭 시 그리드에서 스크롤 이동 + 배경색으로 표시할 설비 ID (전체보기 표에서만 동작)
+  const [clickHighlightId, setClickHighlightId] = useState(null);
+  const clickHighlightTimeoutRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      if (clickHighlightTimeoutRef.current) clearTimeout(clickHighlightTimeoutRef.current);
+    };
+  }, []);
+  const handleAlarmClick = (alarm) => {
+    const rowEl = document.getElementById(`equip-row-${alarm.equipId}`);
+    if (rowEl) {
+      rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setClickHighlightId(alarm.equipId);
+    if (clickHighlightTimeoutRef.current) clearTimeout(clickHighlightTimeoutRef.current);
+    clickHighlightTimeoutRef.current = setTimeout(() => {
+      setClickHighlightId(null);
+    }, 1500);
+  };
 
   // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
   const [alertMessage, setAlertMessage] = useState('');
@@ -110,6 +176,25 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
   const fileInputRef = useRef(null);
   const prevElapsedRef = useRef(0);
+  const currentViewRowRef = useRef(null);
+
+  // 한 번이라도 수정 후 저장된 시나리오 id 목록 (백엔드에 별도 컬럼이 없어 브라우저에 임시로만 기록 -
+  // 새로고침해도 유지되지만, 다른 브라우저/기기에는 표시되지 않음)
+  const [editedScenarioIds, setEditedScenarioIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('simEditedScenarioIds');
+      return new Set(saved ? JSON.parse(saved) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const persistEditedScenarioIds = (set) => {
+    try {
+      localStorage.setItem('simEditedScenarioIds', JSON.stringify([...set]));
+    } catch (e) {
+      console.error('수정 표시 저장 실패:', e);
+    }
+  };
 
   const selectedScenario = scenarios.find(s => s.id === selectedScenarioId) || null;
 
@@ -140,6 +225,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setSimAlarms([]);
     setSimLogs([]);
     setSelectedEquipId(null);
+    setViewEquipId('');
   };
 
   const handleSelectScenario = async (scenario) => {
@@ -170,6 +256,13 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         setSelectedScenarioId(null);
         setRows([]);
       }
+      setEditedScenarioIds(prev => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        persistEditedScenarioIds(next);
+        return next;
+      });
       await loadScenarios();
     });
   };
@@ -303,11 +396,24 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setElapsedMs(Number(e.target.value));
   };
 
-  // 특정 설비/필드/시각(timeMs)에 등록된 수정값을 찾음. 정확히 그 행(그 시각)에 등록된
-  // 수정만 적용되고, 다음 원본 데이터 행부터는 자동으로 원래 값으로 돌아감 (한 번의 스파이크처럼
-  // 동작 - 계속 유지하고 싶으면 그 이후 시점들도 각각 따로 수정하면 됨)
+  // 특정 설비/필드/시각(timeMs)에 적용될 수정값을 찾음.
+  // 1) 그 시각에 정확히 등록된 수정이 있으면 그 값을 그대로 사용
+  // 2) 없으면, 그 시각 이전에 등록된 수정 중 "이후 전체 적용"으로 남긴 것 중 가장 최근 것을 이어서 적용
+  //    (스파이크로 남긴 수정은 그 시각에만 적용되고 다음 행부터는 전파되지 않음)
   const resolveEditedValue = (equipId, field, timeMs) => {
-    return editedValues[equipId]?.[field]?.[timeMs];
+    const fieldEdits = editedValues[equipId]?.[field];
+    if (!fieldEdits) return undefined;
+    const exact = fieldEdits[timeMs];
+    if (exact !== undefined) return exact.value;
+    let latestForward;
+    Object.keys(fieldEdits).forEach(t => {
+      const editTime = Number(t);
+      const edit = fieldEdits[t];
+      if (edit.forward && editTime <= timeMs && (!latestForward || editTime > latestForward.time)) {
+        latestForward = { time: editTime, value: edit.value };
+      }
+    });
+    return latestForward?.value;
   };
 
   // 현재 재생 시점 기준, 설비별 가장 최근 값(수동 수정값 있으면 그 값으로 덮어씀)
@@ -394,7 +500,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
         const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
         return {
-          time: formatMmSs(rowTime - startTimeMs),
+          time: formatClockTime(r.time),
           temperature: editedTemp !== undefined ? editedTemp : r.temperature,
           power: editedPower !== undefined ? editedPower : r.power,
         };
@@ -402,17 +508,16 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, selectedEquipId, elapsedMs, editedValues, startTimeMs]);
 
-  // 셀 직접 수정 (온도/전력/임계값) -> 지금 화면에 보이는 그 설비의 행 시각에만 값을 덮어씀.
-  // 다음 원본 데이터 행부터는 자동으로 원래 값으로 돌아감 (한 번의 스파이크처럼 동작).
+  // 셀 직접 수정 (온도/전력/임계값) -> applyForward가 꺼져 있으면 그 행 자체의 시각에만 값을
+  // 덮어씀 (다음 원본 데이터 행부터는 자동으로 원래 값으로 돌아감 - 한 번의 스파이크처럼 동작).
+  // applyForward가 켜져 있으면 그 시각 이후 모든 행에도 값이 이어서 적용됨 (다음 forward 수정이
+  // 나오기 전까지 계속 유지). 행 객체를 그대로 받아서 처리하므로 "현재 재생 시점" 표든,
+  // "설비별 전체 이력" 표든 어떤 행이든 동일하게 수정할 수 있음.
   // 온도나 임계값이 바뀌면 즉시 재판정하여, 새로 경고/위험에 진입하면 알람에도 바로 반영 (시나리오 테스트용).
   // 전력은 상태 판정에 영향 없음
-  const handleCellValueEdit = (equipId, field, rawValue) => {
-    // 지금 화면에 "표시 중인" 그 행(currentEquipRows)의 시간을 그대로 기준점으로 삼음.
-    // (재생 위치 자체를 기준점으로 쓰면, 재생 위치는 보통 데이터 행의 시간보다 앞서 있어서
-    //  나중에 그 행의 시간으로 조회할 때 "기준점 <= 조회 시간" 조건을 만족 못 해 수정이 안 보였음)
-    const currentRow = currentEquipRows.find(r => r.equipId === equipId);
-    if (!currentRow) return;
-    const anchorTime = currentRow.time.getTime();
+  const handleCellValueEdit = (row, field, rawValue) => {
+    const equipId = row.equipId;
+    const anchorTime = row.time.getTime();
     const newValue = rawValue === '' ? '' : Number(rawValue);
 
     setEditedValues(prev => {
@@ -421,36 +526,34 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       if (newValue === '') {
         delete fieldEdits[anchorTime];
       } else {
-        fieldEdits[anchorTime] = newValue;
+        fieldEdits[anchorTime] = { value: newValue, forward: applyForward };
       }
       return { ...prev, [equipId]: { ...equipEdits, [field]: fieldEdits } };
     });
 
     if (field === 'power') return;
     if (newValue === '' || isNaN(newValue)) return;
-    const current = currentEquipRows.find(r => r.equipId === equipId);
-    if (!current) return;
-    const temperature = field === 'temperature' ? newValue : current.temperature;
-    const threshold = field === 'threshold' ? newValue : current.threshold;
+    const temperature = field === 'temperature' ? newValue : row.temperature;
+    const threshold = field === 'threshold' ? newValue : row.threshold;
     const newStatus = computeStatus(temperature, threshold);
-    if (isWarningStatus(newStatus) && newStatus !== current.status) {
+    if (isWarningStatus(newStatus) && newStatus !== row.status) {
       const now = new Date();
       const timeLabel = now.toLocaleTimeString('ko-KR');
       const cardId = `manual-${equipId}-${now.getTime()}`;
       setSimAlarms(p => [...p, {
         id: cardId,
         equipId,
-        equipName: current.equipName,
+        equipName: row.equipName,
         time: timeLabel,
         value: temperature,
         threshold,
-        location: current.location || '-',
+        location: row.location || '-',
       }]);
       setSimLogs(p => [...p, {
         id: `log-${cardId}`,
         time: timeLabel,
         type: 'warning',
-        equipName: current.equipName,
+        equipName: row.equipName,
         message: `임계값 초과 감지 (${newStatus}) [수동 수정]`,
         value: temperature,
         threshold,
@@ -529,6 +632,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     }
     setRows(updatedRows);
     setEditedValues({});
+    setEditedScenarioIds(prev => {
+      const next = new Set(prev);
+      next.add(selectedScenarioId);
+      persistEditedScenarioIds(next);
+      return next;
+    });
     await loadScenarios();
     showAlert('저장되었습니다.');
   };
@@ -582,7 +691,45 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     ? simAlarms.filter(a => a.equipName === selectedEquipName)
     : simAlarms;
 
+  // 드롭다운에 표시할 시나리오 내 설비 목록 (중복 제거, ID 오름차순)
+  const equipOptions = useMemo(() => {
+    const map = new Map();
+    rows.forEach(r => { if (!map.has(r.equipId)) map.set(r.equipId, r.equipName); });
+    return [...map.entries()]
+      .map(([equipId, equipName]) => ({ equipId, equipName }))
+      .sort((a, b) => String(a.equipId).localeCompare(String(b.equipId)));
+  }, [rows]);
+
+  // 드롭다운에서 고른 설비의 전체 시간별 이력 (시간순, 읽기 전용)
+  const equipHistoryRows = useMemo(() => {
+    if (!viewEquipId) return [];
+    return rows
+      .filter(r => r.equipId === viewEquipId)
+      .sort((a, b) => a.time.getTime() - b.time.getTime())
+      .map(r => {
+        const rowTime = r.time.getTime();
+        const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
+        const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
+        const editedThreshold = resolveEditedValue(r.equipId, 'threshold', rowTime);
+        const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+        const power = editedPower !== undefined ? editedPower : r.power;
+        const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+        const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
+        return { ...r, temperature, power, threshold, status };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, viewEquipId, editedValues]);
+
   const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
+  // 설비별 이력 표에서, 지금 재생 위치에 해당하는 행(전체보기에 표시되는 것과 같은 행)을 테두리로 표시
+  const currentViewEquipTime = currentEquipRows.find(r => r.equipId === viewEquipId)?.time?.getTime();
+
+  // 재생 위치가 바뀌어 테두리로 표시되는 행이 이동하면, 그 행이 보이도록 표를 자동으로 스크롤
+  useEffect(() => {
+    if (currentViewRowRef.current) {
+      currentViewRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [currentViewEquipTime, viewEquipId]);
 
   return (
     <div className={`w-full min-w-[320px] flex flex-col transition-colors min-h-screen lg:h-screen lg:max-h-[1080px] lg:overflow-hidden ${
@@ -612,9 +759,114 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         }`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              {selectedScenario && (
+                <span className={`text-base font-semibold whitespace-nowrap ${
+                  isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
+                }`}>
+                  {selectedScenario.fileName}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {/* 셀 수정 시 적용 범위: 그 시점만 vs 그 시점 이후 전체 */}
+              {selectedScenario && (
+                <div className={`flex items-center rounded-lg border p-0.5 text-xs font-semibold ${
+                  isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-white border-gray-300'
+                }`}>
+                  <button
+                    type="button"
+                    onClick={() => setApplyForward(false)}
+                    title="셀을 수정하면 그 시점에만 값이 적용되고, 다음 데이터부터는 원래 값으로 돌아갑니다"
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      !applyForward
+                        ? (isDarkMode ? 'bg-[#22D3EE] text-[#0A0E1A]' : 'bg-green-700 text-white')
+                        : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
+                    }`}
+                  >
+                    현재 값만
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setApplyForward(true)}
+                    title="셀을 수정하면 그 시점 이후 모든 데이터에 값이 이어서 적용됩니다"
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      applyForward
+                        ? (isDarkMode ? 'bg-[#22D3EE] text-[#0A0E1A]' : 'bg-green-700 text-white')
+                        : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
+                    }`}
+                  >
+                    이후 전체 적용
+                  </button>
+                </div>
+              )}
+
+              {/* 설비별 전체 시간 이력 보기 드롭다운 (커스텀) */}
+              {selectedScenario && equipOptions.length > 0 && (
+                <div className="relative" ref={equipDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsEquipDropdownOpen(o => !o)}
+                    className={`flex items-center justify-between gap-2 text-xs font-semibold px-2.5 py-1.5 rounded-lg border outline-none cursor-pointer w-[170px] transition-colors ${
+                      isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#2A335A]' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
+                    }`}
+                  >
+                    <span className="truncate">
+                      {viewEquipId ? (equipOptions.find(eq => eq.equipId === viewEquipId)?.equipName ?? '전체보기') : '전체보기'}
+                    </span>
+                    <svg
+                      className={`w-3.5 h-3.5 shrink-0 transition-transform ${isEquipDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {isEquipDropdownOpen && (
+                    <div className={`absolute z-30 mt-1 w-[170px] max-h-64 overflow-y-auto rounded-lg border shadow-lg custom-scrollbar ${
+                      isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
+                    }`}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setViewEquipId('');
+                          setSelectedEquipId(null);
+                          setIsEquipDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
+                          viewEquipId === ''
+                            ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
+                            : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
+                        }`}
+                      >
+                        전체보기
+                      </button>
+                      {equipOptions.map(eq => (
+                        <button
+                          type="button"
+                          key={eq.equipId}
+                          onClick={() => {
+                            setViewEquipId(eq.equipId);
+                            setSelectedEquipId(eq.equipId);
+                            setIsEquipDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
+                            viewEquipId === eq.equipId
+                              ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
+                              : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
+                          }`}
+                        >
+                          {eq.equipName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold tracking-wide transition-colors border ${
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold tracking-wide transition-colors border shrink-0 ${
                   isDarkMode
                     ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:bg-[#151B30] hover:border-[#2A335A]'
                     : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-white hover:border-gray-300'
@@ -625,32 +877,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 </svg>
                 업로드
               </button>
-
-              {selectedScenario && (
-                <span className={`text-xs font-mono px-2.5 py-1.5 rounded-lg border truncate max-w-[220px] ${
-                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#9FACC9]' : 'bg-gray-50 border-gray-200 text-gray-600'
-                }`}>
-                  {selectedScenario.fileName}
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
-                isDarkMode ? 'bg-[#FBBF24]/10 text-[#FBBF24] border-[#FBBF24]/30' : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                경고 {statusCounts.warning}건
-              </span>
-              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
-                isDarkMode ? 'bg-[#FB5D75]/10 text-[#FB5D75] border-[#FB5D75]/30' : 'bg-red-50 text-red-600 border-red-200'
-              }`}>
-                위험 {statusCounts.danger}건
-              </span>
-              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
-                isDarkMode ? 'bg-[#34D399]/10 text-[#34D399] border-[#34D399]/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              }`}>
-                ● 시뮬레이션 모드
-              </span>
             </div>
           </div>
 
@@ -735,7 +961,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           <div className={`w-full lg:w-[220px] shrink-0 rounded-xl border p-3 flex flex-col gap-2 lg:overflow-y-auto transition-colors ${
             isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
           }`}>
-            <h3 className={`text-xs font-bold px-1 mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>등록된 시뮬레이션</h3>
+            <h3 className={`text-xs font-bold px-1 mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>시뮬레이션 목록</h3>
 
             {scenarios.length === 0 ? (
               <p className={`text-xs px-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
@@ -752,23 +978,87 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       : (isDarkMode ? 'bg-[#0D1224] border-[#232B45] hover:border-[#2A335A]' : 'bg-gray-50 border-gray-200 hover:border-gray-300')
                   }`}
                 >
-                  <p className={`text-xs font-bold truncate pr-5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                    {s.fileName}
-                  </p>
+                  {renamingScenarioId === s.id ? (
+                    <div className="flex items-center gap-1 pr-1" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') confirmRename(s.id);
+                          if (e.key === 'Escape') cancelRename();
+                        }}
+                        className={`flex-1 min-w-0 text-xs font-bold px-1.5 py-0.5 rounded border outline-none ${
+                          isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                        }`}
+                      />
+                      <button
+                        onClick={() => confirmRename(s.id)}
+                        title="확인"
+                        className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
+                          isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE] hover:bg-[#22D3EE]/25' : 'bg-green-100 text-green-700 hover:bg-green-200'
+                        }`}
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={cancelRename}
+                        title="취소"
+                        className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
+                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ) : (
+                    <p className={`text-xs font-bold truncate pr-11 flex items-center gap-1.5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                      <span className="truncate">{s.fileName}</span>
+                      {editedScenarioIds.has(s.id) && (
+                        <span
+                          title="수정 후 저장된 시나리오입니다"
+                          className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                            isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-100 text-green-700'
+                          }`}
+                        >
+                          수정됨
+                        </span>
+                      )}
+                    </p>
+                  )}
                   <p className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                     {new Date(s.uploadedAt).toLocaleString('ko-KR')}
                   </p>
-                  <button
-                    onClick={(e) => handleDeleteScenario(e, s.id)}
-                    title="삭제"
-                    className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
-                      isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
-                    }`}
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                  {renamingScenarioId !== s.id && (
+                    <>
+                      <button
+                        onClick={(e) => startRename(e, s)}
+                        title="이름 수정"
+                        className={`absolute top-1.5 right-7 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
+                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16.862 4.487a2.06 2.06 0 112.914 2.914L8.5 18.677l-4 1 1-4L16.862 4.487z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteScenario(e, s.id)}
+                        title="삭제"
+                        className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
+                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
               ))
             )}
@@ -807,7 +1097,9 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               </div>
             ) : (
               <>
-                {/* 실시간 추이 그래프 (표에서 설비를 클릭해 선택) */}
+              {viewEquipId ? (
+                <>
+                {/* 실시간 추이 그래프 (드롭다운에서 설비를 선택했을 때만 표시) */}
                 <div className={`shrink-0 mb-3 pb-3 border-b ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>
                   <SimulationTrendChart
                     data={selectedEquipSeries}
@@ -817,21 +1109,111 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   />
                 </div>
 
+                {/* 설비별 전체 시간 이력 보기 (읽기 전용) */}
+                <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
+                  <table className="w-full text-center border-collapse table-fixed min-w-[600px]">
+                    <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
+                      isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
+                    }`}>
+                      <tr className="h-[40px]">
+                        <th className={`w-[24%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
+                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
+                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
+                        <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
+                        <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
+                      </tr>
+                    </thead>
+                    <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
+                      {equipHistoryRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                            이 설비의 데이터가 없습니다.
+                          </td>
+                        </tr>
+                      ) : (
+                        equipHistoryRows.map((r, idx) => {
+                          const statusMeta = getStatusMeta(r.status);
+                          const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
+                          const isDanger = statusMeta.color === 'red';
+                          const isWarning = statusMeta.color === 'amber';
+                          const isCurrentPlayheadRow = r.time.getTime() === currentViewEquipTime;
+                          return (
+                            <tr
+                              key={`${r.equipId}-${r.time.getTime()}-${idx}`}
+                              ref={isCurrentPlayheadRow ? currentViewRowRef : undefined}
+                              className={`h-[44px] max-h-[44px] transition-colors ${
+                                isCurrentPlayheadRow ? `border-2 ${isDarkMode ? 'border-[#22D3EE]' : 'border-green-600'}` : ''
+                              } ${
+                                isDanger
+                                  ? (isDarkMode ? 'bg-[#FB5D75]/15' : 'bg-red-50')
+                                  : isWarning
+                                    ? (isDarkMode ? 'bg-[#FBBF24]/10' : 'bg-amber-50')
+                                    : ''
+                              }`}
+                            >
+                              <td className={`px-3 py-0 h-[44px] font-mono text-[13px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                                {r.time.toLocaleString('ko-KR')}
+                              </td>
+                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                                <EditableCell
+                                  key={`hist-temp-${r.equipId}-${r.time.getTime()}`}
+                                  initialValue={r.temperature}
+                                  onChangeValue={(v) => handleCellValueEdit(r, 'temperature', v)}
+                                  className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
+                                  } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
+                                />
+                              </td>
+                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                                <EditableCell
+                                  key={`hist-power-${r.equipId}-${r.time.getTime()}`}
+                                  initialValue={r.power ?? ''}
+                                  onChangeValue={(v) => handleCellValueEdit(r, 'power', v)}
+                                  className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                  }`}
+                                />
+                              </td>
+                              <td className={`px-3 py-0 h-[44px] align-middle border-r ${cellBorder}`}>
+                                <EditableCell
+                                  key={`hist-threshold-${r.equipId}-${r.time.getTime()}`}
+                                  initialValue={r.threshold ?? ''}
+                                  onChangeValue={(v) => handleCellValueEdit(r, 'threshold', v)}
+                                  className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
+                                  }`}
+                                />
+                              </td>
+                              <td className="px-3 py-0 h-[44px]">
+                                <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
+                                  {statusMeta.label}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              ) : (
               <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
-                <table className="w-full text-center border-collapse table-fixed min-w-[820px]">
+                <table className="w-full text-center border-collapse table-fixed min-w-[900px]">
                   <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
                     isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                   }`}>
                     <tr className="h-[40px]">
-                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
-                      <th className={`w-[12%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
-                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
-                      <th className={`w-[13%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
-                      <th className={`w-[10%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
-                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
-                      <th className={`w-[10%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
+                      <th className={`w-[7%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>ID</th>
+                      <th className={`w-[11%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>설비명</th>
+                      <th className={`w-[5%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>위치</th>
+                      <th className={`w-[19%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>수신 시간</th>
+                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>온도(℃)</th>
+                      <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전력</th>
+                      <th className={`w-[9%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>임계값(온도)</th>
                       <th className={`w-[8%] px-3 border-b border-r font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
-                      <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전체 흐름</th>
+                      <th className={`w-[14%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>전체 흐름</th>
                     </tr>
                   </thead>
                   <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'}`}>
@@ -847,14 +1229,24 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                         const statusMeta = getStatusMeta(eq.status);
                         const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                         const isSelected = selectedEquipId === eq.equipId;
+                        const isDanger = statusMeta.color === 'red';
+                        const isWarning = statusMeta.color === 'amber';
+                        const isClickHighlighted = clickHighlightId === eq.equipId;
                         return (
                           <tr
                             key={eq.equipId}
+                            id={`equip-row-${eq.equipId}`}
                             onClick={() => setSelectedEquipId(isSelected ? null : eq.equipId)}
-                            className={`h-[52px] max-h-[52px] cursor-pointer transition-colors border-l-2 ${
-                              isSelected
-                                ? (isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600')
-                                : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
+                            className={`h-[52px] max-h-[52px] cursor-pointer transition-colors duration-300 border-l-2 ${
+                              isClickHighlighted
+                                ? (isDarkMode ? 'bg-amber-400/15 border-l-amber-400' : 'bg-amber-100 border-l-amber-500')
+                                : isSelected
+                                  ? (isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600')
+                                  : isDanger
+                                    ? (isDarkMode ? 'bg-[#FB5D75]/15 hover:bg-[#FB5D75]/20 border-l-[#FB5D75]' : 'bg-red-50 hover:bg-red-100 border-l-red-500')
+                                    : isWarning
+                                      ? (isDarkMode ? 'bg-[#FBBF24]/10 hover:bg-[#FBBF24]/15 border-l-amber-400' : 'bg-amber-50 hover:bg-amber-100 border-l-amber-500')
+                                      : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                             }`}
                           >
                             <td className={`px-3 py-0 h-[52px] font-mono truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
@@ -863,17 +1255,17 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                             <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                               {eq.equipName}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] text-xs truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
+                            <td className={`px-3 py-0 h-[52px] text-[10px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                               {eq.location || '-'}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono text-[11px] truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                            <td className={`px-3 py-0 h-[52px] font-mono text-[13px] whitespace-nowrap align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                               {eq.time.toLocaleString('ko-KR')}
                             </td>
                             <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                               <EditableCell
                                 key={`temp-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.temperature}
-                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'temperature', v)}
+                                onChangeValue={(v) => handleCellValueEdit(eq, 'temperature', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                 } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
@@ -883,7 +1275,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                               <EditableCell
                                 key={`power-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.power ?? ''}
-                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'power', v)}
+                                onChangeValue={(v) => handleCellValueEdit(eq, 'power', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
@@ -893,17 +1285,17 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                               <EditableCell
                                 key={`threshold-${eq.equipId}-${eq.time.getTime()}`}
                                 initialValue={eq.threshold ?? ''}
-                                onChangeValue={(v) => handleCellValueEdit(eq.equipId, 'threshold', v)}
+                                onChangeValue={(v) => handleCellValueEdit(eq, 'threshold', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                                   isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                 }`}
                               />
                             </td>
-                            <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
-                              <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
+                            <td className={`px-3 py-0 h-[52px] border-r ${cellBorder}`}>
+                              <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
                                 <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                                 {statusMeta.label}
-                              </span>
+                              </div>
                             </td>
                             <td className="px-3 py-0 h-[52px] align-middle">
                               <EquipTimelineBar segments={equipTimelines[eq.equipId]} playheadPct={playheadPct} isDarkMode={isDarkMode} />
@@ -915,6 +1307,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   </tbody>
                 </table>
               </div>
+              )}
               </>
             )}
           </div>
@@ -925,6 +1318,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               alarms={displayedAlarms}
               onClear={handleClearAlarms}
               onDismiss={handleDismissAlarm}
+              onAlarmClick={handleAlarmClick}
               openLogs={() => setIsLogOpen(true)}
               selectedEquipName={selectedEquipName}
               onClearFilter={() => setSelectedEquipId(null)}

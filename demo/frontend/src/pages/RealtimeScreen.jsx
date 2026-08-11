@@ -906,7 +906,7 @@ const RealtimeScreen = ({
             {/* 그리드 표 */}
             <div ref={gridScrollRef} className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
               <table className="w-full text-center border-collapse table-fixed min-w-[700px] sm:min-w-[800px]">
-                <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
+                <thead className={`sticky top-0 text-xs z-10 transition-colors ${
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
@@ -920,7 +920,7 @@ const RealtimeScreen = ({
                     <th className={`w-[10%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>상태</th>
                   </tr>
                 </thead>
-                <tbody className={`divide-y text-xs sm:text-[13px] ${
+                <tbody className={`divide-y text-[13px] sm:text-sm ${
                   isDarkMode ? 'divide-[#1A2036] text-[#B9C2DE]' : 'divide-gray-100 text-gray-600'
                 }`}>
                   {/* 신규 설비 인라인 입력 행 (장비추가 클릭 시 맨 위에 생성, 저장 시 함께 등록) */}
@@ -952,7 +952,7 @@ const RealtimeScreen = ({
                         <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
                           <input type="text" value={row.location} onChange={(e) => handleNewRowChange(row.tempId, 'location', e.target.value)} placeholder="위치" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                           -
                         </td>
                         <td className={`px-3 py-0 h-[52px] align-middle border-r ${cellBorder}`}>
@@ -1003,6 +1003,8 @@ const RealtimeScreen = ({
                     const cellBorder = isDarkMode ? 'border-[#1A2036]' : 'border-gray-100';
 
                     const isClickHighlighted = clickHighlightId === eq.equipId;
+                    const isDanger = statusMeta.color === 'red';
+                    const isWarning = statusMeta.color === 'amber';
 
                     return (
                       <tr
@@ -1020,7 +1022,11 @@ const RealtimeScreen = ({
                               ? (isDarkMode ? 'bg-[#151B30] border-l-[#22D3EE]' : 'bg-green-50/70 border-l-green-600')
                               : isFlashed
                                 ? (isDarkMode ? 'bg-[#22D3EE]/10 border-l-transparent' : 'bg-green-50 border-l-transparent')
-                                : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
+                                : isDanger
+                                  ? (isDarkMode ? 'bg-[#FB5D75]/15 hover:bg-[#FB5D75]/20 border-l-[#FB5D75]' : 'bg-red-50 hover:bg-red-100 border-l-red-500')
+                                  : isWarning
+                                    ? (isDarkMode ? 'bg-[#FBBF24]/10 hover:bg-[#FBBF24]/15 border-l-amber-400' : 'bg-amber-50 hover:bg-amber-100 border-l-amber-500')
+                                    : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                         }`}
                       >
                         <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
@@ -1062,7 +1068,7 @@ const RealtimeScreen = ({
                             </span>
                           )}
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-[11px] text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle border-r ${cellBorder} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                           {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle border-r ${cellBorder}`}>
