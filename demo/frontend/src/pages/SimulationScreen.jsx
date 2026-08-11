@@ -6,7 +6,7 @@ import FullLogModal from '../components/FullLogModal';
 import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import SimulationTrendChart from '../components/SimulationTrendChart';
-import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi } from '../utils/simulationApi';
+import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi, renameScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 
@@ -110,12 +110,25 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isEquipDropdownOpen]);
 
-  // 시나리오 이름 수정 (UI 미리보기용 - 백엔드에 저장 컬럼이 아직 없어 화면에서만 바뀌고,
-  // 목록을 다시 불러오면(loadScenarios) 원래 이름으로 되돌아감)
+  // 시나리오 이름 수정 (PATCH /api/simulation/scenarios/rename)
   const [renamingScenarioId, setRenamingScenarioId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [titleInputWidth, setTitleInputWidth] = useState(null);
+  const titleRenameRef = useRef(null);
+  useEffect(() => {
+    if (renamingScenarioId === null) return;
+    const handleClickOutside = (e) => {
+      if (titleRenameRef.current && !titleRenameRef.current.contains(e.target)) {
+        setRenamingScenarioId(null);
+        setRenameDraft('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [renamingScenarioId]);
   const startRename = (e, s) => {
     e.stopPropagation();
+    setTitleInputWidth(e.currentTarget.getBoundingClientRect().width);
     setRenamingScenarioId(s.id);
     setRenameDraft(s.fileName);
   };
@@ -123,11 +136,25 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setRenamingScenarioId(null);
     setRenameDraft('');
   };
-  const confirmRename = (id) => {
+  const confirmRename = async (id) => {
     const trimmed = renameDraft.trim();
-    if (trimmed) {
-      setScenarios(prev => prev.map(s => (s.id === id ? { ...s, fileName: trimmed } : s)));
+    if (!trimmed) {
+      cancelRename();
+      return;
     }
+    const original = scenarios.find(s => s.id === id)?.fileName;
+    if (trimmed === original) {
+      cancelRename();
+      return;
+    }
+    try {
+      await renameScenarioApi(id, trimmed, user?.token);
+    } catch (err) {
+      console.error('시나리오 이름 변경 실패:', err);
+      showAlert('이름을 변경하는 중 오류가 발생했습니다.');
+      return;
+    }
+    setScenarios(prev => prev.map(s => (s.id === id ? { ...s, fileName: trimmed } : s)));
     setRenamingScenarioId(null);
     setRenameDraft('');
   };
@@ -760,11 +787,33 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {selectedScenario && (
-                <span className={`text-base font-semibold whitespace-nowrap ${
-                  isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
-                }`}>
-                  {selectedScenario.fileName}
-                </span>
+                renamingScenarioId === selectedScenario.id ? (
+                  <input
+                    ref={titleRenameRef}
+                    autoFocus
+                    value={renameDraft}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') confirmRename(selectedScenario.id);
+                      if (e.key === 'Escape') cancelRename();
+                    }}
+                    style={{ width: `max(${titleInputWidth ?? 160}px, ${renameDraft.length + 2}ch)`, minWidth: 160 }}
+                    className={`text-base font-semibold px-2 py-1 rounded-lg border outline-none ${
+                      isDarkMode ? 'bg-[#0D1224] border-[#22D3EE] text-[#EDF1FC]' : 'bg-white border-green-600 text-gray-800'
+                    }`}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => startRename(e, selectedScenario)}
+                    title="클릭하면 이름을 수정할 수 있습니다"
+                    className={`text-base font-semibold whitespace-nowrap px-2 py-1 rounded-lg border border-transparent cursor-pointer transition-colors ${
+                      isDarkMode ? 'text-[#EDF1FC] hover:bg-[#0D1224] hover:border-[#232B45]' : 'text-gray-800 hover:bg-gray-50 hover:border-gray-200'
+                    }`}
+                  >
+                    {selectedScenario.fileName}
+                  </button>
+                )
               )}
             </div>
 
@@ -978,87 +1027,33 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       : (isDarkMode ? 'bg-[#0D1224] border-[#232B45] hover:border-[#2A335A]' : 'bg-gray-50 border-gray-200 hover:border-gray-300')
                   }`}
                 >
-                  {renamingScenarioId === s.id ? (
-                    <div className="flex items-center gap-1 pr-1" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(e) => setRenameDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') confirmRename(s.id);
-                          if (e.key === 'Escape') cancelRename();
-                        }}
-                        className={`flex-1 min-w-0 text-xs font-bold px-1.5 py-0.5 rounded border outline-none ${
-                          isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                        }`}
-                      />
-                      <button
-                        onClick={() => confirmRename(s.id)}
-                        title="확인"
-                        className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
-                          isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE] hover:bg-[#22D3EE]/25' : 'bg-green-100 text-green-700 hover:bg-green-200'
+                  <p className={`text-xs font-bold truncate pr-5 flex items-center ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                    <span className="truncate">{s.fileName}</span>
+                    {editedScenarioIds.has(s.id) && (
+                      <span
+                        title="수정 후 저장된 시나리오입니다"
+                        className={`shrink-0 ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-100 text-green-700'
                         }`}
                       >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={cancelRename}
-                        title="취소"
-                        className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
-                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
-                        }`}
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ) : (
-                    <p className={`text-xs font-bold truncate pr-11 flex items-center gap-1.5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                      <span className="truncate">{s.fileName}</span>
-                      {editedScenarioIds.has(s.id) && (
-                        <span
-                          title="수정 후 저장된 시나리오입니다"
-                          className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                            isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-100 text-green-700'
-                          }`}
-                        >
-                          수정됨
-                        </span>
-                      )}
-                    </p>
-                  )}
+                        수정됨
+                      </span>
+                    )}
+                  </p>
                   <p className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                     {new Date(s.uploadedAt).toLocaleString('ko-KR')}
                   </p>
-                  {renamingScenarioId !== s.id && (
-                    <>
-                      <button
-                        onClick={(e) => startRename(e, s)}
-                        title="이름 수정"
-                        className={`absolute top-1.5 right-7 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
-                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
-                        }`}
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16.862 4.487a2.06 2.06 0 112.914 2.914L8.5 18.677l-4 1 1-4L16.862 4.487z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={(e) => handleDeleteScenario(e, s.id)}
-                        title="삭제"
-                        className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
-                          isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
-                        }`}
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </>
-                  )}
+                  <button
+                    onClick={(e) => handleDeleteScenario(e, s.id)}
+                    title="삭제"
+                    className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${
+                      isDarkMode ? 'bg-[#1A2036] hover:bg-[#2A335A] text-[#9FACC9] hover:text-[#EDF1FC]' : 'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               ))
             )}

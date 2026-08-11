@@ -40,3 +40,9 @@ export const updateScenarioRows = async (id, rows, token) => {
 export const deleteScenarioApi = async (id, token) => {
   await axios.delete(`${BASE_URL}/${id}`, { headers: authHeaders(token) });
 };
+
+// 시나리오 이름 변경 (id는 body로 전달)
+export const renameScenarioApi = async (id, fileName, token) => {
+  const response = await axios.patch(`${BASE_URL}/rename`, { id, fileName }, { headers: authHeaders(token) });
+  return response.data;
+};
