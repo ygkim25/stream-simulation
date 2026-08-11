@@ -47,6 +47,19 @@ const RealtimeScreen = ({
   const [historyMetric, setHistoryMetric] = useState(null);
   // ID / 설비명 검색어
   const [equipSearch, setEquipSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'normal' | 'warning' | 'danger'
+
+  // 표 헤더 클릭 정렬 (null이면 ID 오름차순 기본 정렬)
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortDirection, setSortDirection] = useState('asc');
+  const handleSortClick = (column) => {
+    if (sortColumn === column) {
+      setSortDirection(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
 
   // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
   const [alertMessage, setAlertMessage] = useState('');
@@ -635,21 +648,69 @@ const RealtimeScreen = ({
     ? alarms.filter(alarm => alarm.equipName === selectedEquipName)
     : alarms;
 
-  // ID 오름차순 정렬 (숫자형 ID는 숫자 비교, 아니면 문자열 비교)
-  const sortedEquipments = [...equipments].sort((a, b) => {
+  // ID 오름차순 비교 (숫자형 ID는 숫자 비교, 아니면 문자열 비교) - 기본 정렬 및 ID 컬럼 정렬 클릭 시 사용
+  const compareByEquipId = (a, b) => {
     const aNum = Number(a.equipId);
     const bNum = Number(b.equipId);
     if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
     return String(a.equipId).localeCompare(String(b.equipId));
-  });
+  };
 
-  // ID / 설비명 검색 필터링
+  const STATUS_SORT_ORDER = { '정상': 0, '경고': 1, '위험': 2 };
+
+  // 헤더 클릭으로 정렬 컬럼을 고르지 않았으면 ID 오름차순이 기본값
+  const sortedEquipments = (() => {
+    const list = [...equipments];
+    if (!sortColumn) {
+      return list.sort(compareByEquipId);
+    }
+    const dir = sortDirection === 'asc' ? 1 : -1;
+    list.sort((a, b) => {
+      let cmp;
+      switch (sortColumn) {
+        case 'equipName':
+          cmp = String(a.equipName ?? '').localeCompare(String(b.equipName ?? ''));
+          break;
+        case 'location':
+          cmp = String(a.location ?? '').localeCompare(String(b.location ?? ''));
+          break;
+        case 'receivedAt':
+          cmp = (a.receivedAt ? new Date(a.receivedAt).getTime() : 0) - (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
+          break;
+        case 'temperature':
+          cmp = (a.temperature ?? -Infinity) - (b.temperature ?? -Infinity);
+          break;
+        case 'power':
+          cmp = (a.power ?? -Infinity) - (b.power ?? -Infinity);
+          break;
+        case 'threshold':
+          cmp = (a.threshold ?? -Infinity) - (b.threshold ?? -Infinity);
+          break;
+        case 'status':
+          cmp = STATUS_SORT_ORDER[getStatusMeta(a.status).label] - STATUS_SORT_ORDER[getStatusMeta(b.status).label];
+          break;
+        default:
+          cmp = compareByEquipId(a, b);
+      }
+      return cmp * dir;
+    });
+    return list;
+  })();
+
+  // ID / 설비명 검색 + 상태(정상/경고/위험) 필터링
   const filteredEquipments = (() => {
     const q = equipSearch.trim().toLowerCase();
-    if (!q) return sortedEquipments;
-    return sortedEquipments.filter(eq =>
-      String(eq.equipId).toLowerCase().includes(q) || String(eq.equipName ?? '').toLowerCase().includes(q)
-    );
+    let list = sortedEquipments;
+    if (q) {
+      list = list.filter(eq =>
+        String(eq.equipId).toLowerCase().includes(q) || String(eq.equipName ?? '').toLowerCase().includes(q)
+      );
+    }
+    if (statusFilter !== 'all') {
+      const targetLabel = statusFilter === 'danger' ? '위험' : statusFilter === 'warning' ? '경고' : '정상';
+      list = list.filter(eq => getStatusMeta(eq.status).label === targetLabel);
+    }
+    return list;
   })();
 
   // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용)
@@ -660,6 +721,24 @@ const RealtimeScreen = ({
     else acc.normal += 1;
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
+
+  // 정렬 가능한 표 헤더 셀 (클릭 시 그 컬럼 기준으로 정렬, 다시 누르면 오름/내림차순 전환)
+  const renderSortableHeader = (column, label, widthClass, extraClass = '') => {
+    const isActive = sortColumn === column;
+    return (
+      <th
+        onClick={() => handleSortClick(column)}
+        className={`${widthClass} px-3 border-b font-semibold text-center align-middle uppercase cursor-pointer select-none transition-colors ${extraClass} ${
+          isDarkMode ? 'border-[#2A335A] hover:text-[#EDF1FC]' : 'border-gray-300 hover:text-gray-800'
+        } ${isActive ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : ''}`}
+      >
+        <span className="inline-flex items-center justify-center gap-0.5">
+          {label}
+          <span className={`text-[9px] ${isActive ? '' : 'opacity-0'}`}>{sortDirection === 'asc' ? '▲' : '▼'}</span>
+        </span>
+      </th>
+    );
+  };
 
   return (
     <div className={`w-full min-w-[320px] flex flex-col transition-colors h-screen max-h-[1080px] overflow-hidden ${
@@ -681,54 +760,23 @@ const RealtimeScreen = ({
         }`}>
           
           <div className="flex flex-wrap items-center gap-3">
-            {/* 탭 전환 스위치 (설비 설정/값 수정은 관리자 전용) */}
-            {isAdmin ? (
-              <div className={`relative flex items-center p-1 rounded-full border w-[220px] shrink-0 transition-colors ${
-                isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-              }`}>
-                <div
-                  className={`absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full transition-transform duration-300 ease-out border ${
-                    isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40' : 'bg-white border-gray-300 shadow-sm'
-                  } ${tabMode === 'threshold' ? 'translate-x-full' : 'translate-x-0'}`}
-                />
-                <button
-                  onClick={() => {
-                    setNewRows([]); // 저장하지 않고 다른 탭으로 이동하면 인라인으로 추가하던 신규 행은 버림
-                    setTabMode('stream');
-                  }}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-sm font-bold tracking-wide transition-colors ${
-                    tabMode === 'stream'
-                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                  }`}
-                >
-                  실시간 스트림
-                </button>
-                <button
-                  onClick={() => setTabMode('threshold')}
-                  className={`relative z-10 w-1/2 py-1.5 text-center rounded-full text-sm font-bold tracking-wide transition-colors ${
-                    tabMode === 'threshold'
-                      ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700')
-                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                  }`}
-                >
-                  설정
-                </button>
-              </div>
-            ) : (
-              <span className={`text-sm font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
-                실시간 스트림
-              </span>
-            )}
+            <span className={`text-sm font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
+              실시간 스트림
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
-            <div className={`flex items-center gap-2 mr-2 text-xs font-bold ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-              <span className="relative flex h-2 w-2">
+            <div className={`flex items-center gap-2 mr-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold ${
+              isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#7D87A8]' : 'bg-gray-50 border-gray-200 text-gray-500'
+            }`}>
+              <span className="relative flex h-2 w-2 shrink-0">
                 <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-transparent'}`}></span>
                 <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-gray-400'}`}></span>
               </span>
-              DB 수신량: <span className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{accumulatedCount.toLocaleString()}건</span>
+              <span className="shrink-0">DB 수신량</span>
+              <span className={`min-w-[64px] text-right font-mono tabular-nums ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                {accumulatedCount.toLocaleString()}건
+              </span>
             </div>
 
             {/* 기간 선택 (클릭하면 편집 팝오버) - 맨 오른쪽 */}
@@ -765,7 +813,7 @@ const RealtimeScreen = ({
                     isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
                   }`}>
                     <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>시작</label>
+                      <label className={`block text-[11px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>시작</label>
                       <input
                         type="datetime-local"
                         max={formatForDateTimeInput(endTime)}
@@ -779,7 +827,7 @@ const RealtimeScreen = ({
                       />
                     </div>
                     <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>종료</label>
+                      <label className={`block text-[11px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>종료</label>
                       <input
                         type="datetime-local"
                         min={formatForDateTimeInput(startTime)}
@@ -896,27 +944,43 @@ const RealtimeScreen = ({
                     </button>
                   )}
                 </div>
+
+                {/* 상태(정상/경고/위험) 필터 */}
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: 'all', label: '전체' },
+                    { key: 'normal', label: '정상' },
+                    { key: 'warning', label: '경고' },
+                    { key: 'danger', label: '위험' },
+                  ].map(opt => {
+                    const isActive = statusFilter === opt.key;
+                    const activeClass = opt.key === 'danger'
+                      ? (isDarkMode ? 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]' : 'bg-red-50 border-red-300 text-red-600')
+                      : opt.key === 'warning'
+                        ? (isDarkMode ? 'bg-amber-400/15 border-amber-400/40 text-amber-400' : 'bg-amber-50 border-amber-300 text-amber-600')
+                        : opt.key === 'normal'
+                          ? (isDarkMode ? 'bg-[#34D399]/15 border-[#34D399]/40 text-[#34D399]' : 'bg-green-50 border-green-300 text-green-700')
+                          : (isDarkMode ? 'bg-[#232B45] border-[#2A335A] text-[#EDF1FC]' : 'bg-gray-200 border-gray-300 text-gray-800');
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setStatusFilter(opt.key)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors border cursor-pointer ${
+                          isActive
+                            ? activeClass
+                            : (isDarkMode ? 'border-transparent text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#232B45]' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200')
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
               </div>
 
               <div className="flex items-center gap-3 h-8">
-                <span className={`flex items-center gap-1.5 text-[11px] font-mono ${
-                  isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
-                }`}>
-                  {isConnected ? (
-                    <>
-                      <span className="relative flex h-1.5 w-1.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-60"></span>
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#34D399]"></span>
-                      </span>
-                      <span className="text-[#34D399] font-bold">LIVE ({equipments.length}대)</span>
-                    </>
-                  ) : loadError ? (
-                    <span className="text-[#FB5D75]">{loadError}</span>
-                  ) : (
-                    <span className="text-amber-500">웹소켓 연결 중...</span>
-                  )}
-                </span>
-                
                 {tabMode === 'threshold' && (
                   <>
                     <button
@@ -940,6 +1004,49 @@ const RealtimeScreen = ({
                     </button>
                   </>
                 )}
+
+                <span className={`flex items-center gap-1.5 text-[11px] font-mono ${
+                  isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
+                }`}>
+                  {isConnected ? (
+                    <>
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-60"></span>
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#34D399]"></span>
+                      </span>
+                      <span className="text-[#34D399] font-bold">LIVE ({equipments.length}대)</span>
+                    </>
+                  ) : loadError ? (
+                    <span className="text-[#FB5D75]">{loadError}</span>
+                  ) : (
+                    <span className="text-amber-500">웹소켓 연결 중...</span>
+                  )}
+                </span>
+
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (tabMode === 'threshold') {
+                        setNewRows([]); // 저장하지 않고 나가면 인라인으로 추가하던 신규 행은 버림
+                        setTabMode('stream');
+                      } else {
+                        setTabMode('threshold');
+                      }
+                    }}
+                    title={tabMode === 'threshold' ? '설정 닫기' : '설비 설정'}
+                    className={`p-1.5 rounded-lg border transition-colors flex items-center justify-center ${
+                      tabMode === 'threshold'
+                        ? (isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40 text-[#22D3EE]' : 'bg-green-100 border-green-300 text-green-700')
+                        : (isDarkMode ? 'border-[#232B45] text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#2A335A]' : 'border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300')
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -950,14 +1057,14 @@ const RealtimeScreen = ({
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
-                    <th className={`w-[9%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>ID</th>
-                    <th className={`w-[19%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>설비명</th>
-                    <th className={`w-[9%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>위치</th>
-                    <th className={`w-[14%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
-                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도</th>
-                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
-                    <th className={`w-[13%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
-                    <th className={`w-[10%] px-3 border-b font-semibold text-center align-middle uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>상태</th>
+                    {renderSortableHeader('equipId', 'ID', 'w-[9%]')}
+                    {renderSortableHeader('equipName', '설비명', 'w-[19%]')}
+                    {renderSortableHeader('location', '위치', 'w-[9%]')}
+                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[14%]')}
+                    {renderSortableHeader('temperature', '온도', 'w-[13%]')}
+                    {renderSortableHeader('power', '전력', 'w-[13%]')}
+                    {renderSortableHeader('threshold', '임계값(온도)', 'w-[13%]')}
+                    {renderSortableHeader('status', '상태', 'w-[10%]')}
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1030,7 +1137,9 @@ const RealtimeScreen = ({
                   {equipments.length > 0 && filteredEquipments.length === 0 && (
                     <tr>
                       <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                        '{equipSearch}'에 대한 검색 결과가 없습니다.
+                        {equipSearch
+                          ? `'${equipSearch}'에 대한 검색 결과가 없습니다.`
+                          : '해당하는 상태의 설비가 없습니다.'}
                       </td>
                     </tr>
                   )}
@@ -1050,8 +1159,6 @@ const RealtimeScreen = ({
                         id={`equip-row-${eq.equipId}`}
                         onClick={() => {
                           setSelectedEquipId(isSelected ? null : eq.equipId);
-                          setHistoryEquipId(eq.equipId);
-                          setHistoryMetric(null);
                         }}
                         className={`h-[52px] max-h-[52px] transition-colors duration-300 cursor-pointer border-l-2 ${
                           isClickHighlighted
@@ -1083,11 +1190,22 @@ const RealtimeScreen = ({
                                 }`}
                               />
                             ) : (
-                              <span className={`font-bold truncate ${
-                                isSelected ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800')
-                              }`}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHistoryEquipId(eq.equipId);
+                                  setHistoryMetric(null);
+                                }}
+                                title="클릭하면 상세 이력을 볼 수 있습니다"
+                                className={`font-bold truncate underline decoration-dotted underline-offset-2 cursor-pointer transition-colors ${
+                                  isSelected
+                                    ? (isDarkMode ? 'text-[#22D3EE] decoration-[#22D3EE]/50' : 'text-green-700 decoration-green-700/40')
+                                    : (isDarkMode ? 'text-[#EDF1FC] decoration-[#7D87A8]/50 hover:text-[#22D3EE]' : 'text-gray-800 decoration-gray-400 hover:text-green-700')
+                                }`}
+                              >
                                 {eq.equipName}
-                              </span>
+                              </button>
                             )}
                           </div>
                         </td>
@@ -1114,16 +1232,16 @@ const RealtimeScreen = ({
                           {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
-                          <span className={`text-[14px] font-mono font-bold tabular-nums ${
+                          <span className={`text-sm font-mono font-bold tabular-nums ${
                             statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
                           }`}>
                             {eq.temperature != null ? (
-                              <>{Number(eq.temperature).toFixed(1)}<span className="text-[12px] font-normal">℃</span></>
+                              <>{Number(eq.temperature).toFixed(1)}<span className="text-xs font-normal">℃</span></>
                             ) : '–'}
                           </span>
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
-                          <span className={`text-[14px] font-mono font-bold tabular-nums ${
+                          <span className={`text-sm font-mono font-bold tabular-nums ${
                             isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
                           }`}>
                             {eq.power != null ? Number(eq.power).toFixed(1) : '–'}

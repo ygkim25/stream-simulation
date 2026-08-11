@@ -88,6 +88,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   // 셀 수정 시 적용 범위: false=그 시점만(스파이크), true=그 시점 이후 전체
   const [applyForward, setApplyForward] = useState(false);
 
+  // 셀 수정 되돌리기(Undo) - 수정 직전의 editedValues 스냅샷을 쌓아뒀다가 순서대로 복원함.
+  // 같은 셀에 연속으로 타이핑하는 동안(같은 equipId/field/시각)은 한 단계로 묶고,
+  // 다른 셀을 고치기 시작하는 순간에만 새 단계를 쌓음
+  const [undoStack, setUndoStack] = useState([]);
+  const lastEditKeyRef = useRef(null);
+
   const [simAlarms, setSimAlarms] = useState([]);
   const [simLogs, setSimLogs] = useState([]);
   const [selectedEquipId, setSelectedEquipId] = useState(null);
@@ -263,6 +269,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setElapsedMs(0);
     prevElapsedRef.current = 0;
     setEditedValues({});
+    setUndoStack([]);
+    lastEditKeyRef.current = null;
     setSimAlarms([]);
     setSimLogs([]);
     setSelectedEquipId(null);
@@ -561,6 +569,14 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     const anchorTime = row.time.getTime();
     const newValue = rawValue === '' ? '' : Number(rawValue);
 
+    // 같은 셀을 연속으로 고치는 동안(타이핑 중)은 되돌리기 한 단계로 묶고,
+    // 다른 셀로 넘어가는 순간에만 그 직전 상태를 되돌리기 스택에 쌓음
+    const editKey = `${equipId}|${field}|${anchorTime}`;
+    if (lastEditKeyRef.current !== editKey) {
+      setUndoStack(prev => [...prev, editedValues].slice(-50));
+      lastEditKeyRef.current = editKey;
+    }
+
     setEditedValues(prev => {
       const equipEdits = prev[equipId] || {};
       const fieldEdits = { ...(equipEdits[field] || {}) };
@@ -600,6 +616,15 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         threshold,
       }]);
     }
+  };
+
+  // 셀 수정 되돌리기 - 되돌리기 스택의 마지막 스냅샷으로 editedValues를 복원
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const last = undoStack[undoStack.length - 1];
+    setEditedValues(last);
+    setUndoStack(prev => prev.slice(0, -1));
+    lastEditKeyRef.current = null;
   };
 
   const handleDismissAlarm = (id) => {
@@ -673,6 +698,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     }
     setRows(updatedRows);
     setEditedValues({});
+    setUndoStack([]);
+    lastEditKeyRef.current = null;
     setEditedScenarioIds(prev => {
       const next = new Set(prev);
       next.add(selectedScenarioId);
@@ -799,42 +826,45 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         }`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-col gap-0.5">
-              {selectedScenario && (
-                renamingScenarioId === selectedScenario.id ? (
-                  <input
-                    ref={titleRenameRef}
-                    autoFocus
-                    value={renameDraft}
-                    onChange={(e) => setRenameDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') confirmRename(selectedScenario.id);
-                      if (e.key === 'Escape') cancelRename();
-                    }}
-                    style={{ width: `max(${titleInputWidth ?? 160}px, ${renameDraft.length + 2}ch)`, minWidth: 160 }}
-                    className={`text-base font-semibold px-2 py-1 rounded-lg border outline-none ${
-                      isDarkMode ? 'bg-[#0D1224] border-[#22D3EE] text-[#EDF1FC]' : 'bg-white border-green-600 text-gray-800'
-                    }`}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => startRename(e, selectedScenario)}
-                    title="클릭하면 이름을 수정할 수 있습니다"
-                    className={`self-start text-base font-semibold whitespace-nowrap px-2 py-1 rounded-lg border border-transparent cursor-pointer transition-colors ${
-                      isDarkMode ? 'text-[#EDF1FC] hover:bg-[#0D1224] hover:border-[#232B45]' : 'text-gray-800 hover:bg-gray-50 hover:border-gray-200'
-                    }`}
-                  >
-                    {selectedScenario.fileName}
-                  </button>
-                )
+              {selectedScenario && renamingScenarioId === selectedScenario.id ? (
+                <input
+                  ref={titleRenameRef}
+                  autoFocus
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmRename(selectedScenario.id);
+                    if (e.key === 'Escape') cancelRename();
+                  }}
+                  style={{ width: `max(${titleInputWidth ?? 160}px, ${renameDraft.length + 2}ch)`, minWidth: 160 }}
+                  className={`text-base font-semibold px-2 py-1 rounded-lg border outline-none ${
+                    isDarkMode ? 'bg-[#0D1224] border-[#22D3EE] text-[#EDF1FC]' : 'bg-white border-green-600 text-gray-800'
+                  }`}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => selectedScenario && startRename(e, selectedScenario)}
+                  title={selectedScenario ? '클릭하면 이름을 수정할 수 있습니다' : undefined}
+                  tabIndex={selectedScenario ? 0 : -1}
+                  className={`self-start text-base font-semibold whitespace-nowrap px-2 py-1 rounded-lg border border-transparent transition-colors ${
+                    selectedScenario ? 'cursor-pointer' : 'invisible pointer-events-none'
+                  } ${
+                    isDarkMode ? 'text-[#EDF1FC] hover:bg-[#0D1224] hover:border-[#232B45]' : 'text-gray-800 hover:bg-gray-50 hover:border-gray-200'
+                  }`}
+                >
+                  {selectedScenario?.fileName || ' '}
+                </button>
               )}
 
               {/* 이 시나리오 데이터의 실제 시간 범위 (시작 ~ 끝) */}
-              {selectedScenario && rows.length > 0 && (
-                <span className={`text-[11px] font-mono whitespace-nowrap px-2 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-                  {new Date(startTimeMs).toLocaleString('ko-KR')} ~ {new Date(startTimeMs + durationMs).toLocaleString('ko-KR')}
-                </span>
-              )}
+              <span className={`text-[11px] font-mono whitespace-nowrap px-2 ${
+                selectedScenario && rows.length > 0 ? '' : 'invisible'
+              } ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                {selectedScenario && rows.length > 0
+                  ? `${new Date(startTimeMs).toLocaleString('ko-KR')} ~ ${new Date(startTimeMs + durationMs).toLocaleString('ko-KR')}`
+                  : ' '}
+              </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -1018,22 +1048,50 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               )}
             </div>
 
-            <input
-              type="range"
-              min={0}
-              max={durationMs || 0}
-              value={Math.min(elapsedMs, durationMs || 0)}
-              onChange={handleSeek}
-              disabled={!rows.length}
-              style={{ accentColor: isDarkMode ? '#22D3EE' : '#15803d' }}
-              className="flex-1 min-w-[120px] disabled:opacity-40"
-            />
+            <div className="relative flex-1 min-w-[120px]">
+              <input
+                type="range"
+                min={0}
+                max={durationMs || 0}
+                value={Math.min(elapsedMs, durationMs || 0)}
+                onChange={handleSeek}
+                disabled={!rows.length}
+                style={{ accentColor: isDarkMode ? '#22D3EE' : '#15803d' }}
+                className="w-full disabled:opacity-40"
+              />
+              {/* 경고/위험 진입 지점 마커 - 클릭하면 그 시점으로 바로 이동 */}
+              {durationMs > 0 && transitionEvents.filter(e => e.kind === 'warning').map(e => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => setElapsedMs(e.elapsedMs)}
+                  title={`${e.equipName} 경고/위험 발생 지점 (${formatMmSs(e.elapsedMs)})으로 이동`}
+                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 w-[3px] h-2.5 rounded-full cursor-pointer transition-transform hover:scale-150 ${
+                    isDarkMode ? 'bg-[#FB5D75]' : 'bg-red-500'
+                  }`}
+                  style={{ left: `${(e.elapsedMs / durationMs) * 100}%` }}
+                />
+              ))}
+            </div>
 
             <span className={`text-xs font-mono shrink-0 ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
               {formatMmSs(elapsedMs)} / {formatMmSs(durationMs)}
             </span>
 
             <div className="flex items-center gap-2 ml-auto">
+              <button
+                onClick={handleUndo}
+                disabled={undoStack.length === 0}
+                title="마지막으로 수정한 셀 값을 되돌립니다"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 15L4 10m0 0l5-5m-5 5h11a4 4 0 010 8h-1" />
+                </svg>
+                되돌리기
+              </button>
               <button
                 onClick={handleSaveScenario}
                 disabled={!selectedScenario}

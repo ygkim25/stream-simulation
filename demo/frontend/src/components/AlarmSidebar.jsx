@@ -98,19 +98,19 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
 
         {selectedEquipName && (
           <div className={`flex items-center justify-between border rounded-lg px-3 py-1.5 ${
-            isDarkMode 
-              ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30' 
-              : 'bg-green-50 border-green-200'
+            isDarkMode
+              ? 'bg-[#1A2036] border-[#2A335A]'
+              : 'bg-gray-100 border-gray-300'
           }`}>
-            <span className={`text-[11px] font-bold truncate ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
+            <span className={`text-[11px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-700'}`}>
               ▸ {selectedEquipName} 알람만 표시 중
             </span>
             <button
               onClick={onClearFilter}
               className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer border-none shrink-0 ml-2 ${
-                isDarkMode 
-                  ? 'text-[#22D3EE] hover:text-[#0A0E1A] bg-[#22D3EE]/15 hover:bg-[#22D3EE]' 
-                  : 'text-green-700 hover:text-white bg-green-100 hover:bg-green-600'
+                isDarkMode
+                  ? 'text-[#9FACC9] hover:text-[#EDF1FC] bg-[#232B45] hover:bg-[#2A335A]'
+                  : 'text-gray-600 hover:text-gray-900 bg-gray-200 hover:bg-gray-300'
               }`}
             >
               필터 해제 ✕
