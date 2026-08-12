@@ -11,15 +11,19 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
     }`}>
       <div className="flex items-center gap-4">
         <h1
-          className="flex items-center gap-2.5 text-[15px] font-bold tracking-tight cursor-pointer group"
+          className="flex items-center gap-2.5 cursor-pointer group"
           onClick={() => setRoute('main')}
         >
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-60"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#34D399]"></span>
+          {/* 로고 마크 */}
+          <span className={`flex items-center justify-center w-9 h-9 rounded-xl shrink-0 font-black text-base tracking-tight text-white shadow-md transition-transform group-hover:scale-105 bg-linear-to-br ${
+            isDarkMode ? 'from-[#22D3EE] to-[#6366F1] shadow-[#22D3EE]/30' : 'from-green-500 to-teal-600 shadow-green-500/30'
+          }`}>
+            W
           </span>
-          <span className={isDarkMode ? 'group-hover:text-[#22D3EE] transition-colors' : 'group-hover:text-green-600 transition-colors'}>
-            모의 관제 시스템
+          <span className={`text-[17px] font-extrabold tracking-tight transition-colors ${
+            isDarkMode ? 'text-[#EDF1FC] group-hover:text-[#22D3EE]' : 'text-gray-900 group-hover:text-green-700'
+          }`}>
+            WCT
           </span>
         </h1>
         {title && (

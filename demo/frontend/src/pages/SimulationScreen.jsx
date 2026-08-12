@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
@@ -11,6 +11,7 @@ import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, d
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { useClickOutside } from '../utils/useClickOutside';
+import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
 
@@ -104,6 +105,18 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // 전체보기 표 헤더 클릭 정렬 (null이면 ID 오름차순 기본 정렬)
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortDirection, setSortDirection] = useState('asc');
+  const handleSortClick = (column) => {
+    if (sortColumn === column) {
+      setSortDirection(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
   // 시나리오 이름 수정 (PATCH /api/simulation/scenarios/rename)
   const [renamingScenarioId, setRenamingScenarioId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -154,7 +167,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       if (clickHighlightTimeoutRef.current) clearTimeout(clickHighlightTimeoutRef.current);
     };
   }, []);
-  const handleAlarmClick = (alarm) => {
+  const handleAlarmClick = useCallback((alarm) => {
     const rowEl = document.getElementById(`equip-row-${alarm.equipId}`);
     if (rowEl) {
       rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -164,7 +177,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     clickHighlightTimeoutRef.current = setTimeout(() => {
       setClickHighlightId(null);
     }, 1500);
-  };
+  }, []);
 
   // 크롬 기본 alert 대신 사용하는 커스텀 알림 메시지
   const [alertMessage, setAlertMessage] = useState('');
@@ -333,11 +346,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
-  // 재생바에 표시할 경고/위험 진입 마커 (재생 위치가 바뀔 때마다 다시 필터링하지 않도록 메모)
-  const warningEvents = useMemo(
-    () => transitionEvents.filter(e => e.kind === 'warning'),
-    [transitionEvents]
-  );
+  // 재생바 채움 비율 (%) - 커스텀 트랙 배경(그라데이션)으로 진행 표시를 직접 그릴 때 사용
+  const seekFillPct = durationMs > 0 ? (Math.min(elapsedMs, durationMs) / durationMs) * 100 : 0;
 
   const toAlarmCard = (e) => ({
     id: e.id,
@@ -464,9 +474,39 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
         return { ...r, temperature, power, threshold, status };
       })
-      .sort((a, b) => String(a.equipId).localeCompare(String(b.equipId)));
+      .sort((a, b) => {
+        if (!sortColumn) return compareByEquipId(a, b);
+        const dir = sortDirection === 'asc' ? 1 : -1;
+        let cmp;
+        switch (sortColumn) {
+          case 'equipName':
+            cmp = String(a.equipName ?? '').localeCompare(String(b.equipName ?? ''));
+            break;
+          case 'location':
+            cmp = String(a.location ?? '').localeCompare(String(b.location ?? ''));
+            break;
+          case 'time':
+            cmp = a.time.getTime() - b.time.getTime();
+            break;
+          case 'temperature':
+            cmp = (a.temperature ?? -Infinity) - (b.temperature ?? -Infinity);
+            break;
+          case 'power':
+            cmp = (a.power ?? -Infinity) - (b.power ?? -Infinity);
+            break;
+          case 'threshold':
+            cmp = (a.threshold ?? -Infinity) - (b.threshold ?? -Infinity);
+            break;
+          case 'status':
+            cmp = STATUS_SORT_ORDER[a.status] - STATUS_SORT_ORDER[b.status];
+            break;
+          default:
+            cmp = compareByEquipId(a, b);
+        }
+        return cmp * dir;
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, elapsedMs, editedValues, startTimeMs]);
+  }, [rows, elapsedMs, editedValues, startTimeMs, sortColumn, sortDirection]);
 
   // 설비별 "시작~끝" 전체 상태 흐름을 색 구간으로 미리 계산 (재생 위치와 무관하게 한 번만 계산됨 -
   // elapsedMs가 deps에 없어서 재생 중에도 매 틱마다 다시 계산되지 않음)
@@ -771,6 +811,24 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     }
   }, [currentViewEquipTime, viewEquipId]);
 
+  // 전체보기 표의 정렬 가능한 헤더 셀 (클릭 시 그 컬럼 기준 정렬, 다시 누르면 오름/내림차순 전환)
+  const renderSortableHeader = (column, label, widthClass) => {
+    const isActive = sortColumn === column;
+    return (
+      <th
+        onClick={() => handleSortClick(column)}
+        className={`${widthClass} px-3 border-b font-semibold uppercase cursor-pointer select-none transition-colors ${
+          isDarkMode ? 'border-[#2A335A] hover:text-[#EDF1FC]' : 'border-gray-300 hover:text-gray-800'
+        } ${isActive ? (isDarkMode ? 'text-[#22D3EE]' : 'text-green-700') : ''}`}
+      >
+        <span className="inline-flex items-center justify-center gap-0.5">
+          {label}
+          <span className={`text-[9px] ${isActive ? '' : 'opacity-0'}`}>{sortDirection === 'asc' ? '▲' : '▼'}</span>
+        </span>
+      </th>
+    );
+  };
+
   return (
     <div className={`w-full min-w-[320px] flex flex-col transition-colors min-h-[calc(100vh/1.1)] lg:h-[calc(100vh/1.1)] lg:max-h-[calc(1080px/1.1)] lg:overflow-hidden ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
@@ -949,22 +1007,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 value={Math.min(elapsedMs, durationMs || 0)}
                 onChange={handleSeek}
                 disabled={!rows.length}
-                style={{ accentColor: isDarkMode ? '#22D3EE' : '#15803d' }}
-                className="w-full disabled:opacity-40"
+                style={{
+                  '--seek-accent': isDarkMode ? '#22D3EE' : '#15803d',
+                  background: `linear-gradient(to right, ${isDarkMode ? '#22D3EE' : '#15803d'} 0%, ${isDarkMode ? '#22D3EE' : '#15803d'} ${seekFillPct}%, ${isDarkMode ? '#232B45' : '#E5E7EB'} ${seekFillPct}%, ${isDarkMode ? '#232B45' : '#E5E7EB'} 100%)`,
+                }}
+                className="sim-seekbar w-full disabled:opacity-40"
               />
-              {/* 경고/위험 진입 지점 마커 - 클릭하면 그 시점으로 바로 이동 */}
-              {durationMs > 0 && warningEvents.map(e => (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => setElapsedMs(e.elapsedMs)}
-                  title={`${e.equipName} 경고/위험 발생 지점 (${formatMmSs(e.elapsedMs)})으로 이동`}
-                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 w-[3px] h-2.5 rounded-full cursor-pointer transition-transform hover:scale-150 ${
-                    isDarkMode ? 'bg-[#FB5D75]' : 'bg-red-500'
-                  }`}
-                  style={{ left: `${(e.elapsedMs / durationMs) * 100}%` }}
-                />
-              ))}
             </div>
 
             <span className={`text-xs font-mono shrink-0 ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
@@ -1203,14 +1251,14 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                     isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                   }`}>
                     <tr className="h-[40px]">
-                      <th className={`w-[7%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>ID</th>
-                      <th className={`w-[11%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>설비명</th>
-                      <th className={`w-[5%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>위치</th>
-                      <th className={`w-[19%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
-                      <th className={`w-[9%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도(℃)</th>
-                      <th className={`w-[8%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
-                      <th className={`w-[9%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
-                      <th className={`w-[8%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>상태</th>
+                      {renderSortableHeader('equipId', 'ID', 'w-[7%]')}
+                      {renderSortableHeader('equipName', '설비명', 'w-[11%]')}
+                      {renderSortableHeader('location', '위치', 'w-[5%]')}
+                      {renderSortableHeader('time', '수신 시간', 'w-[19%]')}
+                      {renderSortableHeader('temperature', '온도(℃)', 'w-[9%]')}
+                      {renderSortableHeader('power', '전력', 'w-[8%]')}
+                      {renderSortableHeader('threshold', '임계값(온도)', 'w-[9%]')}
+                      {renderSortableHeader('status', '상태', 'w-[8%]')}
                       <th className={`w-[14%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
                     </tr>
                   </thead>
@@ -1253,7 +1301,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                             <td className={`px-3 py-0 h-[52px] font-bold truncate align-middle ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                               {eq.equipName}
                             </td>
-                            <td className={`px-3 py-0 h-[52px] text-[10px] truncate align-middle ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
+                            <td className={`px-3 py-0 h-[52px] text-[13px] truncate align-middle ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
                               {eq.location || '-'}
                             </td>
                             <td className={`px-3 py-0 h-[52px] font-mono text-[13px] whitespace-nowrap align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>

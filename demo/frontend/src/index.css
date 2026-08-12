@@ -75,6 +75,53 @@ html.dark ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ------------------------------------------
+ * 시뮬레이션 재생바(재생 위치 슬라이더) - 트랙을 두껍게, 썸(재생 위치 점)을 크게.
+ * appearance:none으로 브라우저 기본 크기 제한을 없애야 트랙 두께가 실제로 커짐 -
+ * 대신 진행 채움색은 자동으로 안 그려지므로, 컴포넌트에서 background로 직접 그라데이션을 그림
+ * ------------------------------------------ */
+.sim-seekbar {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+.sim-seekbar::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 9999px;
+  background: transparent;
+}
+.sim-seekbar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background-color: var(--seek-accent, #22D3EE);
+  border: 2px solid var(--seek-accent, #22D3EE);
+  cursor: pointer;
+}
+.sim-seekbar::-moz-range-track {
+  height: 10px;
+  border-radius: 9999px;
+  background: transparent;
+}
+.sim-seekbar::-moz-range-progress {
+  height: 10px;
+  border-radius: 9999px;
+  background-color: var(--seek-accent, #22D3EE);
+}
+.sim-seekbar::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  border: none;
+  background-color: var(--seek-accent, #22D3EE);
+  cursor: pointer;
+}
+
+/* ------------------------------------------
  * 버튼 클릭 시 브라우저 기본 포커스 테두리 제거 (커스텀 스타일로 대체하므로 불필요)
  * ------------------------------------------ */
 button {

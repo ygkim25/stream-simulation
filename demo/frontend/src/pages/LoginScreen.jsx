@@ -108,17 +108,13 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
           : 'bg-white border-gray-200 shadow-md'
       }`}>
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#34D399] opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#34D399]"></span>
-            </span>
-            <span className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
-              Control Room System
-            </span>
+          <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 font-black text-3xl tracking-tight text-white shadow-lg bg-linear-to-br ${
+            isDarkMode ? 'from-[#22D3EE] to-[#6366F1] shadow-[#22D3EE]/30' : 'from-green-500 to-teal-600 shadow-green-500/30'
+          }`}>
+            W
           </div>
-          <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-900'}`}>
-            모의 관제 시스템
+          <h1 className={`text-2xl font-extrabold tracking-tight ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-900'}`}>
+            WCT
           </h1>
         </div>
         
