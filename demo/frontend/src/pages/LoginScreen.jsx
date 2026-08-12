@@ -80,7 +80,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
   };
 
   return (
-    <div className={`h-screen max-h-[1080px] w-full min-w-[340px] flex flex-col items-center justify-center p-4 overflow-y-auto transition-colors relative ${
+    <div className={`h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] w-full min-w-[340px] flex flex-col items-center justify-center p-4 overflow-y-auto transition-colors relative ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
       <button
