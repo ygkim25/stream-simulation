@@ -12,6 +12,7 @@ import Dropdown from '../components/Dropdown';
 import { saveToDB, countFromDB, getByDateRangeFromDB } from '../utils/indexedDb';
 import { formatForDateTimeInput } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
+import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
@@ -40,17 +41,6 @@ const STATUS_FILTER_ACTIVE_CLASS = {
   normal: { dark: 'bg-[#34D399]/15 border-[#34D399]/40 text-[#34D399]', light: 'bg-green-50 border-green-300 text-green-700' },
   warning: { dark: 'bg-amber-400/15 border-amber-400/40 text-amber-400', light: 'bg-amber-50 border-amber-300 text-amber-600' },
   danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
-};
-
-// 상태(정상/경고/위험) 컬럼 정렬 시 우선순위
-const STATUS_SORT_ORDER = { 정상: 0, 경고: 1, 위험: 2 };
-
-// ID 오름차순 비교 (숫자형 ID는 숫자 비교, 아니면 문자열 비교) - 기본 정렬 및 ID 컬럼 정렬 클릭 시 사용
-const compareByEquipId = (a, b) => {
-  const aNum = Number(a.equipId);
-  const bNum = Number(b.equipId);
-  if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
-  return String(a.equipId).localeCompare(String(b.equipId));
 };
 
 // ==========================================
