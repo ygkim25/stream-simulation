@@ -75,7 +75,7 @@ public class EquipmentStatusService {
             double oldTemp1d = round1(eq.getTemperature());
             String oldStatus = eq.getStatus();
 
-            double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 0.5) * 3.0);
+            double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 1) * 3.0);
             double newPower = round2(eq.getPower() + (random.nextDouble() - 0.5) * 6.0);
             eq.setTemperature(newTemp);
             eq.setPower(newPower);
