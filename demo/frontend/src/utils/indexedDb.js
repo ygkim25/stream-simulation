@@ -48,17 +48,6 @@ export const saveToDB = async (dataArray) => {
   });
 };
 
-export const getAllFromDB = async () => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
 // 저장된 전체 건수만 확인 (전체 데이터를 읽지 않고 개수만 세므로, 데이터가 아무리 쌓여도 항상 빠름)
 export const countFromDB = async () => {
   const db = await initDB();
@@ -72,7 +61,7 @@ export const countFromDB = async () => {
 };
 
 // [startMs, endMs] 구간에 해당하는 데이터만 커서로 훑으며 골라냄
-// (getAllFromDB처럼 전체를 먼저 배열로 올리지 않고 조건에 맞는 것만 결과에 담아서,
+// (전체를 먼저 배열로 올리지 않고 조건에 맞는 것만 결과에 담아서,
 //  누적량이 아무리 커도 최종적으로 메모리에 남는 건 실제 구간 안의 데이터뿐임)
 export const getByDateRangeFromDB = async (startMs, endMs) => {
   const db = await initDB();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
 import { Client } from '@stomp/stompjs';
@@ -8,6 +8,7 @@ import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentTrendGrid from '../components/EquipmentTrendGrid';
+import Dropdown from '../components/Dropdown';
 import { saveToDB, countFromDB, getByDateRangeFromDB } from '../utils/indexedDb';
 import { formatForDateTimeInput } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
@@ -23,6 +24,34 @@ const PRESET_OPTIONS = [
   { value: 'LAST_30M', label: '최근 30분' },
   { value: 'RESET_NOW', label: '현재로 갱신' },
 ];
+
+// 상태 필터 키 <-> 상태 라벨 매핑 (필터 버튼 클릭 시 getStatusMeta().label과 비교하는 데 사용)
+const STATUS_FILTER_LABELS = { normal: '정상', warning: '경고', danger: '위험' };
+
+// 상태 필터 버튼 목록과, 선택됐을 때(active) 상태별 강조 색상
+const STATUS_FILTER_OPTIONS = [
+  { key: 'all', label: '전체' },
+  { key: 'normal', label: '정상' },
+  { key: 'warning', label: '경고' },
+  { key: 'danger', label: '위험' },
+];
+const STATUS_FILTER_ACTIVE_CLASS = {
+  all: { dark: 'bg-[#232B45] border-[#2A335A] text-[#EDF1FC]', light: 'bg-gray-200 border-gray-300 text-gray-800' },
+  normal: { dark: 'bg-[#34D399]/15 border-[#34D399]/40 text-[#34D399]', light: 'bg-green-50 border-green-300 text-green-700' },
+  warning: { dark: 'bg-amber-400/15 border-amber-400/40 text-amber-400', light: 'bg-amber-50 border-amber-300 text-amber-600' },
+  danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
+};
+
+// 상태(정상/경고/위험) 컬럼 정렬 시 우선순위
+const STATUS_SORT_ORDER = { 정상: 0, 경고: 1, 위험: 2 };
+
+// ID 오름차순 비교 (숫자형 ID는 숫자 비교, 아니면 문자열 비교) - 기본 정렬 및 ID 컬럼 정렬 클릭 시 사용
+const compareByEquipId = (a, b) => {
+  const aNum = Number(a.equipId);
+  const bNum = Number(b.equipId);
+  if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+  return String(a.equipId).localeCompare(String(b.equipId));
+};
 
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
@@ -104,20 +133,6 @@ const RealtimeScreen = ({
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState('');
-
-  // 빠른 선택 커스텀 드롭다운
-  const [isPresetDropdownOpen, setIsPresetDropdownOpen] = useState(false);
-  const presetDropdownRef = useRef(null);
-  useEffect(() => {
-    if (!isPresetDropdownOpen) return;
-    const handleClickOutside = (e) => {
-      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target)) {
-        setIsPresetDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isPresetDropdownOpen]);
 
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
@@ -648,18 +663,9 @@ const RealtimeScreen = ({
     ? alarms.filter(alarm => alarm.equipName === selectedEquipName)
     : alarms;
 
-  // ID 오름차순 비교 (숫자형 ID는 숫자 비교, 아니면 문자열 비교) - 기본 정렬 및 ID 컬럼 정렬 클릭 시 사용
-  const compareByEquipId = (a, b) => {
-    const aNum = Number(a.equipId);
-    const bNum = Number(b.equipId);
-    if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
-    return String(a.equipId).localeCompare(String(b.equipId));
-  };
-
-  const STATUS_SORT_ORDER = { '정상': 0, '경고': 1, '위험': 2 };
-
-  // 헤더 클릭으로 정렬 컬럼을 고르지 않았으면 ID 오름차순이 기본값
-  const sortedEquipments = (() => {
+  // 헤더 클릭으로 정렬 컬럼을 고르지 않았으면 ID 오름차순이 기본값 (equipments가 웹소켓
+  // 틱마다 갱신되므로, 정렬 기준이 안 바뀌었으면 다시 정렬하지 않도록 메모)
+  const sortedEquipments = useMemo(() => {
     const list = [...equipments];
     if (!sortColumn) {
       return list.sort(compareByEquipId);
@@ -695,10 +701,10 @@ const RealtimeScreen = ({
       return cmp * dir;
     });
     return list;
-  })();
+  }, [equipments, sortColumn, sortDirection]);
 
   // ID / 설비명 검색 + 상태(정상/경고/위험) 필터링
-  const filteredEquipments = (() => {
+  const filteredEquipments = useMemo(() => {
     const q = equipSearch.trim().toLowerCase();
     let list = sortedEquipments;
     if (q) {
@@ -707,11 +713,11 @@ const RealtimeScreen = ({
       );
     }
     if (statusFilter !== 'all') {
-      const targetLabel = statusFilter === 'danger' ? '위험' : statusFilter === 'warning' ? '경고' : '정상';
+      const targetLabel = STATUS_FILTER_LABELS[statusFilter];
       list = list.filter(eq => getStatusMeta(eq.status).label === targetLabel);
     }
     return list;
-  })();
+  }, [sortedEquipments, equipSearch, statusFilter]);
 
   // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용)
   const statusCounts = equipments.reduce((acc, eq) => {
@@ -741,7 +747,7 @@ const RealtimeScreen = ({
   };
 
   return (
-    <div className={`w-full min-w-[320px] flex flex-col transition-colors h-screen max-h-[1080px] overflow-hidden ${
+    <div className={`w-full min-w-[320px] flex flex-col transition-colors h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] overflow-hidden ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
       <Header 
@@ -842,47 +848,14 @@ const RealtimeScreen = ({
                       />
                     </div>
 
-                    <div className="relative" ref={presetDropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => setIsPresetDropdownOpen(o => !o)}
-                        className={`w-full flex items-center justify-between gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold border outline-none cursor-pointer transition-colors ${
-                          isDarkMode ? 'bg-[#151B30] border-[#2A335A] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
-                        }`}
-                      >
-                        <span>{PRESET_OPTIONS.find(p => p.value === selectedPreset)?.label ?? '빠른 선택'}</span>
-                        <svg
-                          className={`w-3.5 h-3.5 shrink-0 transition-transform ${isPresetDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
-                          fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-
-                      {isPresetDropdownOpen && (
-                        <div className={`absolute z-30 mt-1 w-full rounded-lg border shadow-lg ${
-                          isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
-                        }`}>
-                          {PRESET_OPTIONS.map(p => (
-                            <button
-                              type="button"
-                              key={p.value}
-                              onClick={() => {
-                                handlePresetRange(p.value);
-                                setIsPresetDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-3 py-1.5 text-[11px] font-semibold truncate cursor-pointer transition-colors ${
-                                selectedPreset === p.value
-                                  ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
-                                  : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
-                              }`}
-                            >
-                              {p.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <Dropdown
+                      value={selectedPreset}
+                      onChange={handlePresetRange}
+                      options={PRESET_OPTIONS}
+                      isDarkMode={isDarkMode}
+                      widthClass="w-full"
+                      placeholder="빠른 선택"
+                    />
 
                     <button
                       type="button"
@@ -945,42 +918,6 @@ const RealtimeScreen = ({
                   )}
                 </div>
 
-                {/* 상태(정상/경고/위험) 필터 */}
-                <div className="flex items-center gap-1">
-                  {[
-                    { key: 'all', label: '전체' },
-                    { key: 'normal', label: '정상' },
-                    { key: 'warning', label: '경고' },
-                    { key: 'danger', label: '위험' },
-                  ].map(opt => {
-                    const isActive = statusFilter === opt.key;
-                    const activeClass = opt.key === 'danger'
-                      ? (isDarkMode ? 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]' : 'bg-red-50 border-red-300 text-red-600')
-                      : opt.key === 'warning'
-                        ? (isDarkMode ? 'bg-amber-400/15 border-amber-400/40 text-amber-400' : 'bg-amber-50 border-amber-300 text-amber-600')
-                        : opt.key === 'normal'
-                          ? (isDarkMode ? 'bg-[#34D399]/15 border-[#34D399]/40 text-[#34D399]' : 'bg-green-50 border-green-300 text-green-700')
-                          : (isDarkMode ? 'bg-[#232B45] border-[#2A335A] text-[#EDF1FC]' : 'bg-gray-200 border-gray-300 text-gray-800');
-                    return (
-                      <button
-                        key={opt.key}
-                        type="button"
-                        onClick={() => setStatusFilter(opt.key)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors border cursor-pointer ${
-                          isActive
-                            ? activeClass
-                            : (isDarkMode ? 'border-transparent text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#232B45]' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200')
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-              </div>
-
-              <div className="flex items-center gap-3 h-8">
                 {tabMode === 'threshold' && (
                   <>
                     <button
@@ -1004,6 +941,29 @@ const RealtimeScreen = ({
                     </button>
                   </>
                 )}
+              </div>
+
+              <div className="flex items-center gap-3 h-8">
+                {/* 상태(정상/경고/위험) 필터 */}
+                <div className="flex items-center gap-1">
+                  {STATUS_FILTER_OPTIONS.map(opt => {
+                    const isActive = statusFilter === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setStatusFilter(opt.key)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors border cursor-pointer ${
+                          isActive
+                            ? STATUS_FILTER_ACTIVE_CLASS[opt.key][isDarkMode ? 'dark' : 'light']
+                            : (isDarkMode ? 'border-transparent text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#232B45]' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200')
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
 
                 <span className={`flex items-center gap-1.5 text-[11px] font-mono ${
                   isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
@@ -1186,7 +1146,7 @@ const RealtimeScreen = ({
                                 onChange={(e) => handleFieldChange(eq.equipId, 'equipName', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
                               />
                             ) : (
@@ -1218,7 +1178,7 @@ const RealtimeScreen = ({
                                 onChange={(e) => handleFieldChange(eq.equipId, 'location', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-full h-[30px] rounded px-1.5 focus:outline-none border text-xs text-center leading-none transition-all ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
                               />
                             ) : (
@@ -1256,7 +1216,7 @@ const RealtimeScreen = ({
                                 onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
                               />
                             ) : (

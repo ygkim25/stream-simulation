@@ -45,7 +45,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
   };
 
   return (
-    <div className={`h-screen max-h-[1080px] w-full min-w-[340px] flex flex-col overflow-y-auto transition-colors ${
+    <div className={`h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] w-full min-w-[340px] flex flex-col overflow-y-auto transition-colors ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
       <Header 

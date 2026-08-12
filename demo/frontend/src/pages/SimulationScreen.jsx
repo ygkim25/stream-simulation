@@ -6,9 +6,11 @@ import FullLogModal from '../components/FullLogModal';
 import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import SimulationTrendChart from '../components/SimulationTrendChart';
+import Dropdown from '../components/Dropdown';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi, renameScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
+import { useClickOutside } from '../utils/useClickOutside';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
 
@@ -102,50 +104,15 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // 설비별 이력 보기 커스텀 드롭다운
-  const [isEquipDropdownOpen, setIsEquipDropdownOpen] = useState(false);
-  const equipDropdownRef = useRef(null);
-  useEffect(() => {
-    if (!isEquipDropdownOpen) return;
-    const handleClickOutside = (e) => {
-      if (equipDropdownRef.current && !equipDropdownRef.current.contains(e.target)) {
-        setIsEquipDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isEquipDropdownOpen]);
-
-  // 재생 속도 커스텀 드롭다운
-  const [isSpeedDropdownOpen, setIsSpeedDropdownOpen] = useState(false);
-  const speedDropdownRef = useRef(null);
-  useEffect(() => {
-    if (!isSpeedDropdownOpen) return;
-    const handleClickOutside = (e) => {
-      if (speedDropdownRef.current && !speedDropdownRef.current.contains(e.target)) {
-        setIsSpeedDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isSpeedDropdownOpen]);
-
   // 시나리오 이름 수정 (PATCH /api/simulation/scenarios/rename)
   const [renamingScenarioId, setRenamingScenarioId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [titleInputWidth, setTitleInputWidth] = useState(null);
   const titleRenameRef = useRef(null);
-  useEffect(() => {
-    if (renamingScenarioId === null) return;
-    const handleClickOutside = (e) => {
-      if (titleRenameRef.current && !titleRenameRef.current.contains(e.target)) {
-        setRenamingScenarioId(null);
-        setRenameDraft('');
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [renamingScenarioId]);
+  useClickOutside(titleRenameRef, () => {
+    setRenamingScenarioId(null);
+    setRenameDraft('');
+  }, renamingScenarioId !== null);
   const startRename = (e, s) => {
     e.stopPropagation();
     setTitleInputWidth(e.currentTarget.getBoundingClientRect().width);
@@ -365,6 +332,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     return events;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
+
+  // 재생바에 표시할 경고/위험 진입 마커 (재생 위치가 바뀔 때마다 다시 필터링하지 않도록 메모)
+  const warningEvents = useMemo(
+    () => transitionEvents.filter(e => e.kind === 'warning'),
+    [transitionEvents]
+  );
 
   const toAlarmCard = (e) => ({
     id: e.id,
@@ -799,7 +772,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   }, [currentViewEquipTime, viewEquipId]);
 
   return (
-    <div className={`w-full min-w-[320px] flex flex-col transition-colors min-h-screen lg:h-screen lg:max-h-[1080px] lg:overflow-hidden ${
+    <div className={`w-full min-w-[320px] flex flex-col transition-colors min-h-[calc(100vh/1.1)] lg:h-[calc(100vh/1.1)] lg:max-h-[calc(1080px/1.1)] lg:overflow-hidden ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
       <Header
@@ -902,65 +875,19 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
               {/* 설비별 전체 시간 이력 보기 드롭다운 (커스텀) */}
               {selectedScenario && equipOptions.length > 0 && (
-                <div className="relative" ref={equipDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsEquipDropdownOpen(o => !o)}
-                    className={`flex items-center justify-between gap-2 text-xs font-semibold px-2.5 py-1.5 rounded-lg border outline-none cursor-pointer w-[170px] transition-colors ${
-                      isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#2A335A]' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
-                    }`}
-                  >
-                    <span className="truncate">
-                      {viewEquipId ? (equipOptions.find(eq => eq.equipId === viewEquipId)?.equipName ?? '전체보기') : '전체보기'}
-                    </span>
-                    <svg
-                      className={`w-3.5 h-3.5 shrink-0 transition-transform ${isEquipDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
-                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-
-                  {isEquipDropdownOpen && (
-                    <div className={`absolute z-30 mt-1 w-[170px] max-h-64 overflow-y-auto rounded-lg border shadow-lg custom-scrollbar ${
-                      isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
-                    }`}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewEquipId('');
-                          setSelectedEquipId(null);
-                          setIsEquipDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
-                          viewEquipId === ''
-                            ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
-                            : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
-                        }`}
-                      >
-                        전체보기
-                      </button>
-                      {equipOptions.map(eq => (
-                        <button
-                          type="button"
-                          key={eq.equipId}
-                          onClick={() => {
-                            setViewEquipId(eq.equipId);
-                            setSelectedEquipId(eq.equipId);
-                            setIsEquipDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
-                            viewEquipId === eq.equipId
-                              ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
-                              : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
-                          }`}
-                        >
-                          {eq.equipName}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <Dropdown
+                  value={viewEquipId}
+                  onChange={(newVal) => {
+                    setViewEquipId(newVal);
+                    setSelectedEquipId(newVal || null);
+                  }}
+                  options={[
+                    { value: '', label: '전체보기' },
+                    ...equipOptions.map(eq => ({ value: eq.equipId, label: eq.equipName })),
+                  ]}
+                  isDarkMode={isDarkMode}
+                  widthClass="w-[170px]"
+                />
               )}
 
               <button
@@ -1006,47 +933,13 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               )}
             </button>
 
-            <div className="relative" ref={speedDropdownRef}>
-              <button
-                type="button"
-                onClick={() => setIsSpeedDropdownOpen(o => !o)}
-                className={`flex items-center justify-between gap-1.5 rounded-lg px-2 py-1.5 text-xs font-bold border outline-none cursor-pointer w-[64px] transition-colors ${
-                  isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#2A335A]' : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'
-                }`}
-              >
-                <span>{speed}x</span>
-                <svg
-                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${isSpeedDropdownOpen ? 'rotate-180' : ''} ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              {isSpeedDropdownOpen && (
-                <div className={`absolute z-30 mt-1 w-[64px] rounded-lg border shadow-lg custom-scrollbar ${
-                  isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
-                }`}>
-                  {SPEED_OPTIONS.map(s => (
-                    <button
-                      type="button"
-                      key={s}
-                      onClick={() => {
-                        setSpeed(s);
-                        setIsSpeedDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 text-xs font-semibold truncate cursor-pointer transition-colors ${
-                        speed === s
-                          ? (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-50 text-green-700')
-                          : (isDarkMode ? 'text-[#EDF1FC] hover:bg-[#232B45]' : 'text-gray-700 hover:bg-gray-100')
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <Dropdown
+              value={speed}
+              onChange={setSpeed}
+              options={SPEED_OPTIONS.map(s => ({ value: s, label: `${s}x` }))}
+              isDarkMode={isDarkMode}
+              widthClass="w-[64px]"
+            />
 
             <div className="relative flex-1 min-w-[120px]">
               <input
@@ -1060,7 +953,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 className="w-full disabled:opacity-40"
               />
               {/* 경고/위험 진입 지점 마커 - 클릭하면 그 시점으로 바로 이동 */}
-              {durationMs > 0 && transitionEvents.filter(e => e.kind === 'warning').map(e => (
+              {durationMs > 0 && warningEvents.map(e => (
                 <button
                   key={e.id}
                   type="button"
@@ -1265,7 +1158,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   initialValue={r.temperature}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'temperature', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 focus:bg-white focus:border-green-600'
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                   } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                                 />
                               </td>
@@ -1275,7 +1168,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   initialValue={r.power ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'power', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                   }`}
                                 />
                               </td>
@@ -1285,7 +1178,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   initialValue={r.threshold ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(r, 'threshold', v)}
                                   className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#7D87A8] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-500 focus:bg-white focus:border-green-600'
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                   }`}
                                 />
                               </td>
@@ -1372,7 +1265,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                 initialValue={eq.temperature}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'temperature', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                 } ${statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text}`}
                               />
                             </td>
@@ -1382,7 +1275,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                 initialValue={eq.power ?? ''}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'power', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#EDF1FC] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-800 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
                                 }`}
                               />
                             </td>
@@ -1392,7 +1285,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                 initialValue={eq.threshold ?? ''}
                                 onChangeValue={(v) => handleCellValueEdit(eq, 'threshold', v)}
                                 className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-transparent border-transparent hover:bg-[#0D1224] hover:border-[#2A335A] text-[#7D87A8] focus:bg-[#0D1224] focus:border-[#22D3EE]' : 'bg-transparent border-transparent hover:bg-gray-50 hover:border-gray-300 text-gray-500 focus:bg-white focus:border-green-600'
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                 }`}
                               />
                             </td>
