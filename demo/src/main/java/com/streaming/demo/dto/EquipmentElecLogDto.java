@@ -1,10 +1,10 @@
 package com.streaming.demo.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.streaming.demo.entity.EquipmentLog;
+import com.streaming.demo.entity.EquipmentElecLog;
 import java.time.LocalDateTime;
 
-public class EquipmentLogDto {
+public class EquipmentElecLogDto {
     private Long id;
     private String type;
     private String equipId;
@@ -16,7 +16,7 @@ public class EquipmentLogDto {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createdAt;
 
-    public EquipmentLogDto(EquipmentLog entity) {
+    public EquipmentElecLogDto(EquipmentElecLog entity) {
         this.id = entity.getId();
         this.type = entity.getType().name().toLowerCase();
         this.equipId = entity.getEquipId();

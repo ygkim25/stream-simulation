@@ -4,8 +4,8 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "equipment_log")
-public class EquipmentLog {
+@Table(name = "equipment_temp_log")
+public class EquipmentTempLog {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -30,10 +30,10 @@ public class EquipmentLog {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
-    public EquipmentLog() {}
+    public EquipmentTempLog() {}
 
-    public EquipmentLog(LogType type, String equipId, String equipName, String message,
-                         Double value, Double threshold, LocalDateTime createdAt) {
+    public EquipmentTempLog(LogType type, String equipId, String equipName, String message,
+                             Double value, Double threshold, LocalDateTime createdAt) {
         this.type = type;
         this.equipId = equipId;
         this.equipName = equipName;

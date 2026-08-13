@@ -1,12 +1,12 @@
 package com.streaming.demo.service;
 
-import com.streaming.demo.dto.EquipmentStatusDto;
-import com.streaming.demo.entity.EquipmentAlert;
-import com.streaming.demo.entity.EquipmentHistory;
-import com.streaming.demo.entity.EquipmentStatus;
-import com.streaming.demo.repository.EquipmentAlertRepository;
-import com.streaming.demo.repository.EquipmentHistoryRepository;
-import com.streaming.demo.repository.EquipmentStatusRepository;
+import com.streaming.demo.dto.EquipmentElecStatusDto;
+import com.streaming.demo.entity.EquipmentElecAlert;
+import com.streaming.demo.entity.EquipmentElecHistory;
+import com.streaming.demo.entity.EquipmentElecStatus;
+import com.streaming.demo.repository.EquipmentElecAlertRepository;
+import com.streaming.demo.repository.EquipmentElecHistoryRepository;
+import com.streaming.demo.repository.EquipmentElecStatusRepository;
 import jakarta.annotation.PostConstruct;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -25,24 +25,25 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+// 전력 관제 도메인. 온도(EquipmentTempStatusService)와 완전히 독립된 설비 목록/임계값/알림/로그를 가짐
 @Service
 @RequiredArgsConstructor
-public class EquipmentStatusService {
+public class EquipmentElecStatusService {
 
     private static final long MIN_INTERVAL_MS = 3000;
     private static final long MAX_INTERVAL_MS = 15000;
     private static final double WARNING_MARGIN = 5.0; // 임계값과의 차이가 이보다 작으면 "경고"
 
-    private final EquipmentStatusRepository repository;
-    private final EquipmentHistoryRepository historyRepository;
-    private final EquipmentAlertRepository alertRepository;
-    private final EquipmentLogService equipmentLogService;
+    private final EquipmentElecStatusRepository repository;
+    private final EquipmentElecHistoryRepository historyRepository;
+    private final EquipmentElecAlertRepository alertRepository;
+    private final EquipmentElecLogService equipmentLogService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Qualifier("taskScheduler")
     private final TaskScheduler taskScheduler;
 
-    private final Map<String, EquipmentStatus> liveData = new ConcurrentHashMap<>();
+    private final Map<String, EquipmentElecStatus> liveData = new ConcurrentHashMap<>();
     private final Random random = new Random();
 
     @PostConstruct
@@ -51,14 +52,14 @@ public class EquipmentStatusService {
         liveData.keySet().forEach(this::scheduleNext);
     }
 
-    public List<EquipmentStatusDto> getAllEquipment() {
+    public List<EquipmentElecStatusDto> getAllEquipment() {
         return repository.findAll()
                 .stream()
-                .map(EquipmentStatusDto::new)
+                .map(EquipmentElecStatusDto::new)
                 .collect(Collectors.toList());
     }
 
-    // 설비별로 독립적인 다음 tick 예약 (1~15초 랜덤 간격)
+    // 설비별로 독립적인 다음 tick 예약 (3~15초 랜덤 간격)
     private void scheduleNext(String equipId) {
         long delayMs = MIN_INTERVAL_MS + random.nextInt((int) (MAX_INTERVAL_MS - MIN_INTERVAL_MS + 1));
         taskScheduler.schedule(() -> tick(equipId), Instant.now().plusMillis(delayMs));
@@ -67,40 +68,37 @@ public class EquipmentStatusService {
     // 설비 1건에 대한 계산 + (변경 시에만) 전송/저장
     private void tick(String equipId) {
         try {
-            EquipmentStatus eq = liveData.get(equipId);
+            EquipmentElecStatus eq = liveData.get(equipId);
             if (eq == null) {
                 return;
             }
 
-            double oldTemp1d = round1(eq.getTemperature());
+            double oldPower1d = round1(eq.getPower());
             String oldStatus = eq.getStatus();
 
-            double newTemp = round2(eq.getTemperature() + (random.nextDouble() - 0.5) * 3.0);
             double newPower = round2(eq.getPower() + (random.nextDouble() - 0.5) * 6.0);
-            eq.setTemperature(newTemp);
             eq.setPower(newPower);
 
-            if (round1(newTemp) != oldTemp1d) {
+            if (round1(newPower) != oldPower1d) {
                 LocalDateTime now = LocalDateTime.now();
-                String newStatus = determineStatus(newTemp, eq.getThreshold());
+                String newStatus = determineStatus(newPower, eq.getThreshold());
                 eq.setStatus(newStatus);
                 eq.setReceivedAt(now);
 
                 messagingTemplate.convertAndSend(
-                        "/topic/live/monitoring",
-                        List.of(new EquipmentStatusDto(eq)));
+                        "/topic/live/monitoring/elec",
+                        List.of(new EquipmentElecStatusDto(eq)));
 
-                historyRepository.save(new EquipmentHistory(
-                        eq.getEquipId(), eq.getTemperature(), eq.getPower(), newStatus, now));
+                historyRepository.save(new EquipmentElecHistory(
+                        eq.getEquipId(), eq.getPower(), newStatus, now));
 
                 // 정상 → 경고/위험으로 "새로 진입"할 때만 alert/log 기록 (같은 상태가 유지되는 동안은 중복 저장하지 않음)
                 boolean isWarningOrCritical = "경고".equals(newStatus) || "위험".equals(newStatus);
                 boolean statusChanged = !newStatus.equals(oldStatus);
 
                 if (isWarningOrCritical && statusChanged) {
-                    alertRepository.save(new EquipmentAlert(
-                            eq.getEquipId(), eq.getTemperature(), eq.getPower(),
-                            eq.getThreshold(), newStatus, now));
+                    alertRepository.save(new EquipmentElecAlert(
+                            eq.getEquipId(), eq.getPower(), eq.getThreshold(), newStatus, now));
                 }
 
                 if (statusChanged) {
@@ -114,10 +112,10 @@ public class EquipmentStatusService {
         }
     }
 
-    private String determineStatus(double temperature, double threshold) {
-        if (temperature >= threshold)
+    private String determineStatus(double power, double threshold) {
+        if (power >= threshold)
             return "위험";
-        if (threshold - temperature < WARNING_MARGIN)
+        if (threshold - power < WARNING_MARGIN)
             return "경고";
         return "정상";
     }
@@ -134,27 +132,28 @@ public class EquipmentStatusService {
 
     // 설비 설정 업데이트 (기존 설비면 수정, 없으면 신규 생성 - upsert)
     @Transactional
-    public void updateAll(List<EquipmentStatusDto> updatedList) {
+    public void updateAll(List<EquipmentElecStatusDto> updatedList) {
         List<String> newEquipIds = new ArrayList<>();
 
-        for (EquipmentStatusDto dto : updatedList) {
+        for (EquipmentElecStatusDto dto : updatedList) {
             if (dto.getEquipId() == null || dto.getEquipId().isBlank()) {
                 throw new IllegalArgumentException("설비 ID 값은 필수입니다.");
             }
 
-            EquipmentStatus eq = repository.findById(dto.getEquipId()).orElse(null);
+            EquipmentElecStatus eq = repository.findById(dto.getEquipId()).orElse(null);
             boolean isNew = (eq == null);
 
             if (isNew) {
-                if (dto.getEquipName() == null || dto.getTemperature() == null
-                        || dto.getPower() == null || dto.getThreshold() == null
-                        || dto.getLocation() == null) {
+                if (dto.getEquipName() == null || dto.getPower() == null
+                        || dto.getThreshold() == null || dto.getLocation() == null) {
                     throw new IllegalArgumentException(
-                            "신규 설비는 장비이름/온도/전력/임계값/위치 값을 모두 입력해야 합니다.");
+                            "신규 설비는 장비이름/전력/임계값/위치 값을 모두 입력해야 합니다.");
                 }
-                eq = new EquipmentStatus();
+                eq = new EquipmentElecStatus();
                 eq.setEquipId(dto.getEquipId());
             }
+
+            boolean valueOrThresholdChanged = dto.getThreshold() != null || dto.getPower() != null;
 
             if (dto.getEquipName() != null)
                 eq.setEquipName(dto.getEquipName());
@@ -162,15 +161,17 @@ public class EquipmentStatusService {
                 eq.setLocation(dto.getLocation());
             if (dto.getThreshold() != null)
                 eq.setThreshold(dto.getThreshold());
-            if (dto.getTemperature() != null)
-                eq.setTemperature(dto.getTemperature());
             if (dto.getPower() != null)
                 eq.setPower(dto.getPower());
-            // status는 body에 없으면 건드리지 않음 → 기존 값 유지 (신규는 아래에서 계산)
+
+            // 신규 설비이거나, 기존 설비의 전력/임계값이 바뀐 경우 status/receivedAt을 즉시 재계산
+            // (재계산하지 않으면 다음 자동 tick이 표시값을 바꿀 때까지 그리드에 stale 상태가 남음)
+            if (isNew || valueOrThresholdChanged) {
+                eq.setStatus(determineStatus(eq.getPower(), eq.getThreshold()));
+                eq.setReceivedAt(LocalDateTime.now());
+            }
 
             if (isNew) {
-                eq.setStatus(determineStatus(eq.getTemperature(), eq.getThreshold()));
-                eq.setReceivedAt(LocalDateTime.now());
                 newEquipIds.add(eq.getEquipId());
             }
 
