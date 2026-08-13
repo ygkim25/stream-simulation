@@ -1,17 +1,16 @@
 package com.streaming.demo.controller;
 
-import com.streaming.demo.dto.EquipmentAlertDto;
-import com.streaming.demo.dto.EquipmentLogDto;
-import com.streaming.demo.dto.EquipmentStatusDto;
-import com.streaming.demo.service.AlertNotificationSettingService;
-import com.streaming.demo.service.EquipmentLogService;
-import com.streaming.demo.service.EquipmentStatusService;
+import com.streaming.demo.dto.EquipmentTempAlertDto;
+import com.streaming.demo.dto.EquipmentTempLogDto;
+import com.streaming.demo.dto.EquipmentTempStatusDto;
+import com.streaming.demo.service.TempAlertNotificationSettingService;
+import com.streaming.demo.service.EquipmentTempLogService;
+import com.streaming.demo.service.EquipmentTempStatusService;
 
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-// import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -19,29 +18,25 @@ import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/live/monitoring")
-public class EquipmentController {
+@RequestMapping("/api/live/monitoring/temp")
+public class EquipmentTempController {
 
-    // @Autowired
-    // private EquipmentStatusService service;
-    private final EquipmentStatusService service;
-    private final AlertNotificationSettingService settingService;
-    private final EquipmentLogService logService;
+    private final EquipmentTempStatusService service;
+    private final TempAlertNotificationSettingService settingService;
+    private final EquipmentTempLogService logService;
 
     @GetMapping
-    public List<EquipmentStatusDto> getAllEquipment() {
-        System.out.println("========== EquipmentController ---- getAllEquipment() ==========");
+    public List<EquipmentTempStatusDto> getAllEquipment() {
         return service.getAllEquipment();
     }
 
     @PutMapping("/update")
-    public void updateEquipment(@RequestBody List<EquipmentStatusDto> updatedList) {
-        System.out.println("========== EquipmentController ---- updateEquipment() ==========");
+    public void updateEquipment(@RequestBody List<EquipmentTempStatusDto> updatedList) {
         service.updateAll(updatedList);
     }
 
     @GetMapping("/noti-warn")
-    public ResponseEntity<List<EquipmentAlertDto>> getWarningAlerts(
+    public ResponseEntity<List<EquipmentTempAlertDto>> getWarningAlerts(
             @AuthenticationPrincipal String userId) {
         return ResponseEntity.ok(settingService.getAlertsForUser(userId));
     }
@@ -49,13 +44,12 @@ public class EquipmentController {
     @PostMapping("/noti-warn/clear")
     public ResponseEntity<Map<String, String>> clearAlerts(
             @AuthenticationPrincipal String userId) {
-        System.out.println("========== EquipmentController ---- clearAlerts() ==========");
         settingService.clearAlerts(userId);
         return ResponseEntity.ok(Map.of("message", "모든 알림을 지웠습니다."));
     }
 
     @GetMapping("/logs")
-    public ResponseEntity<List<EquipmentLogDto>> getAllLogs(
+    public ResponseEntity<List<EquipmentTempLogDto>> getAllLogs(
             @AuthenticationPrincipal String userId) {
         return ResponseEntity.ok(logService.getLogsForUser(userId));
     }
@@ -63,9 +57,7 @@ public class EquipmentController {
     @PostMapping("/logs/clear")
     public ResponseEntity<Map<String, String>> clearLogs(
             @AuthenticationPrincipal String userId) {
-        System.out.println("========== EquipmentController ---- clearLogs() ==========");
         logService.clearLogsForUser(userId);
         return ResponseEntity.ok(Map.of("message", "모든 로그를 지웠습니다."));
     }
-
 }

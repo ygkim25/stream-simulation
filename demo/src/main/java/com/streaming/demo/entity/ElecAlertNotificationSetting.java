@@ -4,8 +4,8 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "log_clear_setting")
-public class LogClearSetting {
+@Table(name = "elec_alert_notification_setting")
+public class ElecAlertNotificationSetting {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -17,9 +17,9 @@ public class LogClearSetting {
     @Column(name = "cleared_at", nullable = false)
     private LocalDateTime clearedAt;
 
-    public LogClearSetting() {}
+    public ElecAlertNotificationSetting() {}
 
-    public LogClearSetting(String userId, LocalDateTime clearedAt) {
+    public ElecAlertNotificationSetting(String userId, LocalDateTime clearedAt) {
         this.userId = userId;
         this.clearedAt = clearedAt;
     }

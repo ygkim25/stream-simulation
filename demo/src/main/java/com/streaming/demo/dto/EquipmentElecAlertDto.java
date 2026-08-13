@@ -1,19 +1,17 @@
 package com.streaming.demo.dto;
 
-import com.streaming.demo.entity.EquipmentAlert;
+import com.streaming.demo.entity.EquipmentElecAlert;
 import java.time.LocalDateTime;
 
-public class EquipmentAlertDto {
+public class EquipmentElecAlertDto {
     private String equipId;
-    private Double temperature;
     private Double power;
     private Double threshold;
     private String status;
     private LocalDateTime recordedAt;
 
-    public EquipmentAlertDto(EquipmentAlert alert) {
+    public EquipmentElecAlertDto(EquipmentElecAlert alert) {
         this.equipId = alert.getEquipId();
-        this.temperature = alert.getTemperature();
         this.power = alert.getPower();
         this.threshold = alert.getThreshold();
         this.status = alert.getStatus();
@@ -21,7 +19,6 @@ public class EquipmentAlertDto {
     }
 
     public String getEquipId() { return equipId; }
-    public Double getTemperature() { return temperature; }
     public Double getPower() { return power; }
     public Double getThreshold() { return threshold; }
     public String getStatus() { return status; }
