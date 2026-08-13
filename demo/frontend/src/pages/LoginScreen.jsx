@@ -114,7 +114,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
             W
           </div>
           <h1 className={`text-2xl font-extrabold tracking-tight ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-900'}`}>
-            WCT
+            WeCT
           </h1>
         </div>
         

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
-  CartesianGrid, Tooltip, ReferenceLine,
+  CartesianGrid, Tooltip, ReferenceLine, ReferenceDot,
 } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
 
@@ -11,6 +11,8 @@ const FETCH_LIMIT = 500;
 // 처음 열었을 때 기본으로 보여줄 건수
 const DEFAULT_VISIBLE = 80;
 const MIN_VISIBLE = 20;
+// 팝업이 열려있는 동안 이 주기로 IndexedDB를 다시 조회해서 실시간 수신 데이터를 반영함
+const LIVE_REFRESH_MS = 2000;
 
 // ==========================================
 // 휠 스크롤로 독립적으로 확대/축소되는 단일 추이 차트
@@ -37,6 +39,7 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
   }, [rawData.length]);
 
   const chartData = rawData.slice(-visibleCount);
+  const lastPoint = chartData[chartData.length - 1];
 
   return (
     <div>
@@ -65,6 +68,19 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
                 label={{ value: `임계값 ${threshold}`, position: 'insideTopRight', fontSize: 10, fill: isDarkMode ? '#FBBF24' : '#D97706' }} />
             )}
             <Area type="monotone" dataKey={dataKeyName} stroke={color} strokeWidth={2} fill={`url(#${gradientId})`} dot={false} name={title} isAnimationActive={false} />
+            {/* 현재(가장 최근 수신) 위치를 굵은 점으로 표시 */}
+            {lastPoint && lastPoint[dataKeyName] != null && (
+              <ReferenceDot
+                x={lastPoint.time}
+                y={lastPoint[dataKeyName]}
+                r={5}
+                isFront
+                ifOverflow="extendDomain"
+                fill={color}
+                stroke={isDarkMode ? '#12172A' : '#FFFFFF'}
+                strokeWidth={2}
+              />
+            )}
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -85,8 +101,8 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, onClose, isDarkM
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      setIsLoading(true);
+    const load = async (isInitial) => {
+      if (isInitial) setIsLoading(true);
       try {
         const recent = await getRecentByEquipIdFromDB(equipId, FETCH_LIMIT);
         const mapped = recent
@@ -100,11 +116,16 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, onClose, isDarkM
       } catch (e) {
         console.error('설비 히스토리 조회 실패:', e);
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && isInitial) setIsLoading(false);
       }
     };
-    load();
-    return () => { cancelled = true; };
+    load(true);
+    // 팝업이 떠 있는 동안 실시간으로 들어오는 새 데이터를 반영하기 위해 주기적으로 재조회
+    const intervalId = setInterval(() => load(false), LIVE_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, [equipId]);
 
   const handleOverlayClick = (e) => {

@@ -23,7 +23,7 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
           <span className={`text-[17px] font-extrabold tracking-tight transition-colors ${
             isDarkMode ? 'text-[#EDF1FC] group-hover:text-[#22D3EE]' : 'text-gray-900 group-hover:text-green-700'
           }`}>
-            WCT
+            WeCT
           </span>
         </h1>
         {title && (

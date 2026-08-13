@@ -70,7 +70,8 @@ export const parseSimulationFile = (file) => {
           const temperature = Number(pickField(row, ['온도(℃)', '온도', 'temperature']));
           const power = Number(pickField(row, ['전력', 'power']));
           const threshold = Number(pickField(row, ['임계값(온도)', '임계값', '임계치', 'threshold']));
-          const explicitStatus = pickField(row, ['상태', 'status']);
+          const powerThresholdRaw = pickField(row, ['전력임계값', '전력 임계값', '임계값(전력)', 'powerThreshold']);
+          const powerThreshold = powerThresholdRaw !== undefined ? Number(powerThresholdRaw) : undefined;
           const timeRaw = pickField(row, ['수신 시간', '수신시간', '최초수신시간', '시간', 'time', 'Time']);
           let time = parseTimeValue(timeRaw);
 
@@ -87,7 +88,8 @@ export const parseSimulationFile = (file) => {
             temperature,
             power,
             threshold,
-            status: ['정상', '경고', '위험'].includes(explicitStatus) ? explicitStatus : computeStatus(temperature, threshold),
+            powerThreshold,
+            status: computeStatus(temperature, threshold),
             time,
           };
         }).filter(r => r.equipId);

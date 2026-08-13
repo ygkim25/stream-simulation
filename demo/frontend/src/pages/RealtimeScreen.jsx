@@ -107,10 +107,41 @@ const RealtimeScreen = ({
   const [loadError, setLoadError] = useState('');
   // 설정 탭 (설비명/위치/임계값)
   const [editedFields, setEditedFields] = useState({});
-  
-  // 누적 데이터 카운트
-  const [accumulatedCount, setAccumulatedCount] = useState(0);
-  const [flash, setFlash] = useState(false);
+
+  // 전력임계값: 백엔드에 아직 필드가 없어서(임계값은 온도만 있음) 프론트에서만 로컬로 관리 -
+  // 새로고침해도 유지되도록 localStorage에 저장 (다른 기기/사용자와는 공유되지 않음)
+  const [powerThresholds, setPowerThresholds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('powerThresholds');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const handlePowerThresholdChange = (equipId, value) => {
+    setPowerThresholds(prev => {
+      const next = { ...prev };
+      if (value === '') {
+        delete next[equipId];
+      } else {
+        next[equipId] = Number(value);
+      }
+      try {
+        localStorage.setItem('powerThresholds', JSON.stringify(next));
+      } catch (e) {
+        console.error('전력임계값 저장 실패:', e);
+      }
+      return next;
+    });
+  };
+  // 전력 상태 판정 (백엔드 EquipmentStatusService.determineStatus와 동일한 규칙을 전력에 적용)
+  const computePowerStatus = (power, threshold) => {
+    if (power == null || threshold == null || isNaN(power) || isNaN(threshold)) return null;
+    if (power >= threshold * 1.1) return '위험';
+    if (power >= threshold) return '경고';
+    return '정상';
+  };
+
   // 바뀐행 하이라이트
   const [flashedIds, setFlashedIds] = useState(() => new Set());
 
@@ -198,9 +229,6 @@ const RealtimeScreen = ({
     let isMounted = true;
 
     const setupWebSocket = async () => {
-      const existingCount = await countFromDB();
-      if (isMounted) setAccumulatedCount(existingCount);
-
       // 기존 클라이언트가 살아있다면 해제 후 재연결
       if (stompClientRef.current) {
         stompClientRef.current.deactivate();
@@ -266,11 +294,6 @@ const RealtimeScreen = ({
                 // 설비 ID로 비교해서 변경된 로우만 갱신 (전체 목록을 덮어쓰지 않음)
                 setEquipments(updated);
 
-                setFlash(true);
-                setTimeout(() => {
-                  if (isMounted) setFlash(false);
-                }, 500);
-
                 // 값이 바뀐 설비(행)만 잠깐 하이라이트
                 const changedIds = newDataList.map(item => item.equipId);
                 setFlashedIds(prev => new Set([...prev, ...changedIds]));
@@ -284,11 +307,6 @@ const RealtimeScreen = ({
                 }, 500);
 
                 await saveToDB(newDataList);
-
-                // 컴포넌트가 정상 마운트 상태일 때만 정확히 수신 개수만큼 누적 (+20)
-                if (isMounted) {
-                  setAccumulatedCount(prev => prev + newDataList.length);
-                }
               }
             } catch (e) {
               console.error('웹소켓 데이터 파싱 에러:', e);
@@ -762,19 +780,6 @@ const RealtimeScreen = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
-            <div className={`flex items-center gap-2 mr-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold ${
-              isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#7D87A8]' : 'bg-gray-50 border-gray-200 text-gray-500'
-            }`}>
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-transparent'}`}></span>
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${flash ? (isDarkMode ? 'bg-[#9FACC9]' : 'bg-gray-500') : 'bg-gray-400'}`}></span>
-              </span>
-              <span className="shrink-0">DB 수신량</span>
-              <span className={`min-w-[64px] text-right font-mono tabular-nums ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                {accumulatedCount.toLocaleString()}건
-              </span>
-            </div>
-
             {/* 기간 선택 (클릭하면 편집 팝오버) - 맨 오른쪽 */}
             <div className="relative">
               <button
@@ -1007,14 +1012,20 @@ const RealtimeScreen = ({
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
-                    {renderSortableHeader('equipId', 'ID', 'w-[9%]')}
-                    {renderSortableHeader('equipName', '설비명', 'w-[19%]')}
-                    {renderSortableHeader('location', '위치', 'w-[9%]')}
-                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[14%]')}
-                    {renderSortableHeader('temperature', '온도', 'w-[13%]')}
-                    {renderSortableHeader('power', '전력', 'w-[13%]')}
-                    {renderSortableHeader('threshold', '임계값(온도)', 'w-[13%]')}
-                    {renderSortableHeader('status', '상태', 'w-[10%]')}
+                    {renderSortableHeader('equipId', 'ID', 'w-[8%]')}
+                    {renderSortableHeader('equipName', '설비명', tabMode === 'threshold' ? 'w-[14%]' : 'w-[18%]')}
+                    {renderSortableHeader('location', '위치', 'w-[8%]')}
+                    {renderSortableHeader('receivedAt', '수신 시간', tabMode === 'threshold' ? 'w-[11%]' : 'w-[13%]')}
+                    {renderSortableHeader('temperature', '온도', tabMode === 'threshold' ? 'w-[10%]' : 'w-[12%]')}
+                    {renderSortableHeader('power', '전력', tabMode === 'threshold' ? 'w-[10%]' : 'w-[12%]')}
+                    {/* 평소엔 숨기고 설정 모드에서만 온도/전력 임계값을 나란히 편집 */}
+                    {tabMode === 'threshold' && (
+                      <>
+                        {renderSortableHeader('threshold', '임계값(온도)', 'w-[12%]')}
+                        <th className={`w-[12%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(전력)</th>
+                      </>
+                    )}
+                    {renderSortableHeader('status', '상태', tabMode === 'threshold' ? 'w-[15%]' : 'w-[19%]')}
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1060,6 +1071,16 @@ const RealtimeScreen = ({
                         <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="number" value={row.threshold} onChange={(e) => handleNewRowChange(row.tempId, 'threshold', e.target.value)} placeholder="임계값" className={inputClass} />
                         </td>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
+                          <input
+                            type="number"
+                            value={powerThresholds[row.equipId] ?? ''}
+                            onChange={(e) => handlePowerThresholdChange(row.equipId, e.target.value)}
+                            placeholder="임계값(전력)"
+                            title="전력임계값은 이 브라우저에만 저장됩니다 (서버에는 저장되지 않음)"
+                            className={inputClass}
+                          />
+                        </td>
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
                           <button
                             onClick={() => handleRemoveNewRow(row.tempId)}
@@ -1079,14 +1100,14 @@ const RealtimeScreen = ({
 
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                      <td colSpan={tabMode === 'threshold' ? 9 : 7} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                         {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
                   )}
                   {equipments.length > 0 && filteredEquipments.length === 0 && (
                     <tr>
-                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                      <td colSpan={tabMode === 'threshold' ? 9 : 7} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                         {equipSearch
                           ? `'${equipSearch}'에 대한 검색 결과가 없습니다.`
                           : '해당하는 상태의 설비가 없습니다.'}
@@ -1197,32 +1218,58 @@ const RealtimeScreen = ({
                             {eq.power != null ? Number(eq.power).toFixed(1) : '–'}
                           </span>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
-                          <div className="flex items-center justify-center h-full">
-                            {tabMode === 'threshold' ? (
-                              <input
-                                type="number"
-                                value={editedFields[eq.equipId]?.threshold !== undefined ? editedFields[eq.equipId].threshold : (eq.threshold ?? '')}
-                                onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
-                                className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                                }`}
-                              />
-                            ) : (
-                              <span className={`inline-flex items-center justify-center w-[70px] h-[30px] text-xs shrink-0 ${
-                                isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
-                              }`}>
-                                {eq.threshold ?? '–'}
-                              </span>
-                            )}
-                          </div>
-                        </td>
+                        {/* 평소엔 숨기고 설정 모드에서만 온도/전력 임계값을 편집 */}
+                        {tabMode === 'threshold' && (
+                          <>
+                            <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
+                              <div className="flex items-center justify-center h-full">
+                                <input
+                                  type="number"
+                                  value={editedFields[eq.equipId]?.threshold !== undefined ? editedFields[eq.equipId].threshold : (eq.threshold ?? '')}
+                                  onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                  }`}
+                                />
+                              </div>
+                            </td>
+                            <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
+                              <div className="flex items-center justify-center h-full">
+                                <input
+                                  type="number"
+                                  value={powerThresholds[eq.equipId] ?? ''}
+                                  onChange={(e) => handlePowerThresholdChange(eq.equipId, e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  title="전력임계값은 이 브라우저에만 저장됩니다 (서버에는 저장되지 않음)"
+                                  className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                  }`}
+                                />
+                              </div>
+                            </td>
+                          </>
+                        )}
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
-                          <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
-                            {statusMeta.label}
-                          </span>
+                          <div className="flex flex-col items-center justify-center gap-0.5">
+                            <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
+                              {statusMeta.label}
+                            </span>
+                            {(() => {
+                              const powerThreshold = powerThresholds[eq.equipId];
+                              const powerStatus = computePowerStatus(eq.power, powerThreshold);
+                              if (powerThreshold == null || powerStatus == null) return null;
+                              const powerMeta = getStatusMeta(powerStatus);
+                              const powerStyle = STATUS_STYLES[powerMeta.color][isDarkMode ? 'dark' : 'light'];
+                              return (
+                                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold whitespace-nowrap ${powerStyle.text}`} title="전력 상태">
+                                  <span className={`w-1 h-1 rounded-full ${powerStyle.dot}`} />
+                                  전력 {powerMeta.label}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </td>
                       </tr>
                     );
