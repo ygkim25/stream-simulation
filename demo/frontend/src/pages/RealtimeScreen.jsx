@@ -9,7 +9,8 @@ import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentTrendGrid from '../components/EquipmentTrendGrid';
 import Dropdown from '../components/Dropdown';
-import { saveToDB, countFromDB, getByDateRangeFromDB } from '../utils/indexedDb';
+import EquipTimelineBar from '../components/EquipTimelineBar';
+import { saveToDB, countFromDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
 import { formatForDateTimeInput } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
@@ -17,6 +18,57 @@ import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
+// "전체 흐름" 타임라인이 보여주는 고정 창 크기 (항상 "지금" 기준 최근 1시간)
+const TIMELINE_WINDOW_MS = 60 * 60 * 1000;
+// 브라우저 로컬 기록(IndexedDB) 보관 기간 - 이보다 오래된 데이터는 주기적으로 지워서
+// 저장소가 무한정 커지는 것을 막음 (자정 기준 "당일"로 끊으면 자정 직후 "최근 1시간" 흐름이
+// 끊기는 문제가 있어서, 달력 날짜 대신 롤링 24시간 창으로 둠)
+const LOCAL_DB_RETENTION_MS = 24 * 60 * 60 * 1000;
+const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(자주 할 필요 없음)
+
+// "전체 흐름"을 새로고침 직후에도 빈 상태로 보이지 않게, 마지막으로 계산된 결과를 로컬에 캐싱해둠
+// (IndexedDB 조회는 비동기라 아무리 빨라도 첫 페인트 전엔 못 끝내지만, localStorage는 동기라
+// state 초기값으로 바로 쓸 수 있음 - 새로고침 직후 잠깐 살짝 오래된 값이 보이다가 곧바로
+// 최신 조회 결과로 갱신되는 정도라 실사용상 문제없음)
+const TIMELINE_CACHE_KEY = 'realtimeTimelineCache';
+
+const loadCachedTimelines = () => {
+  try {
+    return JSON.parse(localStorage.getItem(TIMELINE_CACHE_KEY)) || null;
+  } catch {
+    return null;
+  }
+};
+
+const saveCachedTimelines = (result) => {
+  try {
+    localStorage.setItem(TIMELINE_CACHE_KEY, JSON.stringify(result));
+  } catch {
+    // localStorage를 못 쓰는 환경(프라이빗 모드 등)이면 캐싱 없이 그냥 조회 결과만 사용
+  }
+};
+
+// 설비 하나에 대해 [{time, color}] 목록을, 시간순 색 구간(전체 흐름 바에 그대로 넘길 수 있는 형태)으로 변환
+const buildTimelineSegments = (byEquip, startMs, endMs) => {
+  const result = {};
+  byEquip.forEach((list, equipId) => {
+    const sorted = [...list].sort((a, b) => a.time - b.time);
+    const segments = [];
+    sorted.forEach((point, idx) => {
+      const segEnd = idx < sorted.length - 1 ? sorted[idx + 1].time : endMs;
+      const widthPct = ((segEnd - point.time) / (endMs - startMs)) * 100;
+      if (widthPct <= 0) return;
+      const last = segments[segments.length - 1];
+      if (last && last.color === point.color) {
+        last.widthPct += widthPct;
+      } else {
+        segments.push({ color: point.color, widthPct });
+      }
+    });
+    result[equipId] = segments;
+  });
+  return result;
+};
 
 // 기간 선택 팝오버의 "빠른 선택" 프리셋 목록
 const PRESET_OPTIONS = [
@@ -43,6 +95,67 @@ const STATUS_FILTER_ACTIVE_CLASS = {
   danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
 };
 
+// 백엔드가 온도(EquipmentTempStatusDto)/전력(EquipmentElecStatusDto)을 완전히 별개 도메인으로 내려주므로
+// (둘 다 threshold/status라는 같은 이름의 필드를 각자 갖고 있음), 화면에서 쓰는 한 행으로 합칠 때
+// 전력 쪽은 powerThreshold/powerStatus로 이름을 바꿔서 온도 값과 섞이지 않게 함
+const EMPTY_EQUIP_ROW = { temperature: null, threshold: null, status: null, power: null, powerThreshold: null, powerStatus: null };
+const mergeTempDto = (row, dto) => ({
+  ...row,
+  equipId: dto.equipId,
+  equipName: dto.equipName,
+  location: dto.location,
+  receivedAt: dto.receivedAt,
+  temperature: dto.temperature,
+  threshold: dto.threshold,
+  status: dto.status,
+});
+const mergeElecDto = (row, dto) => ({
+  ...row,
+  equipId: dto.equipId,
+  equipName: dto.equipName,
+  location: dto.location,
+  receivedAt: dto.receivedAt,
+  power: dto.power,
+  powerThreshold: dto.threshold,
+  powerStatus: dto.status,
+});
+// 같은 equipId의 온도/전력 응답 목록을 한 행씩으로 합쳐서 반환 (초기 목록 조회 시 사용)
+const mergeEquipmentLists = (tempList, elecList) => {
+  const byId = new Map();
+  tempList.forEach(dto => {
+    byId.set(dto.equipId, mergeTempDto({ ...EMPTY_EQUIP_ROW }, dto));
+  });
+  elecList.forEach(dto => {
+    const existing = byId.get(dto.equipId) || { ...EMPTY_EQUIP_ROW };
+    byId.set(dto.equipId, mergeElecDto(existing, dto));
+  });
+  return [...byId.values()];
+};
+
+// 온도/전력 API를 항상 같이 호출하는데, Promise.all로 묶어서 기다리면
+// (1) 하나만 실패해도 둘 다 날아가고 (2) 느린 쪽 하나 때문에 다 받아온 빠른 쪽까지 화면에 늦게 뜨는
+// 문제가 있었음. 각 요청을 독립적으로 처리해서, 먼저 도착한 쪽은 바로 반영하고 실패한 쪽은
+// 그 쪽만 빈 값으로 대체함. 그래도 "둘 다 끝난 뒤"가 필요한 호출부(예: 저장 후 새로고침)를 위해
+// 두 요청이 모두 끝나는 Promise도 반환함
+const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
+  let tempData;
+  let elecData;
+  const emit = () => {
+    if (tempData !== undefined || elecData !== undefined) {
+      onUpdate(tempData || [], elecData || []);
+    }
+  };
+  const tempPromise = axios.get(tempUrl, { headers })
+    .then(res => { tempData = res.data || []; })
+    .catch(err => { console.error(`요청 실패 (${tempUrl}):`, err); tempData = tempData ?? []; })
+    .finally(emit);
+  const elecPromise = axios.get(elecUrl, { headers })
+    .then(res => { elecData = res.data || []; })
+    .catch(err => { console.error(`요청 실패 (${elecUrl}):`, err); elecData = elecData ?? []; })
+    .finally(emit);
+  return Promise.all([tempPromise, elecPromise]);
+};
+
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
@@ -58,6 +171,8 @@ const RealtimeScreen = ({
   setIsDarkMode
 }) => {
   const [tabMode, setTabMode] = useState('stream');
+  // 온도/전력을 완전히 분리된 탭으로 봄 (값/임계값/상태 컬럼이 탭에 따라 통째로 바뀜)
+  const [metricTab, setMetricTab] = useState('temperature'); // 'temperature' | 'power'
   const [selectedEquipId, setSelectedEquipId] = useState(null);
   const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin';
   // 설비 클릭 시 온도/전력 히스토리 차트 팝업에 띄울 설비 ID
@@ -105,42 +220,8 @@ const RealtimeScreen = ({
   const [equipments, setEquipments] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState('');
-  // 설정 탭 (설비명/위치/임계값)
+  // 설정 탭 (설비명/위치/임계값(온도)/임계값(전력))
   const [editedFields, setEditedFields] = useState({});
-
-  // 전력임계값: 백엔드에 아직 필드가 없어서(임계값은 온도만 있음) 프론트에서만 로컬로 관리 -
-  // 새로고침해도 유지되도록 localStorage에 저장 (다른 기기/사용자와는 공유되지 않음)
-  const [powerThresholds, setPowerThresholds] = useState(() => {
-    try {
-      const saved = localStorage.getItem('powerThresholds');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-  const handlePowerThresholdChange = (equipId, value) => {
-    setPowerThresholds(prev => {
-      const next = { ...prev };
-      if (value === '') {
-        delete next[equipId];
-      } else {
-        next[equipId] = Number(value);
-      }
-      try {
-        localStorage.setItem('powerThresholds', JSON.stringify(next));
-      } catch (e) {
-        console.error('전력임계값 저장 실패:', e);
-      }
-      return next;
-    });
-  };
-  // 전력 상태 판정 (백엔드 EquipmentStatusService.determineStatus와 동일한 규칙을 전력에 적용)
-  const computePowerStatus = (power, threshold) => {
-    if (power == null || threshold == null || isNaN(power) || isNaN(threshold)) return null;
-    if (power >= threshold * 1.1) return '위험';
-    if (power >= threshold) return '경고';
-    return '정상';
-  };
 
   // 바뀐행 하이라이트
   const [flashedIds, setFlashedIds] = useState(() => new Set());
@@ -224,6 +305,27 @@ const RealtimeScreen = ({
     setAlarms(prev => prev.filter(a => a.id !== id));
   };
 
+  // receivedAtMs 인덱스 도입 이전 기록들을 백그라운드에서 채워 넣음 (앱을 막지 않도록 fire-and-forget,
+  // 이미 끝났으면 내부적으로 바로 스킵됨)
+  useEffect(() => {
+    backfillReceivedAtMsIfNeeded().catch(err => {
+      console.error('receivedAtMs 백필 실패:', err);
+    });
+  }, []);
+
+  // 브라우저 로컬 기록(IndexedDB) 정리 - 오래된 데이터를 계속 지워서 저장소가 무한정 커지는 것을
+  // 막음 (안 지우면 시간이 지날수록 조회들이 갈수록 느려짐). 마운트 시 한 번 + 30분마다 반복
+  useEffect(() => {
+    const prune = () => {
+      pruneOldRecordsFromDB(Date.now() - LOCAL_DB_RETENTION_MS).catch(err => {
+        console.error('로컬 기록 정리 실패:', err);
+      });
+    };
+    prune();
+    const intervalId = setInterval(prune, PRUNE_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, []);
+
   // 웹소켓 연결
   useEffect(() => {
     let isMounted = true;
@@ -253,7 +355,10 @@ const RealtimeScreen = ({
           fetchAlerts();
           fetchLogs();
 
-          client.subscribe('/topic/live/monitoring', async (message) => {
+          // 온도/전력 각각의 실시간 틱을 처리하는 핸들러. 도메인이 완전히 분리되어 있어서
+          // (온도 틱은 temperature/threshold/status만, 전력 틱은 power/threshold/status만 들고 옴)
+          // 기존 행을 통째로 덮어쓰면 안 되고, 해당 도메인 필드만 갱신해야 다른 쪽 값이 안 날아감
+          const handleLiveMessage = (domain) => async (message) => {
             if (!isMounted) return;
 
             try {
@@ -269,20 +374,23 @@ const RealtimeScreen = ({
               }
 
               if (newDataList.length > 0) {
+                const mergeDto = domain === 'temp' ? mergeTempDto : mergeElecDto;
+                const statusField = domain === 'temp' ? 'status' : 'powerStatus';
+
                 // 실시간 스트림에서 상태 전환(정상↔경고/위험)이 감지되면 noti-warn/logs를 재조회함
                 // (짧은 시간에 여러 건이 몰려도 scheduleAlertsFetch가 한 번으로 묶어서 요청함)
                 let hasTransition = false;
                 const updated = [...equipmentsRef.current];
-                newDataList.forEach(newItem => {
-                  const idx = updated.findIndex(eq => eq.equipId === newItem.equipId);
-                  const prevStatus = idx >= 0 ? updated[idx].status : undefined;
-                  if (idx >= 0 && newItem.status !== prevStatus) {
+                newDataList.forEach(dto => {
+                  const idx = updated.findIndex(eq => eq.equipId === dto.equipId);
+                  const prevStatus = idx >= 0 ? updated[idx][statusField] : undefined;
+                  if (idx >= 0 && dto.status !== prevStatus) {
                     hasTransition = true;
                   }
                   if (idx >= 0) {
-                    updated[idx] = newItem;
+                    updated[idx] = mergeDto(updated[idx], dto);
                   } else {
-                    updated.push(newItem);
+                    updated.push(mergeDto({ ...EMPTY_EQUIP_ROW }, dto));
                   }
                 });
                 equipmentsRef.current = updated;
@@ -311,7 +419,10 @@ const RealtimeScreen = ({
             } catch (e) {
               console.error('웹소켓 데이터 파싱 에러:', e);
             }
-          });
+          };
+
+          client.subscribe('/topic/live/monitoring/temp', handleLiveMessage('temp'));
+          client.subscribe('/topic/live/monitoring/elec', handleLiveMessage('elec'));
         },
 
         onStompError: (frame) => {
@@ -341,12 +452,14 @@ const RealtimeScreen = ({
     };
   }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
 
-  // 알림 전체 지우기 (백엔드 noti-warn 이력도 함께 초기화해야 재조회 시 다시 나타나지 않음)
+  // 알림 전체 지우기 (백엔드 noti-warn 이력도 온도/전력 둘 다 초기화해야 재조회 시 다시 나타나지 않음)
   const handleClearAlarms = async () => {
     try {
-      await axios.post('http://localhost:8086/api/live/monitoring/noti-warn/clear', {}, {
-        headers: { Authorization: `Bearer ${user.token}` },
-      });
+      const headers = { Authorization: `Bearer ${user.token}` };
+      await Promise.all([
+        axios.post('http://localhost:8086/api/live/monitoring/temp/noti-warn/clear', {}, { headers }),
+        axios.post('http://localhost:8086/api/live/monitoring/elec/noti-warn/clear', {}, { headers }),
+      ]);
     } catch (err) {
       console.error('알람 초기화 실패:', err);
     }
@@ -359,8 +472,8 @@ const RealtimeScreen = ({
     setAlarms([]);
   };
 
-  // 임계값 탭에 "진입할 때" 한 번만 값 세팅 (equipments를 deps에 넣으면 실시간 웹소켓
-  // 업데이트가 올 때마다 이 effect가 다시 돌면서 입력 중이던 값을 원래 값으로 덮어써버림)
+  // 임계값 탭에 "진입할 때"(또는 온도/전력 탭을 전환할 때) 값 세팅 (equipments를 deps에 넣으면
+  // 실시간 웹소켓 업데이트가 올 때마다 이 effect가 다시 돌면서 입력 중이던 값을 덮어써버림)
   useEffect(() => {
     if (tabMode === 'threshold') {
       const initialMap = {};
@@ -368,13 +481,13 @@ const RealtimeScreen = ({
         initialMap[eq.equipId] = {
           equipName: eq.equipName ?? '',
           location: eq.location ?? '',
-          threshold: eq.threshold ?? '',
+          threshold: (metricTab === 'temperature' ? eq.threshold : eq.powerThreshold) ?? '',
         };
       });
       setEditedFields(initialMap);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabMode]);
+  }, [tabMode, metricTab]);
 
   // 시간 프리셋 조절 함수
   const handlePresetRange = (presetType) => {
@@ -492,73 +605,78 @@ const RealtimeScreen = ({
     }));
   };
 
-  // 설비 그리드만 최신 데이터로 다시 불러오기 (전체 새로고침 없이)
-  const fetchEquipments = async () => {
-    try {
-      const response = await axios.get('http://localhost:8086/api/live/monitoring', {
-        headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
-      });
-      const data = response.data || [];
-      equipmentsRef.current = data;
-      setEquipments(data);
-    } catch (err) {
-      console.error('설비 목록 갱신 실패:', err);
-    }
+  // 설비 그리드만 최신 데이터로 다시 불러오기 (전체 새로고침 없이) - 온도/전력 API를 둘 다 불러서 합침.
+  // 둘 중 먼저 도착한 쪽부터 바로 화면에 반영됨
+  const fetchEquipments = () => {
+    const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+    return fetchBothDomains(
+      'http://localhost:8086/api/live/monitoring/temp',
+      'http://localhost:8086/api/live/monitoring/elec',
+      headers,
+      (tempData, elecData) => {
+        const data = mergeEquipmentLists(tempData, elecData);
+        equipmentsRef.current = data;
+        setEquipments(data);
+      }
+    );
   };
 
-  // 알람 조회
-  const fetchAlerts = async () => {
-    if (!user?.token) return;
-    try {
-      const response = await axios.get('http://localhost:8086/api/live/monitoring/noti-warn', {
-        headers: { Authorization: `Bearer ${user.token}` },
-      });
-      const mapped = (response.data || [])
-        .slice()
-        .reverse() // 백엔드는 최신순(DESC)으로 내려주므로, 오래된 것이 위 / 최신이 아래로 오도록 뒤집음
-        .map(item => {
-          const eq = equipmentsRef.current.find(e => e.equipId === item.equipId);
-          return {
-            id: `${item.equipId}-${item.recordedAt}`,
-            equipId: item.equipId,
-            equipName: eq?.equipName || item.equipId,
-            time: item.recordedAt ? new Date(item.recordedAt).toLocaleTimeString('ko-KR') : '-',
-            value: item.temperature,
+  // 알람 조회 (온도/전력 알람을 각각 조회해서 시간순으로 합침, 먼저 온 쪽부터 반영)
+  const fetchAlerts = () => {
+    if (!user?.token) return Promise.resolve();
+    const headers = { Authorization: `Bearer ${user.token}` };
+    return fetchBothDomains(
+      'http://localhost:8086/api/live/monitoring/temp/noti-warn',
+      'http://localhost:8086/api/live/monitoring/elec/noti-warn',
+      headers,
+      (tempData, elecData) => {
+        const tempAlerts = tempData.map(item => ({ ...item, metric: 'temperature', value: item.temperature }));
+        const elecAlerts = elecData.map(item => ({ ...item, metric: 'power', value: item.power }));
+        const mapped = [...tempAlerts, ...elecAlerts]
+          .sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
+          .map(item => {
+            const eq = equipmentsRef.current.find(e => e.equipId === item.equipId);
+            return {
+              id: `${item.metric}-${item.equipId}-${item.recordedAt}`,
+              equipId: item.equipId,
+              equipName: eq?.equipName || item.equipId,
+              time: item.recordedAt ? new Date(item.recordedAt).toLocaleTimeString('ko-KR') : '-',
+              value: item.value,
+              threshold: item.threshold,
+              location: eq?.location || '-',
+              metric: item.metric,
+            };
+          })
+          // 사용자가 개별 삭제(x)한 알람은 재조회 시 다시 나타나지 않도록 제외
+          .filter(a => !dismissedAlarmIdsRef.current.has(a.id));
+        setAlarms(mapped.slice(-MAX_ALARMS));
+      }
+    );
+  };
+
+  // 로그 조회 (온도/전력 로그를 각각 조회해서 시간순으로 합침, 먼저 온 쪽부터 반영)
+  const fetchLogs = () => {
+    if (!user?.token) return Promise.resolve();
+    const headers = { Authorization: `Bearer ${user.token}` };
+    return fetchBothDomains(
+      'http://localhost:8086/api/live/monitoring/temp/logs',
+      'http://localhost:8086/api/live/monitoring/elec/logs',
+      headers,
+      (tempData, elecData) => {
+        const mapped = [...tempData, ...elecData]
+          .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
+          .map(item => ({
+            id: `log-${item.id}`,
+            time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
+            type: item.type,
+            equipName: item.equipName,
+            message: item.message,
+            value: item.value,
             threshold: item.threshold,
-            location: eq?.location || '-',
-          };
-        })
-        // 사용자가 개별 삭제(x)한 알람은 재조회 시 다시 나타나지 않도록 제외
-        .filter(a => !dismissedAlarmIdsRef.current.has(a.id));
-      setAlarms(mapped.slice(-MAX_ALARMS));
-    } catch (err) {
-      console.error('알람 조회 실패:', err);
-    }
-  };
-
-  // 로그 조회
-  const fetchLogs = async () => {
-    if (!user?.token) return;
-    try {
-      const response = await axios.get('http://localhost:8086/api/live/monitoring/logs', {
-        headers: { Authorization: `Bearer ${user.token}` },
-      });
-      const mapped = (response.data || [])
-        .slice()
-        .reverse() // 백엔드는 최신순(DESC)으로 내려주므로, 오래된 것이 위 / 최신이 아래로 오도록 뒤집음
-        .map(item => ({
-          id: `log-${item.equipId}-${item.createdAt}`,
-          time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
-          type: item.type,
-          equipName: item.equipName,
-          message: item.message,
-          value: item.value,
-          threshold: item.threshold,
-        }));
-      setLogs(mapped.slice(-MAX_LOGS));
-    } catch (err) {
-      console.error('로그 조회 실패:', err);
-    }
+          }));
+        setLogs(mapped.slice(-MAX_LOGS));
+      }
+    );
   };
 
   // 임계값 설정 탭에서 그리드 맨 위에 인라인으로 추가되는 "신규 설비 입력 행"
@@ -614,40 +732,48 @@ const RealtimeScreen = ({
   };
 
   const handleSaveThresholds = async () => {
+    const isTemp = metricTab === 'temperature';
+    const valueField = isTemp ? 'temperature' : 'power';
+    const valueLabel = isTemp ? '온도' : '전력';
+
     for (const row of newRows) {
       if (!row.equipId.trim() || !row.equipName.trim() || !row.location.trim() ||
-          row.temperature === '' || row.power === '' || row.threshold === '') {
-        showAlert('신규 설비는 ID / 설비명 / 위치 / 온도 / 전력 / 임계값을 모두 입력해야 합니다.');
+          row[valueField] === '' || row.threshold === '') {
+        showAlert(`신규 설비는 ID / 설비명 / 위치 / ${valueLabel} / 임계값을 모두 입력해야 합니다.`);
         return;
       }
     }
 
-    const existingPayload = Object.entries(editedFields).map(([equipId, fields]) => ({
-      equipId,
-      equipName: fields.equipName,
-      location: fields.location,
-      threshold: fields.threshold === '' ? null : Number(fields.threshold),
-    }));
+    // 온도/전력이 완전히 분리된 API라서, 현재 탭의 도메인에 실제로 데이터가 있는 설비만
+    // payload에 넣음 (없는데 보내면 백엔드가 "신규 설비"로 오인해서 필수값 누락 에러를 던짐)
+    const existingPayload = Object.entries(editedFields)
+      .filter(([equipId]) => {
+        const eq = equipments.find(e => e.equipId === equipId);
+        return eq && (isTemp
+          ? (eq.temperature != null || eq.threshold != null || eq.status != null)
+          : (eq.power != null || eq.powerThreshold != null || eq.powerStatus != null));
+      })
+      .map(([equipId, fields]) => ({
+        equipId,
+        equipName: fields.equipName,
+        location: fields.location,
+        threshold: fields.threshold === '' ? null : Number(fields.threshold),
+      }));
 
     const newRowsPayload = newRows.map(row => ({
       equipId: row.equipId.trim(),
       equipName: row.equipName.trim(),
       location: row.location.trim(),
-      temperature: Number(row.temperature),
-      power: Number(row.power),
+      [valueField]: Number(row[valueField]),
       threshold: Number(row.threshold),
     }));
 
     const payload = [...existingPayload, ...newRowsPayload];
+    const updateUrl = `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
 
     try {
-      await axios.put(
-        'http://localhost:8086/api/live/monitoring/update',
-        payload,
-        {
-          headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
-        }
-      );
+      const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+      await axios.put(updateUrl, payload, { headers });
 
       setNewRows([]);
       await fetchEquipments();
@@ -697,19 +823,27 @@ const RealtimeScreen = ({
         case 'power':
           cmp = (a.power ?? -Infinity) - (b.power ?? -Infinity);
           break;
-        case 'threshold':
-          cmp = (a.threshold ?? -Infinity) - (b.threshold ?? -Infinity);
+        case 'threshold': {
+          // 온도/전력 탭에 따라 그 탭의 임계값 기준으로 정렬
+          const aThreshold = metricTab === 'temperature' ? a.threshold : a.powerThreshold;
+          const bThreshold = metricTab === 'temperature' ? b.threshold : b.powerThreshold;
+          cmp = (aThreshold ?? -Infinity) - (bThreshold ?? -Infinity);
           break;
-        case 'status':
-          cmp = STATUS_SORT_ORDER[getStatusMeta(a.status).label] - STATUS_SORT_ORDER[getStatusMeta(b.status).label];
+        }
+        case 'status': {
+          // 온도/전력 탭에 따라 그 탭의 상태 기준으로 정렬
+          const aStatus = metricTab === 'temperature' ? a.status : a.powerStatus;
+          const bStatus = metricTab === 'temperature' ? b.status : b.powerStatus;
+          cmp = STATUS_SORT_ORDER[getStatusMeta(aStatus).label] - STATUS_SORT_ORDER[getStatusMeta(bStatus).label];
           break;
+        }
         default:
           cmp = compareByEquipId(a, b);
       }
       return cmp * dir;
     });
     return list;
-  }, [equipments, sortColumn, sortDirection]);
+  }, [equipments, sortColumn, sortDirection, metricTab]);
 
   // ID / 설비명 검색 + 상태(정상/경고/위험) 필터링
   const filteredEquipments = useMemo(() => {
@@ -722,10 +856,10 @@ const RealtimeScreen = ({
     }
     if (statusFilter !== 'all') {
       const targetLabel = STATUS_FILTER_LABELS[statusFilter];
-      list = list.filter(eq => getStatusMeta(eq.status).label === targetLabel);
+      list = list.filter(eq => getStatusMeta(metricTab === 'temperature' ? eq.status : eq.powerStatus).label === targetLabel);
     }
     return list;
-  }, [sortedEquipments, equipSearch, statusFilter]);
+  }, [sortedEquipments, equipSearch, statusFilter, metricTab]);
 
   // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용)
   const statusCounts = equipments.reduce((acc, eq) => {
@@ -735,6 +869,63 @@ const RealtimeScreen = ({
     else acc.normal += 1;
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
+
+  // 설비별 "최근 1시간" 상태 흐름을 온도/전력 각각 따로 색 구간으로 계산.
+  // 날짜 범위 선택기와 무관하게 항상 "지금"을 오른쪽 끝으로 하는 고정 1시간 창을 보여주고,
+  // 주기적으로 다시 계산해서 창 자체가 계속 앞으로 흘러가며 새 데이터를 반영함
+  const [equipTimelines, setEquipTimelines] = useState(() => loadCachedTimelines() || {});
+  // 첫 조회가 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 표시를 해줌
+  // (캐시된 값이 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작함)
+  const [hasLoadedTimelinesOnce, setHasLoadedTimelinesOnce] = useState(() => loadCachedTimelines() !== null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const endMs = Date.now();
+      const startMs = endMs - TIMELINE_WINDOW_MS;
+      try {
+        const records = await getByDateRangeIndexedFromDB(startMs, endMs);
+        if (cancelled) return;
+
+        // 온도 도메인 기록엔 temperature가, 전력 도메인 기록엔 power가 들어있으므로
+        // (한 레코드가 둘 다 갖지는 않음) 값이 있는 쪽 맵에만 넣어서 도메인별로 분리함
+        const byEquipTemp = new Map();
+        const byEquipPower = new Map();
+        records.forEach(r => {
+          if (!r.receivedAt) return;
+          const t = new Date(r.receivedAt).getTime();
+          const point = { time: t, color: getStatusMeta(r.status).color };
+          if (r.temperature != null) {
+            if (!byEquipTemp.has(r.equipId)) byEquipTemp.set(r.equipId, []);
+            byEquipTemp.get(r.equipId).push(point);
+          }
+          if (r.power != null) {
+            if (!byEquipPower.has(r.equipId)) byEquipPower.set(r.equipId, []);
+            byEquipPower.get(r.equipId).push(point);
+          }
+        });
+
+        const tempSegments = buildTimelineSegments(byEquipTemp, startMs, endMs);
+        const powerSegments = buildTimelineSegments(byEquipPower, startMs, endMs);
+        const equipIds = new Set([...Object.keys(tempSegments), ...Object.keys(powerSegments)]);
+        const result = {};
+        equipIds.forEach(equipId => {
+          result[equipId] = { temperature: tempSegments[equipId] || [], power: powerSegments[equipId] || [] };
+        });
+
+        setEquipTimelines(result);
+        setHasLoadedTimelinesOnce(true);
+        saveCachedTimelines(result);
+      } catch (e) {
+        console.error('설비별 전체 흐름 조회 실패:', e);
+      }
+    };
+    load();
+    const intervalId = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, []);
 
   // 정렬 가능한 표 헤더 셀 (클릭 시 그 컬럼 기준으로 정렬, 다시 누르면 오름/내림차순 전환)
   const renderSortableHeader = (column, label, widthClass, extraClass = '') => {
@@ -748,7 +939,7 @@ const RealtimeScreen = ({
       >
         <span className="inline-flex items-center justify-center gap-0.5">
           {label}
-          <span className={`text-[9px] ${isActive ? '' : 'opacity-0'}`}>{sortDirection === 'asc' ? '▲' : '▼'}</span>
+          {isActive && <span className="text-[9px]">{sortDirection === 'asc' ? '▲' : '▼'}</span>}
         </span>
       </th>
     );
@@ -886,6 +1077,34 @@ const RealtimeScreen = ({
               isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'
             }`}>
               <div className="flex items-center gap-2.5 h-8">
+                {/* 온도 / 전력 탭 전환 (값/임계값/상태 컬럼이 통째로 바뀜) */}
+                <div className={`relative flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
+                  isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
+                }`}>
+                  <button
+                    type="button"
+                    onClick={() => setMetricTab('temperature')}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                      metricTab === 'temperature'
+                        ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                    }`}
+                  >
+                    온도
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMetricTab('power')}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                      metricTab === 'power'
+                        ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                    }`}
+                  >
+                    전력
+                  </button>
+                </div>
+
                 {/* ID / 설비명 검색 */}
                 <div className="relative">
                   <svg className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 pointer-events-none ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1013,19 +1232,13 @@ const RealtimeScreen = ({
                 }`}>
                   <tr className="h-[40px]">
                     {renderSortableHeader('equipId', 'ID', 'w-[8%]')}
-                    {renderSortableHeader('equipName', '설비명', tabMode === 'threshold' ? 'w-[14%]' : 'w-[18%]')}
+                    {renderSortableHeader('equipName', '설비명', 'w-[24%]')}
                     {renderSortableHeader('location', '위치', 'w-[8%]')}
-                    {renderSortableHeader('receivedAt', '수신 시간', tabMode === 'threshold' ? 'w-[11%]' : 'w-[13%]')}
-                    {renderSortableHeader('temperature', '온도', tabMode === 'threshold' ? 'w-[10%]' : 'w-[12%]')}
-                    {renderSortableHeader('power', '전력', tabMode === 'threshold' ? 'w-[10%]' : 'w-[12%]')}
-                    {/* 평소엔 숨기고 설정 모드에서만 온도/전력 임계값을 나란히 편집 */}
-                    {tabMode === 'threshold' && (
-                      <>
-                        {renderSortableHeader('threshold', '임계값(온도)', 'w-[12%]')}
-                        <th className={`w-[12%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(전력)</th>
-                      </>
-                    )}
-                    {renderSortableHeader('status', '상태', tabMode === 'threshold' ? 'w-[15%]' : 'w-[19%]')}
+                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[18%]')}
+                    {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[10%]')}
+                    {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[10%]')}
+                    {renderSortableHeader('status', '상태', 'w-[9%]')}
+                    <th className={`w-[13%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1063,23 +1276,17 @@ const RealtimeScreen = ({
                           -
                         </td>
                         <td className={`px-3 py-0 h-[52px] align-middle`}>
-                          <input type="number" value={row.temperature} onChange={(e) => handleNewRowChange(row.tempId, 'temperature', e.target.value)} placeholder="온도" className={inputClass} />
-                        </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle`}>
-                          <input type="number" value={row.power} onChange={(e) => handleNewRowChange(row.tempId, 'power', e.target.value)} placeholder="전력" className={inputClass} />
+                          {metricTab === 'temperature' ? (
+                            <input type="number" value={row.temperature} onChange={(e) => handleNewRowChange(row.tempId, 'temperature', e.target.value)} placeholder="온도" className={inputClass} />
+                          ) : (
+                            <input type="number" value={row.power} onChange={(e) => handleNewRowChange(row.tempId, 'power', e.target.value)} placeholder="전력" className={inputClass} />
+                          )}
                         </td>
                         <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <input type="number" value={row.threshold} onChange={(e) => handleNewRowChange(row.tempId, 'threshold', e.target.value)} placeholder="임계값" className={inputClass} />
                         </td>
-                        <td className={`px-3 py-0 h-[52px] align-middle`}>
-                          <input
-                            type="number"
-                            value={powerThresholds[row.equipId] ?? ''}
-                            onChange={(e) => handlePowerThresholdChange(row.equipId, e.target.value)}
-                            placeholder="임계값(전력)"
-                            title="전력임계값은 이 브라우저에만 저장됩니다 (서버에는 저장되지 않음)"
-                            className={inputClass}
-                          />
+                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                          -
                         </td>
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
                           <button
@@ -1100,14 +1307,14 @@ const RealtimeScreen = ({
 
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
-                      <td colSpan={tabMode === 'threshold' ? 9 : 7} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                         {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
                   )}
                   {equipments.length > 0 && filteredEquipments.length === 0 && (
                     <tr>
-                      <td colSpan={tabMode === 'threshold' ? 9 : 7} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                      <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                         {equipSearch
                           ? `'${equipSearch}'에 대한 검색 결과가 없습니다.`
                           : '해당하는 상태의 설비가 없습니다.'}
@@ -1115,7 +1322,11 @@ const RealtimeScreen = ({
                     </tr>
                   )}
                   {filteredEquipments.map((eq, idx) => {
-                    const statusMeta = getStatusMeta(eq.status);
+                    const isTemp = metricTab === 'temperature';
+                    const value = isTemp ? eq.temperature : eq.power;
+                    const threshold = isTemp ? eq.threshold : eq.powerThreshold;
+                    const status = isTemp ? eq.status : eq.powerStatus;
+                    const statusMeta = getStatusMeta(status);
                     const statusStyle = STATUS_STYLES[statusMeta.color][isDarkMode ? 'dark' : 'light'];
                     const isSelected = selectedEquipId === eq.equipId;
                     const isFlashed = flashedIds.has(eq.equipId);
@@ -1204,72 +1415,44 @@ const RealtimeScreen = ({
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
                           <span className={`text-sm font-mono font-bold tabular-nums ${
-                            statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
+                            status == null ? (isDarkMode ? 'text-[#5C6584]' : 'text-gray-400') : statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
                           }`}>
-                            {eq.temperature != null ? (
-                              <>{Number(eq.temperature).toFixed(1)}<span className="text-xs font-normal">℃</span></>
+                            {value != null ? (
+                              <>{Number(value).toFixed(1)}{isTemp && <span className="text-xs font-normal">℃</span>}</>
                             ) : '–'}
                           </span>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
-                          <span className={`text-sm font-mono font-bold tabular-nums ${
-                            isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
-                          }`}>
-                            {eq.power != null ? Number(eq.power).toFixed(1) : '–'}
-                          </span>
+                        <td className={`px-3 py-0 h-[52px] align-middle`}>
+                          <div className="flex items-center justify-center h-full">
+                            {tabMode === 'threshold' ? (
+                              <input
+                                type="number"
+                                value={editedFields[eq.equipId]?.threshold !== undefined ? editedFields[eq.equipId].threshold : (threshold ?? '')}
+                                onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
+                                }`}
+                              />
+                            ) : (
+                              <span className={`text-xs ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                                {threshold ?? '–'}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        {/* 평소엔 숨기고 설정 모드에서만 온도/전력 임계값을 편집 */}
-                        {tabMode === 'threshold' && (
-                          <>
-                            <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
-                              <div className="flex items-center justify-center h-full">
-                                <input
-                                  type="number"
-                                  value={editedFields[eq.equipId]?.threshold !== undefined ? editedFields[eq.equipId].threshold : (eq.threshold ?? '')}
-                                  onChange={(e) => handleFieldChange(eq.equipId, 'threshold', e.target.value)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                                  }`}
-                                />
-                              </div>
-                            </td>
-                            <td className={`px-3 py-0 h-[52px] font-mono align-middle`}>
-                              <div className="flex items-center justify-center h-full">
-                                <input
-                                  type="number"
-                                  value={powerThresholds[eq.equipId] ?? ''}
-                                  onChange={(e) => handlePowerThresholdChange(eq.equipId, e.target.value)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  title="전력임계값은 이 브라우저에만 저장됩니다 (서버에는 저장되지 않음)"
-                                  className={`w-[70px] h-[30px] rounded px-1.5 focus:outline-none text-center border text-xs leading-none transition-all shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
-                                    isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#EDF1FC] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-800 focus:border-green-600'
-                                  }`}
-                                />
-                              </div>
-                            </td>
-                          </>
-                        )}
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
-                          <div className="flex flex-col items-center justify-center gap-0.5">
+                          {status == null ? (
+                            <span className={`text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>–</span>
+                          ) : (
                             <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                               {statusMeta.label}
                             </span>
-                            {(() => {
-                              const powerThreshold = powerThresholds[eq.equipId];
-                              const powerStatus = computePowerStatus(eq.power, powerThreshold);
-                              if (powerThreshold == null || powerStatus == null) return null;
-                              const powerMeta = getStatusMeta(powerStatus);
-                              const powerStyle = STATUS_STYLES[powerMeta.color][isDarkMode ? 'dark' : 'light'];
-                              return (
-                                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold whitespace-nowrap ${powerStyle.text}`} title="전력 상태">
-                                  <span className={`w-1 h-1 rounded-full ${powerStyle.dot}`} />
-                                  전력 {powerMeta.label}
-                                </span>
-                              );
-                            })()}
-                          </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-0 h-[52px] align-middle">
+                          <EquipTimelineBar segments={equipTimelines[eq.equipId]?.[metricTab]} isDarkMode={isDarkMode} loading={!hasLoadedTimelinesOnce} />
                         </td>
                       </tr>
                     );

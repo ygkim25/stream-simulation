@@ -19,26 +19,43 @@ const LIVE_REFRESH_MS = 2000;
 // (온도/전력 차트가 서로 다른 인스턴스로 렌더되므로 각자 따로 확대/축소됨)
 // ==========================================
 const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, tooltipStyle, axisColor, gridColor, gradientId, isDarkMode, height = 180 }) => {
-  const [visibleCount, setVisibleCount] = useState(() => Math.min(DEFAULT_VISIBLE, rawData.length) || DEFAULT_VISIBLE);
+  // 온도/전력이 완전히 분리된 레코드로 저장되다 보니, rawData에는 이 지표 값이 없는(다른
+  // 지표 전용) 레코드도 섞여 있음. 그걸 그대로 Area의 dataKey에 넘기면 recharts가 null
+  // 지점마다 영역을 0까지 닫아버려서 선이 뾰족뾰족한 막대처럼 끊겨 보임 -> 이 지표 값이
+  // 실제로 있는 레코드만 걸러서 끊김 없는 배열로 만들어 사용
+  const metricData = rawData.filter(item => item[dataKeyName] != null);
+
+  const [visibleCount, setVisibleCount] = useState(() => Math.min(DEFAULT_VISIBLE, metricData.length) || DEFAULT_VISIBLE);
   const wheelAreaRef = useRef(null);
+  // 사용자가 휠로 직접 확대/축소하기 전까지는 표시 건수를 데이터 증가에 맞춰 같이 늘림.
+  // (이게 없으면 처음 열었을 때 데이터가 적었을 경우 - 예: 백엔드 막 재기동한 직후 - 그 적은
+  //  건수에 영구히 멈춰서, 이후 데이터가 아무리 쌓여도 그래프가 그대로인 것처럼 보임)
+  const hasUserZoomedRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasUserZoomedRef.current) {
+      setVisibleCount(Math.min(DEFAULT_VISIBLE, metricData.length) || DEFAULT_VISIBLE);
+    }
+  }, [metricData.length]);
 
   useEffect(() => {
     const el = wheelAreaRef.current;
     if (!el) return;
     const handleWheel = (e) => {
       e.preventDefault();
+      hasUserZoomedRef.current = true;
       const dir = e.deltaY > 0 ? 1 : -1; // 아래로 스크롤 = 더 넓은 기간, 위로 스크롤 = 더 좁은 기간
       setVisibleCount(prev => {
         const step = Math.max(4, Math.round(prev * 0.15));
         const next = prev + dir * step;
-        return Math.min(rawData.length || FETCH_LIMIT, Math.max(MIN_VISIBLE, next));
+        return Math.min(metricData.length || FETCH_LIMIT, Math.max(MIN_VISIBLE, next));
       });
     };
     el.addEventListener('wheel', handleWheel, { passive: false });
     return () => el.removeEventListener('wheel', handleWheel);
-  }, [rawData.length]);
+  }, [metricData.length]);
 
-  const chartData = rawData.slice(-visibleCount);
+  const chartData = metricData.slice(-visibleCount);
   const lastPoint = chartData[chartData.length - 1];
 
   return (

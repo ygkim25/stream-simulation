@@ -7,6 +7,8 @@ import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import SimulationTrendChart from '../components/SimulationTrendChart';
 import Dropdown from '../components/Dropdown';
+import EquipTimelineBar from '../components/EquipTimelineBar';
+import LoadingSpinner from '../components/LoadingSpinner';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi, renameScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFile, computeStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
@@ -14,40 +16,6 @@ import { useClickOutside } from '../utils/useClickOutside';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
-
-// 상태(정상/경고/위험) 타임라인 바 색상
-const TIMELINE_COLOR = {
-  green: { dark: '#34D399', light: '#22C55E' },
-  amber: { dark: '#FBBF24', light: '#F59E0B' },
-  red: { dark: '#FB5D75', light: '#EF4444' },
-};
-
-// ==========================================
-// 설비 하나의 전체 시나리오 구간(시작~끝) 상태 흐름을 색 띠로 보여주는 미니 타임라인
-// 재생 위치(playheadPct)를 세로선으로 표시해서 "지금 이 지점"이 전체에서 어디쯤인지 보여줌
-// ==========================================
-const EquipTimelineBar = ({ segments, playheadPct, isDarkMode }) => {
-  const trackColor = isDarkMode ? '#0D1224' : '#F3F4F6';
-  if (!segments || segments.length === 0) {
-    return <div className="w-full h-3.5 rounded" style={{ backgroundColor: trackColor }} />;
-  }
-  return (
-    <div className="relative w-full h-3.5 rounded overflow-hidden flex" style={{ backgroundColor: trackColor }}>
-      {segments.map((seg, i) => (
-        <div
-          key={i}
-          style={{ width: `${seg.widthPct}%`, backgroundColor: TIMELINE_COLOR[seg.color][isDarkMode ? 'dark' : 'light'] }}
-        />
-      ))}
-      {playheadPct != null && (
-        <div
-          className={`absolute top-0 bottom-0 w-[2px] ${isDarkMode ? 'bg-white' : 'bg-gray-900'}`}
-          style={{ left: `${Math.min(Math.max(playheadPct, 0), 100)}%` }}
-        />
-      )}
-    </div>
-  );
-};
 
 // ==========================================
 // 값 수정 셀 (온도/전력/임계값 입력창)
@@ -81,6 +49,8 @@ const EditableCell = ({ initialValue, onChangeValue, className }) => {
 // ==========================================
 const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [scenarios, setScenarios] = useState([]);
+  const [isLoadingScenarios, setIsLoadingScenarios] = useState(true); // 시나리오 목록 최초 조회 중
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false); // 선택한 시나리오 상세(로우) 조회 중
   const [selectedScenarioId, setSelectedScenarioId] = useState(null);
   const [rows, setRows] = useState([]); // 선택된 시나리오의 정규화된 원본 로우 (시간순 정렬)
 
@@ -238,6 +208,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     } catch (err) {
       console.error('시나리오 목록 조회 실패:', err);
       return [];
+    } finally {
+      setIsLoadingScenarios(false);
     }
   };
 
@@ -263,6 +235,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const handleSelectScenario = async (scenario) => {
     resetPlayback();
     setSelectedScenarioId(scenario.id);
+    setIsLoadingDetail(true);
     try {
       const detail = await getScenarioDetail(scenario.id, user?.token);
       setRows(detail.rows || []);
@@ -270,6 +243,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       console.error('시나리오 상세 조회 실패:', err);
       showAlert('시나리오를 불러오는 중 오류가 발생했습니다.');
       setRows([]);
+    } finally {
+      setIsLoadingDetail(false);
     }
   };
 
@@ -516,8 +491,8 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, elapsedMs, editedValues, startTimeMs, sortColumn, sortDirection]);
 
-  // 설비별 "시작~끝" 전체 상태 흐름을 색 구간으로 미리 계산 (재생 위치와 무관하게 한 번만 계산됨 -
-  // elapsedMs가 deps에 없어서 재생 중에도 매 틱마다 다시 계산되지 않음)
+  // 설비별 "시작~끝" 전체 상태 흐름을 온도/전력 각각 따로 색 구간으로 미리 계산
+  // (재생 위치와 무관하게 한 번만 계산됨 - elapsedMs가 deps에 없어서 재생 중에도 매 틱마다 다시 계산되지 않음)
   const equipTimelines = useMemo(() => {
     if (!rows.length || durationMs <= 0) return {};
     const byEquip = new Map();
@@ -527,19 +502,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     });
 
     const scenarioEndMs = startTimeMs + durationMs;
-    const result = {};
-    byEquip.forEach((list, equipId) => {
-      const sorted = [...list].sort((a, b) => a.time.getTime() - b.time.getTime());
-      const resolved = sorted.map(r => {
-        const rowTime = r.time.getTime();
-        const editedTemp = resolveEditedValue(equipId, 'temperature', rowTime);
-        const editedThreshold = resolveEditedValue(equipId, 'threshold', rowTime);
-        const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
-        const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
-        const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
-        return { time: rowTime, color: getStatusMeta(status).color };
-      });
-
+    const buildSegments = (resolved) => {
       const segments = [];
       resolved.forEach((point, idx) => {
         const segEnd = idx < resolved.length - 1 ? resolved[idx + 1].time : scenarioEndMs;
@@ -552,7 +515,31 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           segments.push({ color: point.color, widthPct });
         }
       });
-      result[equipId] = segments;
+      return segments;
+    };
+
+    const result = {};
+    byEquip.forEach((list, equipId) => {
+      const sorted = [...list].sort((a, b) => a.time.getTime() - b.time.getTime());
+      const resolvedTemp = sorted.map(r => {
+        const rowTime = r.time.getTime();
+        const editedTemp = resolveEditedValue(equipId, 'temperature', rowTime);
+        const editedThreshold = resolveEditedValue(equipId, 'threshold', rowTime);
+        const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+        const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+        const status = (editedTemp !== undefined || editedThreshold !== undefined) ? computeStatus(temperature, threshold) : r.status;
+        return { time: rowTime, color: getStatusMeta(status).color };
+      });
+      const resolvedPower = sorted.map(r => {
+        const rowTime = r.time.getTime();
+        const editedPower = resolveEditedValue(equipId, 'power', rowTime);
+        const editedPowerThreshold = resolveEditedValue(equipId, 'powerThreshold', rowTime);
+        const power = editedPower !== undefined ? editedPower : r.power;
+        const powerThreshold = editedPowerThreshold !== undefined ? editedPowerThreshold : r.powerThreshold;
+        const status = computeStatus(power, powerThreshold);
+        return { time: rowTime, color: getStatusMeta(status).color };
+      });
+      result[equipId] = { temperature: buildSegments(resolvedTemp), power: buildSegments(resolvedPower) };
     });
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -846,7 +833,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       >
         <span className="inline-flex items-center justify-center gap-0.5">
           {label}
-          <span className={`text-[9px] ${isActive ? '' : 'opacity-0'}`}>{sortDirection === 'asc' ? '▲' : '▼'}</span>
+          {isActive && <span className="text-[9px]">{sortDirection === 'asc' ? '▲' : '▼'}</span>}
         </span>
       </th>
     );
@@ -1092,7 +1079,11 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
           }`}>
             <h3 className={`text-xs font-bold px-1 mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>시뮬레이션 목록</h3>
 
-            {scenarios.length === 0 ? (
+            {isLoadingScenarios ? (
+              <div className="py-6">
+                <LoadingSpinner size="md" isDarkMode={isDarkMode} />
+              </div>
+            ) : scenarios.length === 0 ? (
               <p className={`text-xs px-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                 업로드 탭에서 엑셀 파일을 등록해 주세요.
               </p>
@@ -1169,6 +1160,10 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12m4.5-4.5v13.5" />
                 </svg>
                 왼쪽에서 시뮬레이션을 선택하거나,<br />엑셀 파일을 이 위에 드래그하거나 "엑셀 업로드" 버튼을 눌러 업로드하세요.
+              </div>
+            ) : isLoadingDetail ? (
+              <div className="flex-1 flex items-center justify-center">
+                <LoadingSpinner size="lg" isDarkMode={isDarkMode} label="시나리오를 불러오는 중..." />
               </div>
             ) : (
               <>
@@ -1395,7 +1390,16 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                               </div>
                             </td>
                             <td className="px-3 py-0 h-[52px] align-middle">
-                              <EquipTimelineBar segments={equipTimelines[eq.equipId]} playheadPct={playheadPct} isDarkMode={isDarkMode} />
+                              <div className="flex flex-col gap-1 justify-center">
+                                <div className="flex items-center gap-1">
+                                  <span className={`text-[8px] font-semibold shrink-0 w-4 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>온도</span>
+                                  <EquipTimelineBar segments={equipTimelines[eq.equipId]?.temperature} playheadPct={playheadPct} isDarkMode={isDarkMode} />
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className={`text-[8px] font-semibold shrink-0 w-4 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>전력</span>
+                                  <EquipTimelineBar segments={equipTimelines[eq.equipId]?.power} playheadPct={playheadPct} isDarkMode={isDarkMode} />
+                                </div>
+                              </div>
                             </td>
                           </tr>
                         );

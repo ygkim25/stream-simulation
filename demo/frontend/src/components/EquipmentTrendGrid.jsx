@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, memo } from 'react';
 import { ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
 import { getStatusMeta } from '../utils/statusStyles';
+import LoadingSpinner from './LoadingSpinner';
 
 // 카드 하나당 표시할 최근 데이터 포인트 수 (많을수록 시간 흐름이 더 촘촘하게 보임)
 const MAX_POINTS = 40;
@@ -22,6 +23,8 @@ const STATUS_COLOR = {
 const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts }) => {
   const [metric, setMetric] = useState('temperature'); // 'temperature' | 'power'
   const [historyMap, setHistoryMap] = useState({}); // equipId -> 시간순 정렬된 최근 데이터 배열
+  // 첫 조회가 끝나기 전까지는 "데이터가 확실히 부족함"과 구분해서 로딩 표시를 해줌
+  const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(false);
 
   // 매 조회 시점의 최신 설비 목록을 참조하기 위한 ref (interval을 재시작하지 않고도 최신 목록을 반영)
   const equipIdsRef = useRef([]);
@@ -29,7 +32,12 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     equipIdsRef.current = equipments.map(eq => eq.equipId);
   }, [equipments]);
 
+  // 마운트 시점엔 설비 목록이 아직 안 온 경우가 많아서(REST 조회가 끝나기 전) 예전엔 첫 조회가 그냥
+  // 빈 목록으로 건너뛰어지고, 다음 REFRESH_MS(4초) 주기까지 기다려야 카드가 채워졌음. 목록이 실제로
+  // 채워지는 시점에 맞춰 바로 첫 조회가 실행되도록 이 시점을 deps로 잡음
+  const hasEquipIds = equipments.length > 0;
   useEffect(() => {
+    if (!hasEquipIds) return;
     let cancelled = false;
     const load = async () => {
       const ids = equipIdsRef.current;
@@ -41,6 +49,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
         const grouped = {};
         ids.forEach((id, i) => { grouped[id] = results[i]; });
         setHistoryMap(grouped);
+        setHasLoadedHistoryOnce(true);
       } catch (e) {
         console.error('설비 추이 조회 실패:', e);
       }
@@ -48,7 +57,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     load();
     const intervalId = setInterval(load, REFRESH_MS);
     return () => { cancelled = true; clearInterval(intervalId); };
-  }, []);
+  }, [hasEquipIds]);
 
   const sortedEquipments = [...equipments].sort((a, b) => {
     const aNum = Number(a.equipId);
@@ -115,7 +124,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
               const latest = points.length > 0 ? points[points.length - 1].value : null;
               const prev = points.length > 1 ? points[points.length - 2].value : null;
               const delta = latest != null && prev != null ? latest - prev : null;
-              const statusColor = getStatusMeta(eq.status).color;
+              const statusColor = getStatusMeta(metric === 'temperature' ? eq.status : eq.powerStatus).color;
               const color = STATUS_COLOR[statusColor][isDarkMode ? 'dark' : 'light'];
               const gradientId = `spark-grad-${eq.equipId}-${metric}`;
               const glowId = `spark-glow-${eq.equipId}-${metric}`;
@@ -144,10 +153,6 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
                       <span className={`truncate text-[11px] font-semibold tracking-tight ${isDarkMode ? 'text-[#DCE2F5]' : 'text-gray-700'}`} title={eq.equipName}>
                         {eq.equipName}
                       </span>
-                      <span className="relative flex h-1.5 w-1.5 shrink-0">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-50" style={{ backgroundColor: color }} />
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ backgroundColor: color }} />
-                      </span>
                     </div>
                     <div className="flex items-baseline gap-1">
                       <span className="text-[15px] font-bold font-mono tabular-nums" style={{ color }}>
@@ -167,7 +172,11 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
                   </div>
 
                   <div style={{ height: 42 }} className="px-0.5 pb-0.5">
-                    {points.length > 1 ? (
+                    {!hasLoadedHistoryOnce ? (
+                      <div className="h-full flex items-center justify-center">
+                        <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
+                      </div>
+                    ) : points.length > 1 ? (
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={points} margin={{ top: 2, right: 4, left: 4, bottom: 0 }}>
                           <defs>
@@ -248,7 +257,7 @@ const areEqual = (prev, next) => {
   for (let i = 0; i < prev.equipments.length; i++) {
     const a = prev.equipments[i];
     const b = next.equipments[i];
-    if (a.equipId !== b.equipId || a.equipName !== b.equipName || a.status !== b.status) return false;
+    if (a.equipId !== b.equipId || a.equipName !== b.equipName || a.status !== b.status || a.powerStatus !== b.powerStatus) return false;
   }
   return true;
 };

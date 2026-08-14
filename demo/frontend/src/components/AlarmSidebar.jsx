@@ -9,6 +9,10 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
+  // 온도 / 전력 알람 탭 (metric 필드가 없으면 온도로 취급 - 시뮬레이션 모드처럼 온도만 있는 화면과 호환)
+  const [alarmMetricTab, setAlarmMetricTab] = useState('temperature');
+  const filteredAlarms = alarms.filter(a => (a.metric || 'temperature') === alarmMetricTab);
+
   // "지우기" 버튼 클릭 시 바로 지우지 않고 확인 팝업을 먼저 띄움
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const handleClearClick = () => setIsClearConfirmOpen(true);
@@ -39,14 +43,22 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
   // 알람이 처음 채워졌을 때는 맨 위(오래된 것)가 아니라 맨 아래(최신)부터 보이도록 즉시 이동
   // 이미 맨 아래를 보고 있었다면, 새 알람이 추가돼도 계속 맨 아래에 붙어있게 함
   useEffect(() => {
-    if (!hasScrolledInitially.current && alarms.length > 0) {
+    if (!hasScrolledInitially.current && filteredAlarms.length > 0) {
       scrollToBottom('auto');
       hasScrolledInitially.current = true;
       updateIsAtBottom(true);
     } else if (isAtBottomRef.current) {
       scrollToBottom('smooth');
     }
-  }, [alarms]);
+  }, [filteredAlarms]);
+
+  // 온도/전력 탭을 전환하면 목록 DOM이 새로 마운트되면서(key={alarmMetricTab}) 스크롤 위치가
+  // 0으로 초기화되는데, 위 effect의 "계속 맨 아래 붙어있기" 조건과 타이밍이 겹칠 수 있어
+  // 탭 전환 시에는 무조건 맨 아래(최신)로 이동하도록 별도로 확실히 처리함
+  useEffect(() => {
+    scrollToBottom('auto');
+    updateIsAtBottom(true);
+  }, [alarmMetricTab]);
 
   return (
     <div className={`w-full h-full rounded-xl flex flex-col overflow-hidden min-h-0 border transition-colors ${
@@ -60,19 +72,51 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
         isDarkMode ? 'bg-[#0F1526] border-[#1E253D]' : 'bg-gray-50 border-gray-200'
       }`}>
         <div className="flex items-center justify-between gap-2">
-          <div className={`font-bold text-[15px] flex items-center gap-2 tracking-tight shrink-0 ${
-            isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
-          }`}>
-            알람
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold ${
-              isDarkMode 
-                ? 'bg-[#FB5D75]/15 text-[#FB5D75]' 
+          <div className="flex items-center gap-2.5 shrink-0 min-w-0">
+            <span className={`font-bold text-[15px] tracking-tight shrink-0 ${
+              isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
+            }`}>
+              알람
+            </span>
+
+            {/* 온도 / 전력 알람 탭 전환 (개수 표시) */}
+            <div className={`relative flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
+              isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
+            }`}>
+              <button
+                type="button"
+                onClick={() => setAlarmMetricTab('temperature')}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                  alarmMetricTab === 'temperature'
+                    ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                }`}
+              >
+                온도
+              </button>
+              <button
+                type="button"
+                onClick={() => setAlarmMetricTab('power')}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                  alarmMetricTab === 'power'
+                    ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                }`}
+              >
+                전력
+              </button>
+            </div>
+
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0 ${
+              isDarkMode
+                ? 'bg-[#FB5D75]/15 text-[#FB5D75]'
                 : 'bg-red-100 text-red-600 border border-red-200'
             }`}>
-              {alarms.length}
+              {filteredAlarms.length}
             </span>
           </div>
-          <div className="flex gap-1.5 shrink-0">
+
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={openLogs}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer border ${
@@ -122,13 +166,14 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
       {/* 알람 카드 리스트 영역 (오래된 순 → 최신순, 최신이 아래쪽) */}
       <div className="relative flex-1 min-h-0">
         <div
+          key={alarmMetricTab}
           ref={listRef}
           onScroll={handleScroll}
-          className={`h-full overflow-y-auto p-3 space-y-2 transition-colors ${
+          className={`alarm-slide-down h-full overflow-y-auto p-3 space-y-2 transition-colors ${
             isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50/50'
           }`}
         >
-          {alarms.length === 0 ? (
+          {filteredAlarms.length === 0 ? (
             <div className={`h-full flex flex-col items-center justify-center text-sm gap-2 ${
               isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'
             }`}>
@@ -138,7 +183,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
               <span>{selectedEquipName ? '해당 설비에 대한 발생 알람이 없습니다.' : '감지된 이상 알람이 없습니다.'}</span>
             </div>
           ) : (
-            alarms.map(alarm => (
+            filteredAlarms.map(alarm => (
               <div
                 key={alarm.id}
                 onClick={() => onAlarmClick?.(alarm)}
@@ -176,7 +221,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
                   </span>
                 </div>
                 <p className={`text-[12px] font-medium ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-600'}`}>
-                  임계치 초과: <span className={`font-mono font-bold ${isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'}`}>{alarm.value}</span>
+                  {alarm.metric === 'power' ? '전력' : '온도'} 임계치 초과: <span className={`font-mono font-bold ${isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'}`}>{alarm.value}</span>
                   <span className={isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}> / 기준 </span>
                   <span className={`font-mono ${isDarkMode ? 'text-[#B9C2DE]' : 'text-gray-700'}`}>{alarm.threshold}</span>
                 </p>
@@ -189,7 +234,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
         </div>
 
         {/* 가장 아래(최신)로 이동하는 원형 플로팅 버튼 (맨 아래에 있을 땐 숨김) */}
-        {alarms.length > 0 && !isAtBottom && (
+        {filteredAlarms.length > 0 && !isAtBottom && (
           <button
             onClick={() => scrollToBottom()}
             title="최신 알람으로 이동"

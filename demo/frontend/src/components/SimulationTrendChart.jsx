@@ -164,7 +164,7 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick }) => 
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div>
         <div className="flex items-center gap-2 mb-1.5">
           <span className={`w-2 h-2 rounded-full ${isDarkMode ? 'bg-[#FB5D75]' : 'bg-red-500'}`} />
