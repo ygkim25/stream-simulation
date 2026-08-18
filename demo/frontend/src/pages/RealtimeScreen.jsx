@@ -9,9 +9,11 @@ import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentTrendGrid from '../components/EquipmentTrendGrid';
 import Dropdown from '../components/Dropdown';
+import Checkbox from '../components/Checkbox';
+import DateTimePicker from '../components/DateTimePicker';
 import EquipTimelineBar from '../components/EquipTimelineBar';
-import { saveToDB, countFromDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
-import { formatForDateTimeInput } from '../utils/dateFormat';
+import { saveToDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
+import { formatKoreanDateTime } from '../utils/dateFormat';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 
@@ -30,7 +32,10 @@ const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(�
 // (IndexedDB 조회는 비동기라 아무리 빨라도 첫 페인트 전엔 못 끝내지만, localStorage는 동기라
 // state 초기값으로 바로 쓸 수 있음 - 새로고침 직후 잠깐 살짝 오래된 값이 보이다가 곧바로
 // 최신 조회 결과로 갱신되는 정도라 실사용상 문제없음)
-const TIMELINE_CACHE_KEY = 'realtimeTimelineCache';
+// v2: 캐시 형태를 {metric: {equipId: segments}}에서 {equipId: {temperature, power}}로 바꿔서
+// (온도/전력을 항상 같이 계산하도록 변경) 키도 같이 바꿈 - 안 바꾸면 이전 형태로 저장된 캐시를
+// 읽었을 때 equipId로 조회해도 아무것도 안 나와서 "전체 흐름"이 새로고침 직후 텅 비어 보였음
+const TIMELINE_CACHE_KEY = 'realtimeTimelineCacheV2';
 
 const loadCachedTimelines = () => {
   try {
@@ -55,8 +60,11 @@ const buildTimelineSegments = (byEquip, startMs, endMs) => {
     const sorted = [...list].sort((a, b) => a.time - b.time);
     const segments = [];
     sorted.forEach((point, idx) => {
+      // 첫 구간은 실제 데이터 시작 시각이 아니라 창의 맨 처음(startMs)부터 채워서, 설비마다
+      // 데이터 보유량이 달라도 막대 전체 길이가 항상 똑같이(100%) 보이게 함
+      const segStart = idx === 0 ? startMs : point.time;
       const segEnd = idx < sorted.length - 1 ? sorted[idx + 1].time : endMs;
-      const widthPct = ((segEnd - point.time) / (endMs - startMs)) * 100;
+      const widthPct = ((segEnd - segStart) / (endMs - startMs)) * 100;
       if (widthPct <= 0) return;
       const last = segments[segments.length - 1];
       if (last && last.color === point.color) {
@@ -156,6 +164,63 @@ const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
   return Promise.all([tempPromise, elecPromise]);
 };
 
+// 엑셀 내보내기에서 백엔드 히스토리 조회에 쓰는 시간 형식 (yyyy-MM-dd'T'HH:mm:ss, 타임존 없이 서버와
+// 동일한 로컬 시각 그대로 보냄 - 백엔드가 LocalDateTime으로 그대로 파싱함)
+const formatLocalDateTime = (date) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+};
+
+// 백엔드 히스토리 내보내기 응답(CSV, 쌍따옴표로 콤마/줄바꿈 포함 필드를 감싸는 표준 형식)을 파싱함
+const parseCsv = (text) => {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.length > 0);
+  if (lines.length === 0) return [];
+  const headers = lines[0].split(',');
+  return lines.slice(1).map(line => {
+    const values = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+        } else {
+          cur += c;
+        }
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === ',') {
+        values.push(cur);
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    values.push(cur);
+    const row = {};
+    headers.forEach((h, i) => { row[h] = values[i]; });
+    return row;
+  });
+};
+
+// 로컬 보관 기간(24시간)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서 가져와서
+// 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
+const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
+  const url = `http://localhost:8086/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
+  const res = await axios.get(url, { headers, responseType: 'text', transformResponse: [(data) => data] });
+  const rows = parseCsv(res.data);
+  return rows.map(row => ({
+    equipId: row.equipId,
+    temperature: domain === 'temp' && row.temperature !== '' ? Number(row.temperature) : undefined,
+    power: domain === 'elec' && row.power !== '' ? Number(row.power) : undefined,
+    status: row.status,
+    // 백엔드는 "yyyy-MM-dd HH:mm:ss" 형식이라 그대로는 Date로 안정적으로 파싱되지 않는 브라우저가
+    // 있어서, 로컬 레코드와 같은 ISO 형식으로 맞춰줌
+    receivedAt: row.recordedAt ? row.recordedAt.replace(' ', 'T') : null,
+  }));
+};
+
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
@@ -235,6 +300,9 @@ const RealtimeScreen = ({
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState('');
+  // 엑셀 내보내기 시 온도/전력을 각각 포함할지 (체크박스 - 최소 하나는 항상 선택돼 있어야 함)
+  const [exportIncludeTemp, setExportIncludeTemp] = useState(true);
+  const [exportIncludePower, setExportIncludePower] = useState(true);
 
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
@@ -453,23 +521,20 @@ const RealtimeScreen = ({
   }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
 
   // 알림 전체 지우기 (백엔드 noti-warn 이력도 온도/전력 둘 다 초기화해야 재조회 시 다시 나타나지 않음)
-  const handleClearAlarms = async () => {
+  // 지금 보고 있는 지표(온도/전력)의 알람만 지움 - 다른 지표 알람은 그대로 둠
+  const handleClearAlarms = async (metric = metricTab) => {
+    const isTemp = metric === 'temperature';
     try {
       const headers = { Authorization: `Bearer ${user.token}` };
-      await Promise.all([
-        axios.post('http://localhost:8086/api/live/monitoring/temp/noti-warn/clear', {}, { headers }),
-        axios.post('http://localhost:8086/api/live/monitoring/elec/noti-warn/clear', {}, { headers }),
-      ]);
+      await axios.post(
+        `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/noti-warn/clear`,
+        {},
+        { headers }
+      );
     } catch (err) {
       console.error('알람 초기화 실패:', err);
     }
-    dismissedAlarmIdsRef.current = new Set();
-    try {
-      localStorage.removeItem('dismissedAlarmIds');
-    } catch (e) {
-      console.error('알람 삭제 목록 초기화 실패:', e);
-    }
-    setAlarms([]);
+    setAlarms(prev => prev.filter(a => (a.metric || 'temperature') !== metric));
   };
 
   // 임계값 탭에 "진입할 때"(또는 온도/전력 탭을 전환할 때) 값 세팅 (equipments를 deps에 넣으면
@@ -511,10 +576,7 @@ const RealtimeScreen = ({
   };
 
   // 시작 시간 변경 처리
-  const handleStartTimeChange = (e) => {
-    if (!e.target.value) return;
-    const selectedStart = new Date(e.target.value);
-
+  const handleStartTimeChange = (selectedStart) => {
     if (selectedStart > endTime) {
       showAlert('시작 시각은 종료 시각보다 나중일 수 없습니다.');
       return;
@@ -524,10 +586,7 @@ const RealtimeScreen = ({
   };
 
   // 종료 시간 변경 처리
-  const handleEndTimeChange = (e) => {
-    if (!e.target.value) return;
-    const selectedEnd = new Date(e.target.value);
-
+  const handleEndTimeChange = (selectedEnd) => {
     if (selectedEnd < startTime) {
       showAlert('종료 시각은 시작 시각보다 빠를 수 없습니다.');
       return;
@@ -537,6 +596,7 @@ const RealtimeScreen = ({
   };
 
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
+  // 로컬 보관 기간(24시간) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
   const handleExport = async () => {
     if (startTime >= endTime) {
       showAlert('시작 시각은 종료 시각보다 빨라야 합니다.');
@@ -544,49 +604,141 @@ const RealtimeScreen = ({
     }
 
     try {
-      const totalCount = await countFromDB();
-
-      if (totalCount === 0) {
-        showAlert('내보낼 누적 데이터가 없습니다.');
-        return;
-      }
-
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
+      const cutoffMs = Date.now() - LOCAL_DB_RETENTION_MS;
 
-      // 지정한 [startTime ~ endTime] 구간만 커서로 훑어서 가져옴 (전체 데이터를 먼저 다 읽지 않음)
-      const filteredData = await getByDateRangeFromDB(startMs, endMs);
+      // 요청 구간 중 최근 24시간과 겹치는 부분은 IndexedDB에서
+      let localData = [];
+      if (endMs > cutoffMs) {
+        const localStartMs = Math.max(startMs, cutoffMs);
+        localData = await getByDateRangeFromDB(localStartMs, endMs);
+      }
 
-      if (filteredData.length === 0) {
-        const startStr = startTime.toLocaleString('ko-KR');
-        const endStr = endTime.toLocaleString('ko-KR');
+      // 요청 구간 중 24시간보다 오래된 부분은 백엔드 히스토리에서 (온도/전력 각각 CSV로 내려줌).
+      // 온도/전력을 독립적으로 조회해서, 한쪽이 실패해도(혹은 그 구간에 데이터가 없어도) 성공한
+      // 쪽 데이터는 그대로 내보내기에 포함시킴 (Promise.all로 묶으면 하나만 실패해도 둘 다 날아감).
+      // 온도만/전력만 선택했으면 필요 없는 쪽은 아예 조회하지 않음
+      const needsTemp = exportIncludeTemp;
+      const needsPower = exportIncludePower;
+      let backendData = [];
+      if (startMs < cutoffMs) {
+        const backendEndMs = Math.min(endMs, cutoffMs);
+        const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+        const equipInfoById = new Map(equipmentsRef.current.map(eq => [String(eq.equipId), eq]));
+        // 히스토리 원본엔 설비명/위치/임계값이 없어서, 현재 설비 목록으로 최대한 채워 넣음
+        // (과거 시점의 실제 임계값은 따로 저장돼있지 않아 현재 값으로 대체하는 것뿐이라 참고용임)
+        const enrich = (rows) => rows.map(r => {
+          const info = equipInfoById.get(String(r.equipId));
+          const fallbackThreshold = r.temperature != null ? info?.threshold : info?.powerThreshold;
+          return {
+            ...r,
+            equipName: info?.equipName ?? r.equipId,
+            location: info?.location ?? '-',
+            threshold: r.threshold ?? fallbackThreshold ?? null,
+          };
+        });
+        const [tempResult, elecResult] = await Promise.allSettled([
+          needsTemp ? fetchHistoryFromBackend('temp', startTime, new Date(backendEndMs), headers) : Promise.resolve([]),
+          needsPower ? fetchHistoryFromBackend('elec', startTime, new Date(backendEndMs), headers) : Promise.resolve([]),
+        ]);
+        if (tempResult.status === 'fulfilled') backendData.push(...enrich(tempResult.value));
+        else if (needsTemp) console.error('온도 히스토리 조회 실패:', tempResult.reason);
+        if (elecResult.status === 'fulfilled') backendData.push(...enrich(elecResult.value));
+        else if (needsPower) console.error('전력 히스토리 조회 실패:', elecResult.reason);
+        if ((needsTemp && tempResult.status === 'rejected') || (needsPower && elecResult.status === 'rejected')) {
+          showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
+        }
+      }
+
+      // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함
+      const combinedRecords = [...localData, ...backendData]
+        .filter(r => (r.temperature != null && needsTemp) || (r.power != null && needsPower))
+        .sort((a, b) => {
+          const at = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
+          const bt = b.receivedAt ? new Date(b.receivedAt).getTime() : 0;
+          return at - bt;
+        });
+
+      if (combinedRecords.length === 0) {
+        const startStr = formatKoreanDateTime(startTime);
+        const endStr = formatKoreanDateTime(endTime);
         showAlert(`지정한 시간 구간 (${startStr} ~ ${endStr}) 내 수신 데이터가 없습니다.`);
         return;
       }
 
-      const exportData = filteredData.map(eq => ({
-        'ID': `#${String(eq.equipId).padStart(3, '0')}`,
-        '설비명': eq.equipName,
-        '위치': eq.location || '-',
-        '수신 시간': eq.receivedAt ? new Date(eq.receivedAt).toLocaleString('ko-KR') : '-',
-        '온도(℃)': eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-',
-        '전력': eq.power != null ? Number(eq.power).toFixed(1) : '-',
-        '임계값(온도)': eq.threshold ?? '-',
-        '상태': getStatusMeta(eq.status).label
-      }));
+      // 온도/전력이 서로 다른 시점에 독립적으로 기록돼서 원본은 한 행에 한쪽 값만 있는 경우가 많음.
+      // equipId별로 시간순으로 훑으면서, 방금 값이 없는 쪽은 마지막으로 알려진 값을 이어붙여
+      // 한 행에 온도/전력이 같이 보이도록 합침
+      const byEquip = new Map();
+      combinedRecords.forEach(r => {
+        if (!byEquip.has(r.equipId)) byEquip.set(r.equipId, []);
+        byEquip.get(r.equipId).push(r);
+      });
+      const mergedRows = [];
+      byEquip.forEach((list) => {
+        let lastTemp = null;
+        let lastTempThreshold = null;
+        let lastTempStatus = null;
+        let lastPower = null;
+        let lastPowerThreshold = null;
+        let lastPowerStatus = null;
+        list.forEach(r => {
+          if (r.temperature != null) { lastTemp = r.temperature; lastTempThreshold = r.threshold; lastTempStatus = r.status; }
+          if (r.power != null) { lastPower = r.power; lastPowerThreshold = r.threshold; lastPowerStatus = r.status; }
+          mergedRows.push({
+            equipId: r.equipId,
+            equipName: r.equipName,
+            location: r.location,
+            receivedAt: r.receivedAt,
+            temperature: lastTemp,
+            tempThreshold: lastTempThreshold,
+            tempStatus: lastTempStatus,
+            power: lastPower,
+            powerThreshold: lastPowerThreshold,
+            powerStatus: lastPowerStatus,
+          });
+        });
+      });
+
+      // 선택한 지표에 해당하는 컬럼만 넣음 (둘 다 선택했으면 온도/전력 컬럼을 모두 포함)
+      const exportData = mergedRows.map(eq => {
+        const row = {
+          'ID': `#${String(eq.equipId).padStart(3, '0')}`,
+          '설비명': eq.equipName,
+          '위치': eq.location || '-',
+          '수신 시간': eq.receivedAt ? formatKoreanDateTime(eq.receivedAt) : '-',
+        };
+        if (needsTemp) {
+          row['온도(℃)'] = eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-';
+          row['임계값(온도)'] = eq.tempThreshold ?? '-';
+          row['상태(온도)'] = eq.tempStatus ? getStatusMeta(eq.tempStatus).label : '-';
+        }
+        if (needsPower) {
+          row['전력'] = eq.power != null ? Number(eq.power).toFixed(1) : '-';
+          row['임계값(전력)'] = eq.powerThreshold ?? '-';
+          row['상태(전력)'] = eq.powerStatus ? getStatusMeta(eq.powerStatus).label : '-';
+        }
+        return row;
+      });
 
       const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const baseCols = [{ wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }];
+      const metricCols = [{ wch: 10 }, { wch: 12 }, { wch: 10 }];
       worksheet['!cols'] = [
-        { wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }
+        ...baseCols,
+        ...(needsTemp ? metricCols : []),
+        ...(needsPower ? metricCols : []),
       ];
 
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, '시간범위_누적데이터');
 
+      const metricLabel = needsTemp && needsPower ? '온도전력' : needsTemp ? '온도' : '전력';
       const today = new Date();
       const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
       const timeStr = today.toTimeString().slice(0, 5).replace(':', '');
-      const fileName = `설비모니터링_구간추출_${dateStr}_${timeStr}.xlsx`;
+      const fileName = `설비모니터링_구간추출_${metricLabel}_${dateStr}_${timeStr}.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
     } catch (err) {
@@ -663,10 +815,15 @@ const RealtimeScreen = ({
       'http://localhost:8086/api/live/monitoring/elec/logs',
       headers,
       (tempData, elecData) => {
-        const mapped = [...tempData, ...elecData]
+        // 온도/전력 로그는 서로 독립된 테이블이라 id가 우연히 겹칠 수 있어서(예: 둘 다 464번),
+        // 합치기 전에 도메인을 구분해둬야 React key가 안 겹침
+        const mapped = [
+          ...tempData.map(item => ({ ...item, __domain: 'temp' })),
+          ...elecData.map(item => ({ ...item, __domain: 'elec' })),
+        ]
           .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
           .map(item => ({
-            id: `log-${item.id}`,
+            id: `log-${item.__domain}-${item.id}`,
             time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
             type: item.type,
             equipName: item.equipName,
@@ -789,8 +946,6 @@ const RealtimeScreen = ({
     }
   };
 
-  // input 제약 기준 시각 (현재 시각)
-  const currentNowIso = formatForDateTimeInput(new Date());
 
   const selectedEquipName = equipments.find(e => e.equipId === selectedEquipId)?.equipName;
   const displayedAlarms = selectedEquipName
@@ -959,115 +1114,6 @@ const RealtimeScreen = ({
       />
 
       <div className="flex-1 p-3 sm:p-4 md:p-6 flex flex-col gap-4 max-w-[1920px] mx-auto w-full overflow-hidden h-full">
-        {/* 상단 컨트롤 영역 */}
-        <div className={`flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl shrink-0 border transition-colors ${
-          isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
-        }`}>
-          
-          <div className="flex flex-wrap items-center gap-3">
-            <span className={`text-sm font-bold tracking-wide px-3 py-1.5 ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
-              실시간 스트림
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 sm:gap-2.5 w-full lg:w-auto">
-            {/* 기간 선택 (클릭하면 편집 팝오버) - 맨 오른쪽 */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  const willOpen = !isRangeEditorOpen;
-                  if (willOpen) {
-                    // 팝오버를 열 때마다 "최근 1시간(1시간 전 ~ 현재)"으로 초기화
-                    const now = new Date();
-                    setStartTime(new Date(now.getTime() - 60 * 60 * 1000));
-                    setEndTime(now);
-                    setSelectedPreset('FULL_1HR');
-                  }
-                  setIsRangeEditorOpen(willOpen);
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono transition-all duration-200 cursor-pointer hover:shadow-md ${
-                  isDarkMode
-                    ? 'bg-[#0D1224] border-[#232B45] text-[#22D3EE] hover:bg-[#151B30] hover:border-[#22D3EE]/60'
-                    : 'bg-gray-50 border-gray-200 text-green-700 font-bold hover:bg-white hover:border-green-400'
-                }`}
-              >
-                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                엑셀 내보내기
-              </button>
-
-              {isRangeEditorOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setIsRangeEditorOpen(false)} />
-                  <div className={`absolute top-full right-0 mt-2 z-50 w-[260px] p-3 rounded-xl border shadow-2xl space-y-2.5 ${
-                    isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
-                  }`}>
-                    <div>
-                      <label className={`block text-[11px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>시작</label>
-                      <input
-                        type="datetime-local"
-                        max={formatForDateTimeInput(endTime)}
-                        value={formatForDateTimeInput(startTime)}
-                        onChange={handleStartTimeChange}
-                        onMouseDown={(e) => { e.preventDefault(); e.target.showPicker?.(); }}
-                        style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border cursor-pointer transition-colors ${
-                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-green-400'
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <label className={`block text-[11px] font-bold mb-1 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>종료</label>
-                      <input
-                        type="datetime-local"
-                        min={formatForDateTimeInput(startTime)}
-                        max={currentNowIso}
-                        value={formatForDateTimeInput(endTime)}
-                        onChange={handleEndTimeChange}
-                        onMouseDown={(e) => { e.preventDefault(); e.target.showPicker?.(); }}
-                        style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
-                        className={`w-full rounded-lg px-2.5 py-1.5 text-xs font-mono outline-none border cursor-pointer transition-colors ${
-                          isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:border-[#22D3EE]/60' : 'bg-gray-50 border-gray-200 text-gray-800 hover:border-green-400'
-                        }`}
-                      />
-                    </div>
-
-                    <Dropdown
-                      value={selectedPreset}
-                      onChange={handlePresetRange}
-                      options={PRESET_OPTIONS}
-                      isDarkMode={isDarkMode}
-                      widthClass="w-full"
-                      placeholder="빠른 선택"
-                    />
-
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await handleExport();
-                        setIsRangeEditorOpen(false);
-                      }}
-                      className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
-                        isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
-                        <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
-                        <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
-                        <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                      내보내기
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
         {/* 그리드 영역 */}
         <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 items-stretch overflow-hidden">
           <div className={`flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors min-h-0 overflow-hidden ${
@@ -1087,7 +1133,7 @@ const RealtimeScreen = ({
                     className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
                       metricTab === 'temperature'
                         ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border border-transparent' : 'text-gray-500 hover:text-gray-800 border border-transparent')
                     }`}
                   >
                     온도
@@ -1098,7 +1144,7 @@ const RealtimeScreen = ({
                     className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
                       metricTab === 'power'
                         ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
+                        : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border border-transparent' : 'text-gray-500 hover:text-gray-800 border border-transparent')
                     }`}
                   >
                     전력
@@ -1132,6 +1178,27 @@ const RealtimeScreen = ({
                   )}
                 </div>
 
+                {/* 상태(정상/경고/위험) 필터 - 탭/검색과 같은 "필터링" 성격이라 한 그룹으로 묶음 */}
+                <div className="flex items-center gap-1">
+                  {STATUS_FILTER_OPTIONS.map(opt => {
+                    const isActive = statusFilter === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setStatusFilter(opt.key)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors border cursor-pointer ${
+                          isActive
+                            ? STATUS_FILTER_ACTIVE_CLASS[opt.key][isDarkMode ? 'dark' : 'light']
+                            : (isDarkMode ? 'border-transparent text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#232B45]' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200')
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 {tabMode === 'threshold' && (
                   <>
                     <button
@@ -1158,27 +1225,6 @@ const RealtimeScreen = ({
               </div>
 
               <div className="flex items-center gap-3 h-8">
-                {/* 상태(정상/경고/위험) 필터 */}
-                <div className="flex items-center gap-1">
-                  {STATUS_FILTER_OPTIONS.map(opt => {
-                    const isActive = statusFilter === opt.key;
-                    return (
-                      <button
-                        key={opt.key}
-                        type="button"
-                        onClick={() => setStatusFilter(opt.key)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors border cursor-pointer ${
-                          isActive
-                            ? STATUS_FILTER_ACTIVE_CLASS[opt.key][isDarkMode ? 'dark' : 'light']
-                            : (isDarkMode ? 'border-transparent text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#232B45]' : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200')
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
                 <span className={`flex items-center gap-1.5 text-[11px] font-mono ${
                   isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'
                 }`}>
@@ -1196,6 +1242,106 @@ const RealtimeScreen = ({
                     <span className="text-amber-500">웹소켓 연결 중...</span>
                   )}
                 </span>
+
+                {/* 정보 표시(상태 필터 · LIVE)와 액션 버튼(내보내기 · 설정)을 구분하는 얇은 구분선 */}
+                <div className={`w-px h-5 ${isDarkMode ? 'bg-[#232B45]' : 'bg-gray-200'}`} />
+
+                {/* 엑셀 내보내기 (기간 선택 팝오버) */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const willOpen = !isRangeEditorOpen;
+                      if (willOpen) {
+                        // 팝오버를 열 때마다 "최근 1시간(1시간 전 ~ 현재)"으로 초기화
+                        const now = new Date();
+                        setStartTime(new Date(now.getTime() - 60 * 60 * 1000));
+                        setEndTime(now);
+                        setSelectedPreset('FULL_1HR');
+                      }
+                      setIsRangeEditorOpen(willOpen);
+                    }}
+                    title="엑셀 내보내기"
+                    className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+                      isRangeEditorOpen
+                        ? (isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40 text-[#22D3EE]' : 'bg-green-100 border-green-300 text-green-700')
+                        : (isDarkMode ? 'border-[#232B45] text-[#7D87A8] hover:text-[#EDF1FC] hover:border-[#2A335A]' : 'border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300')
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    엑셀 내보내기
+                  </button>
+
+                  {isRangeEditorOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsRangeEditorOpen(false)} />
+                      <div className={`absolute top-full right-0 mt-2 z-50 w-[260px] p-3 rounded-xl border shadow-2xl space-y-2.5 ${
+                        isDarkMode ? 'bg-[#12172A] border-[#232B45]' : 'bg-white border-gray-200'
+                      }`}>
+                        <DateTimePicker
+                          label="시작"
+                          value={startTime}
+                          max={endTime}
+                          onChange={handleStartTimeChange}
+                          isDarkMode={isDarkMode}
+                        />
+                        <DateTimePicker
+                          label="종료"
+                          value={endTime}
+                          min={startTime}
+                          max={new Date()}
+                          onChange={handleEndTimeChange}
+                          isDarkMode={isDarkMode}
+                        />
+
+                        <Dropdown
+                          value={selectedPreset}
+                          onChange={handlePresetRange}
+                          options={PRESET_OPTIONS}
+                          isDarkMode={isDarkMode}
+                          widthClass="w-full"
+                          placeholder="빠른 선택"
+                        />
+
+                        <div className="flex items-center gap-4 px-0.5">
+                          <Checkbox
+                            checked={exportIncludeTemp}
+                            onChange={() => setExportIncludeTemp(prev => (prev && !exportIncludePower ? prev : !prev))}
+                            isDarkMode={isDarkMode}
+                            label="온도"
+                          />
+                          <Checkbox
+                            checked={exportIncludePower}
+                            onChange={() => setExportIncludePower(prev => (prev && !exportIncludeTemp ? prev : !prev))}
+                            isDarkMode={isDarkMode}
+                            label="전력"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleExport();
+                            setIsRangeEditorOpen(false);
+                          }}
+                          className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                            isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
+                          }`}
+                        >
+                          <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
+                            <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
+                            <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
+                            <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                          내보내기
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 {isAdmin && (
                   <button
@@ -1231,14 +1377,14 @@ const RealtimeScreen = ({
                   isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                 }`}>
                   <tr className="h-[40px]">
-                    {renderSortableHeader('equipId', 'ID', 'w-[8%]')}
-                    {renderSortableHeader('equipName', '설비명', 'w-[24%]')}
-                    {renderSortableHeader('location', '위치', 'w-[8%]')}
-                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[18%]')}
-                    {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[10%]')}
-                    {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[10%]')}
-                    {renderSortableHeader('status', '상태', 'w-[9%]')}
-                    <th className={`w-[13%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
+                    {renderSortableHeader('equipId', 'ID', 'w-[9%]')}
+                    {renderSortableHeader('equipName', '설비명', 'w-[18%]')}
+                    {renderSortableHeader('location', '위치', 'w-[9%]')}
+                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[17%]')}
+                    {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[11%]')}
+                    {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[12%]')}
+                    {renderSortableHeader('status', '상태', 'w-[14%]')}
+                    <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1418,7 +1564,7 @@ const RealtimeScreen = ({
                             status == null ? (isDarkMode ? 'text-[#5C6584]' : 'text-gray-400') : statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
                           }`}>
                             {value != null ? (
-                              <>{Number(value).toFixed(1)}{isTemp && <span className="text-xs font-normal">℃</span>}</>
+                              <>{Number(value).toFixed(1)}{isTemp && <span className="text-xs">℃</span>}</>
                             ) : '–'}
                           </span>
                         </td>
@@ -1468,6 +1614,7 @@ const RealtimeScreen = ({
                 <EquipmentTrendGrid
                   equipments={equipments}
                   isDarkMode={isDarkMode}
+                  metric={metricTab}
                   onSelectEquip={(id, metric) => {
                     setHistoryEquipId(id);
                     setHistoryMetric(metric);
@@ -1487,6 +1634,7 @@ const RealtimeScreen = ({
                     onClearFilter={() => setSelectedEquipId(null)}
                     statusCounts={statusCounts}
                     isDarkMode={isDarkMode}
+                    metricTab={metricTab}
                   />
                 </div>
               )}
