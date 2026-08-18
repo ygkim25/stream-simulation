@@ -20,11 +20,30 @@ const STATUS_COLOR = {
 // 설비마다 최근 흐름을 라인 형태로 보여줘서 "시간에 따른 변화"가 한눈에 보이게 함
 // (그리드 우측 상단, IndexedDB에 누적된 실시간 데이터 사용, 백엔드 미사용)
 // ==========================================
-const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts }) => {
-  const [metric, setMetric] = useState('temperature'); // 'temperature' | 'power'
+// metric('temperature' | 'power')은 실시간 모니터링 그리드 상단 탭과 공유되는 값이라 부모에서 내려받음
+// (예전엔 이 컴포넌트가 자체 토글을 따로 갖고 있었는데, 그리드/알람 탭이랑 따로 놀아서 헷갈린다는
+// 피드백으로 그리드의 탭 하나로 통일함)
+const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts, metric }) => {
   const [historyMap, setHistoryMap] = useState({}); // equipId -> 시간순 정렬된 최근 데이터 배열
   // 첫 조회가 끝나기 전까지는 "데이터가 확실히 부족함"과 구분해서 로딩 표시를 해줌
   const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(false);
+
+  // 카드가 많으면(설비 수만큼 recharts 인스턴스가 동시에 다시 그려짐) 탭 전환 시 눈에 띄게 버벅이는데,
+  // 그 렌더링이 끝날 때까지 그냥 화면이 멈춘 것처럼 보이는 문제가 있었음. metric이 바뀌면 일단
+  // 로딩 표시부터 그려지도록 한 프레임 양보한 뒤에 실제(무거운) 차트 전환을 함
+  const [displayMetric, setDisplayMetric] = useState(metric);
+  const [isMetricPending, setIsMetricPending] = useState(false);
+  useEffect(() => {
+    if (metric === displayMetric) return undefined;
+    setIsMetricPending(true);
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setDisplayMetric(metric);
+        setIsMetricPending(false);
+      });
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [metric, displayMetric]);
 
   // 매 조회 시점의 최신 설비 목록을 참조하기 위한 ref (interval을 재시작하지 않고도 최신 목록을 반영)
   const equipIdsRef = useRef([]);
@@ -66,8 +85,8 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     return String(a.equipId).localeCompare(String(b.equipId));
   });
 
-  const unit = metric === 'temperature' ? '℃' : '';
-  const dotColor = metric === 'temperature'
+  const unit = displayMetric === 'temperature' ? '℃' : '';
+  const dotColor = displayMetric === 'temperature'
     ? (isDarkMode ? 'bg-[#FB5D75]' : 'bg-red-500')
     : (isDarkMode ? 'bg-[#22D3EE]' : 'bg-green-600');
 
@@ -75,39 +94,11 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     <div className={`w-full h-full rounded-xl p-3.5 border transition-colors flex flex-col min-h-0 overflow-hidden ${
       isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
     }`}>
-      <div className="flex items-center justify-between gap-2 mb-2.5 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-          <span className={`text-[15px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-            설비별 {metric === 'temperature' ? '온도' : '전력'} 추이
-          </span>
-        </div>
-
-        {/* 온도 / 전력 탭 전환 버튼 */}
-        <div className={`relative flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
-          isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-        }`}>
-          <button
-            onClick={() => setMetric('temperature')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none focus:outline-none focus-visible:outline-none ${
-              metric === 'temperature'
-                ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-            }`}
-          >
-            온도
-          </button>
-          <button
-            onClick={() => setMetric('power')}
-            className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none focus:outline-none focus-visible:outline-none ${
-              metric === 'power'
-                ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-            }`}
-          >
-            전력
-          </button>
-        </div>
+      <div className="flex items-center gap-2 mb-2.5 shrink-0">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+        <span className={`text-[15px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+          설비별 {displayMetric === 'temperature' ? '온도' : '전력'} 추이
+        </span>
       </div>
 
       {sortedEquipments.length === 0 ? (
@@ -115,24 +106,29 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
           데이터 없음
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+        <div className="relative flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          {isMetricPending && (
+            <div className={`absolute inset-0 z-10 flex items-center justify-center ${isDarkMode ? 'bg-[#12172A]/80' : 'bg-white/80'}`}>
+              <LoadingSpinner size="md" isDarkMode={isDarkMode} />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2.5 pr-1 pb-1">
             {sortedEquipments.map(eq => {
               const points = (historyMap[eq.equipId] || [])
-                .map(item => ({ value: metric === 'temperature' ? item.temperature : item.power }))
+                .map(item => ({ value: displayMetric === 'temperature' ? item.temperature : item.power }))
                 .filter(p => p.value != null);
               const latest = points.length > 0 ? points[points.length - 1].value : null;
               const prev = points.length > 1 ? points[points.length - 2].value : null;
               const delta = latest != null && prev != null ? latest - prev : null;
-              const statusColor = getStatusMeta(metric === 'temperature' ? eq.status : eq.powerStatus).color;
+              const statusColor = getStatusMeta(displayMetric === 'temperature' ? eq.status : eq.powerStatus).color;
               const color = STATUS_COLOR[statusColor][isDarkMode ? 'dark' : 'light'];
-              const gradientId = `spark-grad-${eq.equipId}-${metric}`;
-              const glowId = `spark-glow-${eq.equipId}-${metric}`;
+              const gradientId = `spark-grad-${eq.equipId}-${displayMetric}`;
+              const glowId = `spark-glow-${eq.equipId}-${displayMetric}`;
 
               return (
                 <div
                   key={eq.equipId}
-                  onClick={() => onSelectEquip?.(eq.equipId, metric)}
+                  onClick={() => onSelectEquip?.(eq.equipId, displayMetric)}
                   title="클릭하면 자세히 보기"
                   className={`group relative rounded-xl border overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${
                     isDarkMode
@@ -253,6 +249,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
 // id/이름/상태가 실제로 바뀔 때만 리렌더링하도록 막아서 렉을 줄임
 const areEqual = (prev, next) => {
   if (prev.isDarkMode !== next.isDarkMode) return false;
+  if (prev.metric !== next.metric) return false;
   if (prev.equipments.length !== next.equipments.length) return false;
   for (let i = 0; i < prev.equipments.length; i++) {
     const a = prev.equipments[i];

@@ -8,8 +8,19 @@ const pickField = (row, candidates) => {
   return undefined;
 };
 
-// 실시간 모니터링 화면의 "엑셀 내보내기" 결과물과 동일한 형식: "2026. 8. 6. 오후 12:58:00"
-const KOREAN_DATETIME_RE = /^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(오전|오후)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+// 컬럼 자체가 없거나(온도만 있는 시나리오의 전력처럼) 값이 '-' 같은 자리표시자라 숫자로 안 바뀌면
+// undefined를 반환함 (Number(undefined)는 NaN이라 "값이 없음"과 구분이 안 되는 문제가 있었음)
+const pickNumberField = (row, candidates) => {
+  const raw = pickField(row, candidates);
+  if (raw === undefined) return undefined;
+  const num = Number(raw);
+  return Number.isNaN(num) ? undefined : num;
+};
+
+// 실시간 모니터링 화면의 "엑셀 내보내기" 결과물과 동일한 형식.
+// "2026.8.14 오전 9:32:39"(현재 형식)와 "2026. 8. 6. 오후 12:58:00"(예전 toLocaleString 형식,
+// 이미 내보내진 예전 파일과의 호환을 위해) 둘 다 인식하도록 날짜 뒤 마침표를 선택 사항으로 둠
+const KOREAN_DATETIME_RE = /^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?\s*(오전|오후)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
 const parseTimeValue = (raw) => {
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
@@ -47,6 +58,11 @@ export const computeStatus = (temperature, threshold) => {
   return '정상';
 };
 
+// 온도 데이터가 있으면 온도 기준으로, 온도가 아예 없는(전력만 있는) 시나리오는 전력 기준으로 판정함
+export const computeCombinedStatus = (temperature, threshold, power, powerThreshold) => (
+  temperature != null ? computeStatus(temperature, threshold) : computeStatus(power, powerThreshold)
+);
+
 export const isWarningStatus = (status) => status === '경고' || status === '위험';
 
 // 업로드한 File(.xlsx)을 읽어 { equipId, equipName, temperature, power, threshold, status, time } 배열로 정규화
@@ -67,11 +83,10 @@ export const parseSimulationFile = (file) => {
           const equipId = String(rawId).replace(/^#/, '').trim();
           const equipName = String(pickField(row, ['설비명', 'equipName']) ?? '').trim();
           const location = String(pickField(row, ['위치', 'location']) ?? '').trim();
-          const temperature = Number(pickField(row, ['온도(℃)', '온도', 'temperature']));
-          const power = Number(pickField(row, ['전력', 'power']));
-          const threshold = Number(pickField(row, ['임계값(온도)', '임계값', '임계치', 'threshold']));
-          const powerThresholdRaw = pickField(row, ['전력임계값', '전력 임계값', '임계값(전력)', 'powerThreshold']);
-          const powerThreshold = powerThresholdRaw !== undefined ? Number(powerThresholdRaw) : undefined;
+          const temperature = pickNumberField(row, ['온도(℃)', '온도', 'temperature']);
+          const power = pickNumberField(row, ['전력', 'power']);
+          const threshold = pickNumberField(row, ['임계값(온도)', '임계값', '임계치', 'threshold']);
+          const powerThreshold = pickNumberField(row, ['전력임계값', '전력 임계값', '임계값(전력)', 'powerThreshold']);
           const timeRaw = pickField(row, ['수신 시간', '수신시간', '최초수신시간', '시간', 'time', 'Time']);
           let time = parseTimeValue(timeRaw);
 
@@ -89,7 +104,10 @@ export const parseSimulationFile = (file) => {
             power,
             threshold,
             powerThreshold,
-            status: computeStatus(temperature, threshold),
+            status: computeCombinedStatus(temperature, threshold, power, powerThreshold),
+            // 온도/전력이 둘 다 있는 행은 status가 온도 기준으로만 판정되므로, 전력 임계값 초과를
+            // 독립적으로 감지(전력 알람 발생)하려면 전력만의 상태를 따로 들고 있어야 함
+            powerStatus: computeStatus(power, powerThreshold),
             time,
           };
         }).filter(r => r.equipId);

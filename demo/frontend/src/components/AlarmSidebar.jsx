@@ -4,21 +4,34 @@ import CustomConfirm from './CustomConfirm';
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
 // ==========================================
-const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, selectedEquipName, onClearFilter, statusCounts, isDarkMode }) => {
+const AlarmSidebar = ({
+  alarms, onClear, onDismiss, onAlarmClick, openLogs, selectedEquipName, onClearFilter, statusCounts, isDarkMode,
+  showTemperatureTab = true, showPowerTab = true,
+  // 외부(실시간 모니터링의 그리드 탭 등)에서 값을 내려주면 자체 토글 UI 없이 그 값을 그대로 따름
+  // (그리드/설비별 온도추이/알람이 각자 따로 노는 토글이었는데, 그리드 탭 하나로 다같이 움직이도록 통일함)
+  metricTab: controlledMetricTab,
+}) => {
   const counts = statusCounts || { normal: 0, warning: 0, danger: 0 };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
-  // 온도 / 전력 알람 탭 (metric 필드가 없으면 온도로 취급 - 시뮬레이션 모드처럼 온도만 있는 화면과 호환)
-  const [alarmMetricTab, setAlarmMetricTab] = useState('temperature');
-  const filteredAlarms = alarms.filter(a => (a.metric || 'temperature') === alarmMetricTab);
+  // 온도 / 전력 알람 탭 (metric 필드가 없으면 온도로 취급 - 시뮬레이션 모드처럼 온도만 있는 화면과 호환).
+  // 시뮬레이션 모드는 업로드한 시나리오에 한쪽 지표만 있을 수도 있어서, 그럴 땐 탭 자체를 숨기고
+  // 있는 지표로 고정함 (없는 지표를 굳이 탭으로 보여줄 필요가 없음)
+  const isControlled = controlledMetricTab !== undefined;
+  const canToggleMetric = !isControlled && showTemperatureTab && showPowerTab;
+  const forcedMetricTab = !showTemperatureTab ? 'power' : !showPowerTab ? 'temperature' : null;
+  const [internalMetricTab, setInternalMetricTab] = useState(forcedMetricTab ?? 'temperature');
+  const effectiveMetricTab = isControlled ? controlledMetricTab : (forcedMetricTab ?? internalMetricTab);
+  const filteredAlarms = alarms.filter(a => (a.metric || 'temperature') === effectiveMetricTab);
 
   // "지우기" 버튼 클릭 시 바로 지우지 않고 확인 팝업을 먼저 띄움
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const handleClearClick = () => setIsClearConfirmOpen(true);
   const handleClearConfirm = () => {
     setIsClearConfirmOpen(false);
-    onClear?.();
+    // 지금 보고 있는 지표(온도/전력)의 알람만 지우도록, 부모가 판단할 수 있게 넘겨줌
+    onClear?.(effectiveMetricTab);
   };
 
   // 맨 아래에 있는지 여부 (맨 아래일 땐 "아래로" 버튼을 숨기고, 새 알람이 와도 자동으로 계속 아래에 붙어있음)
@@ -52,13 +65,13 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
     }
   }, [filteredAlarms]);
 
-  // 온도/전력 탭을 전환하면 목록 DOM이 새로 마운트되면서(key={alarmMetricTab}) 스크롤 위치가
+  // 온도/전력 탭을 전환하면 목록 DOM이 새로 마운트되면서(key={effectiveMetricTab}) 스크롤 위치가
   // 0으로 초기화되는데, 위 effect의 "계속 맨 아래 붙어있기" 조건과 타이밍이 겹칠 수 있어
   // 탭 전환 시에는 무조건 맨 아래(최신)로 이동하도록 별도로 확실히 처리함
   useEffect(() => {
     scrollToBottom('auto');
     updateIsAtBottom(true);
-  }, [alarmMetricTab]);
+  }, [effectiveMetricTab]);
 
   return (
     <div className={`w-full h-full rounded-xl flex flex-col overflow-hidden min-h-0 border transition-colors ${
@@ -79,33 +92,36 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
               알람
             </span>
 
-            {/* 온도 / 전력 알람 탭 전환 (개수 표시) */}
-            <div className={`relative flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
-              isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
-            }`}>
-              <button
-                type="button"
-                onClick={() => setAlarmMetricTab('temperature')}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
-                  alarmMetricTab === 'temperature'
-                    ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                }`}
-              >
-                온도
-              </button>
-              <button
-                type="button"
-                onClick={() => setAlarmMetricTab('power')}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
-                  alarmMetricTab === 'power'
-                    ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
-                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-500 hover:text-gray-800')
-                }`}
-              >
-                전력
-              </button>
-            </div>
+            {/* 온도 / 전력 알람 탭 전환 (개수 표시) - 한쪽 지표만 있는 화면(시뮬레이션의 단일 지표
+                시나리오 등)에서는 토글을 아예 숨기고 있는 지표로 고정함 */}
+            {canToggleMetric && (
+              <div className={`relative flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
+                isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
+              }`}>
+                <button
+                  type="button"
+                  onClick={() => setInternalMetricTab('temperature')}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                    effectiveMetricTab === 'temperature'
+                      ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border border-transparent' : 'text-gray-500 hover:text-gray-800 border border-transparent')
+                  }`}
+                >
+                  온도
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInternalMetricTab('power')}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide transition-colors outline-none ${
+                    effectiveMetricTab === 'power'
+                      ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border border-[#22D3EE]/40' : 'bg-white text-green-700 border border-gray-300 shadow-sm')
+                      : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border border-transparent' : 'text-gray-500 hover:text-gray-800 border border-transparent')
+                  }`}
+                >
+                  전력
+                </button>
+              </div>
+            )}
 
             <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0 ${
               isDarkMode
@@ -166,7 +182,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
       {/* 알람 카드 리스트 영역 (오래된 순 → 최신순, 최신이 아래쪽) */}
       <div className="relative flex-1 min-h-0">
         <div
-          key={alarmMetricTab}
+          key={effectiveMetricTab}
           ref={listRef}
           onScroll={handleScroll}
           className={`alarm-slide-down h-full overflow-y-auto p-3 space-y-2 transition-colors ${
@@ -282,7 +298,7 @@ const AlarmSidebar = ({ alarms, onClear, onDismiss, onAlarmClick, openLogs, sele
       </div>
 
       <CustomConfirm
-        message={isClearConfirmOpen ? '전체 알람을 지우시겠습니까?' : ''}
+        message={isClearConfirmOpen ? `${effectiveMetricTab === 'temperature' ? '온도' : '전력'} 알람을 지우시겠습니까?` : ''}
         onConfirm={handleClearConfirm}
         onCancel={() => setIsClearConfirmOpen(false)}
         isDarkMode={isDarkMode}
