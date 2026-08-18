@@ -163,33 +163,27 @@ export const getByDateRangeIndexedFromDB = async (startMs, endMs) => {
 };
 
 // cutoffMs보다 오래된 레코드를 지워서 저장소 크기를 계속 작게 유지함 (저장소가 무한정 커지면
-// 위의 스캔 기반 조회들이 갈수록 느려짐). id는 저장 순서라 시간순과 거의 일치하므로 오름차순
-// (과거->최신)으로 훑다가 cutoff를 넘는 첫 레코드를 만나면 그 뒤는 전부 최신이라 바로 중단함
+// 위의 스캔 기반 조회들이 갈수록 느려짐). receivedAtMs 인덱스로 cutoff 이전 구간만 지워서
+// 저장 순서(id)와 실제 시간순이 어긋나는 레코드가 섞여 있어도 빠짐없이 정리됨
+// (예전엔 id가 시간순과 거의 같다고 가정하고 첫 "안 오래된" 레코드에서 바로 멈췄는데, 그 가정이
+// 깨지는 레코드가 하나라도 있으면 그 뒤의 진짜 오래된 레코드들은 영원히 안 지워지는 문제가 있었음)
 export const pruneOldRecordsFromDB = async (cutoffMs) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
+    const index = store.index('receivedAtMs');
     let deletedCount = 0;
-    const request = store.openCursor();
+    const request = index.openCursor(IDBKeyRange.upperBound(cutoffMs, true));
     request.onsuccess = (e) => {
       const cursor = e.target.result;
       if (!cursor) {
         resolve(deletedCount);
         return;
       }
-      const item = cursor.value;
-      const itemMs = item.receivedAt ? new Date(item.receivedAt).getTime() : null;
-      if (itemMs === null) {
-        // 시간 정보가 없는 레코드는 판단할 수 없으니 건너뜀
-        cursor.continue();
-      } else if (itemMs < cutoffMs) {
-        cursor.delete();
-        deletedCount += 1;
-        cursor.continue();
-      } else {
-        resolve(deletedCount);
-      }
+      cursor.delete();
+      deletedCount += 1;
+      cursor.continue();
     };
     request.onerror = () => reject(request.error);
   });

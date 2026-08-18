@@ -14,6 +14,7 @@ import DateTimePicker from '../components/DateTimePicker';
 import EquipTimelineBar from '../components/EquipTimelineBar';
 import { saveToDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
 import { formatKoreanDateTime } from '../utils/dateFormat';
+import { formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 
@@ -22,8 +23,14 @@ const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
 // "전체 흐름" 타임라인이 보여주는 고정 창 크기 (항상 "지금" 기준 최근 1시간)
 const TIMELINE_WINDOW_MS = 60 * 60 * 1000;
-// IndexedDB 보관 기간 - 자정 기준 "당일"로 끊으면 자정 직후 "최근 1시간" 흐름이 끊겨서 롤링 24시간으로 둠
-const LOCAL_DB_RETENTION_MS = 24 * 60 * 60 * 1000;
+// IndexedDB엔 "오늘 00:00 이후" 데이터만 남겨둠 - 그 이전 기록은 백엔드 DB(히스토리 API)에서
+// 받아오면 되므로 로컬엔 하루치 이상 쌓아둘 필요가 없음. 자정을 넘기면 자동으로 그 전날 로컬
+// 기록이 정리 대상이 됨 (다음날 새 하루가 시작되며 다시 로컬에 쌓이기 시작함)
+const getTodayStartMs = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
 const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(자주 할 필요 없음)
 
 // "전체 흐름"이 새로고침 직후 빈 상태로 안 보이게, 마지막 계산 결과를 동기적으로 읽을 수 있는
@@ -195,8 +202,8 @@ const parseCsv = (text) => {
   });
 };
 
-// 로컬 보관 기간(24시간)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서 가져와서
-// 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
+// 로컬 보관 기간(오늘 00:00 이후)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서
+// 가져와서 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
 const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
   const url = `http://localhost:8086/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
   const res = await axios.get(url, { headers, responseType: 'text', transformResponse: [(data) => data] });
@@ -273,6 +280,9 @@ const RealtimeScreen = ({
   };
 
   const [equipments, setEquipments] = useState([]);
+  // 온도/전력 둘 다 최초 로딩이 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 문구를 계속 보여줌
+  // (먼저 온 쪽만 반영하면 반쪽 데이터가 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로 추가함)
+  const [hasLoadedEquipmentsOnce, setHasLoadedEquipmentsOnce] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState('');
   // 설정 탭 (설비명/위치/임계값(온도)/임계값(전력))
@@ -374,7 +384,7 @@ const RealtimeScreen = ({
   // 막음 (안 지우면 시간이 지날수록 조회들이 갈수록 느려짐). 마운트 시 한 번 + 30분마다 반복
   useEffect(() => {
     const prune = () => {
-      pruneOldRecordsFromDB(Date.now() - LOCAL_DB_RETENTION_MS).catch(err => {
+      pruneOldRecordsFromDB(getTodayStartMs()).catch(err => {
         console.error('로컬 기록 정리 실패:', err);
       });
     };
@@ -584,7 +594,7 @@ const RealtimeScreen = ({
   };
 
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
-  // 로컬 보관 기간(24시간) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
+  // 로컬 보관 기간(오늘 00:00 이후) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
   const handleExport = async () => {
     if (startTime >= endTime) {
       showAlert('시작 시각은 종료 시각보다 빨라야 합니다.');
@@ -594,9 +604,9 @@ const RealtimeScreen = ({
     try {
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
-      const cutoffMs = Date.now() - LOCAL_DB_RETENTION_MS;
+      const cutoffMs = getTodayStartMs();
 
-      // 요청 구간 중 최근 24시간과 겹치는 부분은 IndexedDB에서
+      // 요청 구간 중 오늘 자정 이후와 겹치는 부분은 IndexedDB에서
       let localData = [];
       if (endMs > cutoffMs) {
         const localStartMs = Math.max(startMs, cutoffMs);
@@ -743,19 +753,23 @@ const RealtimeScreen = ({
   };
 
   // 설비 그리드만 최신 데이터로 다시 불러오기 (전체 새로고침 없이) - 온도/전력 API를 둘 다 불러서 합침.
-  // 둘 중 먼저 도착한 쪽부터 바로 화면에 반영됨
+  // 먼저 온 쪽을 바로 반영하면 아직 안 온 쪽 값이 빈 반쪽 상태(혹은 테이블에 남아있던 예전 값)가
+  // 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로, 둘 다 끝난 뒤 한 번에만 반영하도록 함
   const fetchEquipments = () => {
     const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+    let latestTemp = [];
+    let latestElec = [];
     return fetchBothDomains(
       'http://localhost:8086/api/live/monitoring/temp',
       'http://localhost:8086/api/live/monitoring/elec',
       headers,
-      (tempData, elecData) => {
-        const data = mergeEquipmentLists(tempData, elecData);
-        equipmentsRef.current = data;
-        setEquipments(data);
-      }
-    );
+      (tempData, elecData) => { latestTemp = tempData; latestElec = elecData; }
+    ).then(() => {
+      const data = mergeEquipmentLists(latestTemp, latestElec);
+      equipmentsRef.current = data;
+      setEquipments(data);
+      setHasLoadedEquipmentsOnce(true);
+    });
   };
 
   // 알람 조회 (온도/전력 알람을 각각 조회해서 시간순으로 합침, 먼저 온 쪽부터 반영)
@@ -777,7 +791,7 @@ const RealtimeScreen = ({
               id: `${item.metric}-${item.equipId}-${item.recordedAt}`,
               equipId: item.equipId,
               equipName: eq?.equipName || item.equipId,
-              time: item.recordedAt ? new Date(item.recordedAt).toLocaleTimeString('ko-KR') : '-',
+              time: item.recordedAt ? formatClockTime(new Date(item.recordedAt)) : '-',
               value: item.value,
               threshold: item.threshold,
               location: eq?.location || '-',
@@ -809,7 +823,7 @@ const RealtimeScreen = ({
           .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
           .map(item => ({
             id: `log-${item.__domain}-${item.id}`,
-            time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
+            time: item.createdAt ? formatClockTime(new Date(item.createdAt)) : '-',
             type: item.type,
             equipName: item.equipName,
             message: item.message,
@@ -1021,9 +1035,27 @@ const RealtimeScreen = ({
     const load = async () => {
       const endMs = Date.now();
       const startMs = endMs - TIMELINE_WINDOW_MS;
+      const todayStartMs = getTodayStartMs();
       try {
-        const records = await getByDateRangeIndexedFromDB(startMs, endMs);
+        const localRecords = await getByDateRangeIndexedFromDB(Math.max(startMs, todayStartMs), endMs);
         if (cancelled) return;
+
+        // 자정을 갓 넘겨 "최근 1시간" 창이 어제로 걸치면, 그 부분은 로컬(오늘 자정 이후만 보관)에
+        // 없으니 백엔드 히스토리에서 보충함 (하루 중 00:00~00:59에만 해당)
+        let records = localRecords;
+        if (startMs < todayStartMs) {
+          const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+          const [tempResult, elecResult] = await Promise.allSettled([
+            fetchHistoryFromBackend('temp', new Date(startMs), new Date(todayStartMs), headers),
+            fetchHistoryFromBackend('elec', new Date(startMs), new Date(todayStartMs), headers),
+          ]);
+          if (cancelled) return;
+          const backendRecords = [
+            ...(tempResult.status === 'fulfilled' ? tempResult.value : []),
+            ...(elecResult.status === 'fulfilled' ? elecResult.value : []),
+          ];
+          records = [...backendRecords, ...localRecords];
+        }
 
         // 온도 도메인 기록엔 temperature가, 전력 도메인 기록엔 power가 들어있으므로
         // (한 레코드가 둘 다 갖지는 않음) 값이 있는 쪽 맵에만 넣어서 도메인별로 분리함
@@ -1064,6 +1096,7 @@ const RealtimeScreen = ({
       cancelled = true;
       clearInterval(intervalId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 정렬 가능한 표 헤더 셀 (클릭 시 그 컬럼 기준으로 정렬, 다시 누르면 오름/내림차순 전환)
@@ -1438,7 +1471,9 @@ const RealtimeScreen = ({
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
                       <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                        {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
+                        {!hasLoadedEquipmentsOnce
+                          ? '데이터를 불러오는 중...'
+                          : isConnected ? '등록된 설비가 없습니다.' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
                   )}
@@ -1540,8 +1575,8 @@ const RealtimeScreen = ({
                             )}
                           </div>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-                          {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[13px] text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                          {eq.receivedAt ? formatClockTime(new Date(eq.receivedAt)) : '-'}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
                           <span className={`text-sm font-mono font-bold tabular-nums ${

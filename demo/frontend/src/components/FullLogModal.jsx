@@ -155,7 +155,7 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode }) => {
                   && log.threshold !== undefined && log.threshold !== null;
 
                 return (
-                  <div key={log.id} className={`px-4 sm:px-5 py-3.5 grid grid-cols-[76px_1fr_auto] items-center gap-3 sm:gap-4 transition-colors ${
+                  <div key={log.id} className={`px-4 sm:px-5 py-3.5 grid grid-cols-[96px_1fr_auto] items-center gap-3 sm:gap-4 transition-colors ${
                     isDarkMode ? 'hover:bg-[#0F1526]' : 'hover:bg-white'
                   }`}>
 

@@ -18,9 +18,9 @@ const pickNumberField = (row, candidates) => {
 };
 
 // 실시간 모니터링 화면의 "엑셀 내보내기" 결과물과 동일한 형식.
-// "2026.8.14 오전 9:32:39"(현재 형식)와 "2026. 8. 6. 오후 12:58:00"(예전 toLocaleString 형식,
-// 이미 내보내진 예전 파일과의 호환을 위해) 둘 다 인식하도록 날짜 뒤 마침표를 선택 사항으로 둠
-const KOREAN_DATETIME_RE = /^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?\s*(오전|오후)\s*(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+// "2026.8.14 16:09:32"(현재 형식, 24시간제)와 "2026.8.14 오전 9:32:39" / "2026. 8. 6. 오후 12:58:00"
+// (오전/오후 쓰던 예전 형식, 이미 내보내진 예전 파일과의 호환을 위해) 다 인식함
+const KOREAN_DATETIME_RE = /^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?\s*(?:(오전|오후)\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 
 const parseTimeValue = (raw) => {
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
@@ -37,9 +37,10 @@ const parseTimeValue = (raw) => {
     if (m) {
       const [, y, mo, d, period, h, mi, s] = m;
       let hour = parseInt(h, 10);
+      // period가 없으면 이미 24시간제 값이라 그대로 씀
       if (period === '오전') {
         if (hour === 12) hour = 0;
-      } else if (hour !== 12) {
+      } else if (period === '오후' && hour !== 12) {
         hour += 12;
       }
       return new Date(Number(y), Number(mo) - 1, Number(d), hour, Number(mi), s ? Number(s) : 0);

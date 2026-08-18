@@ -627,7 +627,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
     if (isWarningStatus(newStatus) && newStatus !== prevStatus) {
       const now = new Date();
-      const timeLabel = now.toLocaleTimeString('ko-KR');
+      const timeLabel = formatClockTime(now);
       const cardId = `manual-${metric}-${equipId}-${now.getTime()}`;
       setSimAlarms(p => [...p, {
         id: cardId,
@@ -670,32 +670,44 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     setSimAlarms(prev => prev.filter(a => (a.metric || 'temperature') !== metric));
   };
 
-  // 시나리오 파일 업로드 및 파싱 -> 백엔드 저장 -> 자동 선택
-  const handleFileUpload = async (file) => {
-    if (!file) return;
-    try {
-      const { rows: parsedRows, missingTimeCount } = await parseSimulationFile(file);
-      if (parsedRows.length === 0) {
-        showAlert('엑셀에서 유효한 데이터를 찾을 수 없습니다. ID 컬럼이 있는지 확인해 주세요.');
-        return;
+  // 시나리오 파일 여러 개를 순서대로 파싱 -> 백엔드 저장, 마지막 파일을 자동 선택
+  const handleFilesUpload = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    let lastSaved = null;
+    let lastParsedRows = null;
+    const failedNames = [];
+    for (const file of files) {
+      try {
+        const { rows: parsedRows, missingTimeCount } = await parseSimulationFile(file);
+        if (parsedRows.length === 0) {
+          failedNames.push(file.name);
+          continue;
+        }
+        if (missingTimeCount === parsedRows.length) {
+          showAlert(`"${file.name}": 수신 시간 컬럼을 찾을 수 없어 업로드 순서 기준으로 임시 시간이 부여됩니다.`);
+        }
+        const saved = await uploadScenario(file.name, parsedRows, user?.token);
+        lastSaved = saved;
+        lastParsedRows = parsedRows;
+      } catch (err) {
+        console.error(`시뮬레이션 파일 업로드 실패 (${file.name}):`, err);
+        failedNames.push(file.name);
       }
-      if (missingTimeCount === parsedRows.length) {
-        showAlert('"수신 시간" 컬럼을 찾을 수 없어 업로드 순서 기준으로 임시 시간이 부여됩니다.');
-      }
-      const saved = await uploadScenario(file.name, parsedRows, user?.token);
-      await loadScenarios();
+    }
+    await loadScenarios();
+    if (lastSaved) {
       resetPlayback();
-      setSelectedScenarioId(saved.id);
-      setRows(saved.rows || parsedRows);
-    } catch (err) {
-      console.error('시뮬레이션 파일 업로드 실패:', err);
-      showAlert('엑셀 파일을 업로드하는 중 오류가 발생했습니다.');
+      setSelectedScenarioId(lastSaved.id);
+      setRows(lastSaved.rows || lastParsedRows);
+    }
+    if (failedNames.length > 0) {
+      showAlert(`다음 파일은 업로드하지 못했습니다 (ID 컬럼 등을 확인해 주세요): ${failedNames.join(', ')}`);
     }
   };
 
   const handleFileInputChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) handleFileUpload(file);
+    handleFilesUpload(e.target.files);
     e.target.value = '';
   };
 
@@ -751,6 +763,12 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       return next;
     });
     await loadScenarios();
+    // 백엔드가 아직 저장 시각을 안 갱신해줘서, 목록 재정렬(맨 위로)/날짜 표시는 일단 프론트에서만 임의로 반영
+    // (새로고침하면 서버의 원래 업로드 시각으로 되돌아감 - 백엔드에서 uploadedAt 갱신을 지원하면 제거)
+    const now = new Date().toISOString();
+    setScenarios(prev => [...prev]
+      .map(s => (s.id === selectedScenarioId ? { ...s, uploadedAt: now } : s))
+      .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()));
     showAlert('저장되었습니다.');
   };
 
@@ -886,6 +904,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         ref={fileInputRef}
         type="file"
         accept=".xlsx,.xls"
+        multiple
         onChange={handleFileInputChange}
         className="hidden"
       />
@@ -1128,21 +1147,21 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       : (isDarkMode ? 'bg-[#0D1224] border-[#232B45] hover:border-[#2A335A]' : 'bg-gray-50 border-gray-200 hover:border-gray-300')
                   }`}
                 >
-                  <p className={`text-xs font-bold truncate pr-5 flex items-center ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-                    <span className="truncate">{s.fileName}</span>
+                  <p className={`text-xs font-bold truncate pr-5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+                    {s.fileName}
+                  </p>
+                  <p className={`text-[10px] font-mono mt-0.5 flex items-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                    <span className="truncate">{formatKoreanDateTime(s.uploadedAt)}</span>
                     {editedScenarioIds.has(s.id) && (
                       <span
                         title="수정 후 저장된 시나리오입니다"
-                        className={`shrink-0 ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        className={`shrink-0 ml-auto font-sans text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
                           isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-100 text-green-700'
                         }`}
                       >
                         수정됨
                       </span>
                     )}
-                  </p>
-                  <p className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                    {formatKoreanDateTime(s.uploadedAt)}
                   </p>
                   <button
                     onClick={(e) => handleDeleteScenario(e, s.id)}
@@ -1167,8 +1186,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
             onDrop={(e) => {
               e.preventDefault();
               setIsDragOver(false);
-              const file = e.dataTransfer.files?.[0];
-              if (file) handleFileUpload(file);
+              handleFilesUpload(e.dataTransfer.files);
             }}
             className={`relative lg:flex-1 min-w-0 rounded-xl p-3.5 sm:p-5 flex flex-col border transition-colors h-[450px] lg:h-auto lg:min-h-0 overflow-hidden ${
               isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
