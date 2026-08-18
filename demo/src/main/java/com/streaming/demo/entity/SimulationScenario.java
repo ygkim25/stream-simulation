@@ -22,15 +22,20 @@ public class SimulationScenario {
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
+    // 온도/전력 시나리오 구분 ("temp" / "elec"). 기존 업로드본은 마이그레이션으로 "temp" 채워짐
+    @Column(name = "menu", length = 10)
+    private String menu;
+
     // TEXT로 명시 (기본 varchar(255)로 매핑되면 대용량 rows 업로드 시 저장 실패함)
     @Column(name = "rows_json", nullable = false, columnDefinition = "TEXT")
     private String rowsJson;
 
     public SimulationScenario() {}
 
-    public SimulationScenario(String userId, String fileName, LocalDateTime uploadedAt, String rowsJson) {
+    public SimulationScenario(String userId, String fileName, String menu, LocalDateTime uploadedAt, String rowsJson) {
         this.userId = userId;
         this.fileName = fileName;
+        this.menu = menu;
         this.uploadedAt = uploadedAt;
         this.rowsJson = rowsJson;
     }
@@ -38,6 +43,7 @@ public class SimulationScenario {
     public Long getId() { return id; }
     public String getUserId() { return userId; }
     public String getFileName() { return fileName; }
+    public String getMenu() { return menu; }
     public LocalDateTime getUploadedAt() { return uploadedAt; }
     public String getRowsJson() { return rowsJson; }
 

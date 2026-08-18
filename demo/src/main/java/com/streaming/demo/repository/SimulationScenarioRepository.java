@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface SimulationScenarioRepository extends JpaRepository<SimulationScenario, Long> {
     List<SimulationScenario> findByUserIdOrderByUploadedAtDesc(String userId);
+    List<SimulationScenario> findByUserIdAndMenuInOrderByUploadedAtDesc(String userId, List<String> menus);
 }

@@ -21,9 +21,12 @@ public class SimulationScenarioController {
 
     private final SimulationScenarioService service;
 
-    @GetMapping
-    public List<SimulationScenarioSummaryDto> list(@AuthenticationPrincipal String userId) {
-        return service.getScenariosForUser(userId);
+    // Spring 7부터 끝 슬래시 자동 매칭이 빠져서, /scenarios 와 /scenarios/ 를 둘 다 명시적으로 매핑
+    // (안 해두면 /scenarios/ 요청이 컨트롤러를 못 찾고 Tomcat 기본 서블릿으로 빠져서 403이 남)
+    @GetMapping({"", "/"})
+    public List<SimulationScenarioSummaryDto> list(@RequestParam(value = "menu", required = false) String menu,
+                                                     @AuthenticationPrincipal String userId) {
+        return service.getScenariosForUser(userId, menu);
     }
 
     @GetMapping("/{id}")
@@ -32,10 +35,10 @@ public class SimulationScenarioController {
         return service.getScenarioDetail(id, userId);
     }
 
-    @PostMapping
+    @PostMapping({"", "/"})
     public SimulationScenarioDetailDto upload(@RequestBody SimulationScenarioDetailDto request,
                                                @AuthenticationPrincipal String userId) {
-        return service.saveScenario(userId, request.getFileName(), request.getRows());
+        return service.saveScenario(userId, request.getFileName(), request.getMenu(), request.getRows());
     }
 
     @PutMapping("/{id}")
