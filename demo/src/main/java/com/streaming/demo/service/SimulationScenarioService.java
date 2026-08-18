@@ -33,10 +33,17 @@ public class SimulationScenarioService {
     private final SimulationScenarioEditRepository editRepository;
     private final ObjectMapper objectMapper;
 
+    // "all"로 업로드된 시나리오는 온도/전력 두 탭 모두에서 재생 가능해야 하므로
+    // menu=temp 조회 시 temp+all, menu=elec 조회 시 elec+all을 같이 반환. 필터 없으면 전체(temp+elec+all).
     public List<SimulationScenarioSummaryDto> getScenariosForUser(String userId, String menu) {
-        List<SimulationScenario> scenarios = (menu == null || menu.isBlank())
-                ? repository.findByUserIdOrderByUploadedAtDesc(userId)
-                : repository.findByUserIdAndMenuOrderByUploadedAtDesc(userId, menu);
+        List<SimulationScenario> scenarios;
+        if (menu == null || menu.isBlank()) {
+            scenarios = repository.findByUserIdOrderByUploadedAtDesc(userId);
+        } else if ("all".equals(menu)) {
+            scenarios = repository.findByUserIdAndMenuInOrderByUploadedAtDesc(userId, List.of("all"));
+        } else {
+            scenarios = repository.findByUserIdAndMenuInOrderByUploadedAtDesc(userId, List.of(menu, "all"));
+        }
         return scenarios.stream()
                 .map(SimulationScenarioSummaryDto::new)
                 .collect(Collectors.toList());
@@ -49,12 +56,36 @@ public class SimulationScenarioService {
     @Transactional
     public SimulationScenarioDetailDto saveScenario(String userId, String fileName, String menu,
                                                       List<Map<String, Object>> rows) {
-        if (!"temp".equals(menu) && !"elec".equals(menu)) {
-            throw new IllegalArgumentException("menu는 temp 또는 elec만 가능합니다.");
+        String resolvedMenu = (menu == null || menu.isBlank()) ? detectMenu(rows) : menu;
+        if (!"temp".equals(resolvedMenu) && !"elec".equals(resolvedMenu) && !"all".equals(resolvedMenu)) {
+            throw new IllegalArgumentException("menu는 temp, elec, all 중 하나여야 합니다.");
         }
         SimulationScenario saved = repository.save(new SimulationScenario(
-                userId, fileName, menu, LocalDateTime.now(), writeJson(rows)));
+                userId, fileName, resolvedMenu, LocalDateTime.now(), writeJson(rows)));
         return toDetail(saved);
+    }
+
+    // menu가 안 왔을 때 rows 전체를 스캔해서 자동판단. 실시간 모니터링 엑셀 내보내기가
+    // 온도만/전력만/둘다 내보낼 때 "온도"/"전력" 필드 유무로 갈리는 것과 동일한 기준.
+    // 첫 로우만 보면 하필 그 로우에 한쪽 값이 비어있을 때 오판단하므로(실제 발생) 전체를 스캔함.
+    // 영문 키(temperature/power) 업로드와도 호환되도록 둘 다 인식.
+    private String detectMenu(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException("menu가 없고 rows도 비어있어 판단할 수 없습니다.");
+        }
+        boolean hasTemp = rows.stream().anyMatch(r ->
+                r.get("temperature") != null || hasKeyContaining(r, "온도"));
+        boolean hasPower = rows.stream().anyMatch(r ->
+                r.get("power") != null || hasKeyContaining(r, "전력"));
+        if (hasTemp && hasPower) return "all";
+        if (hasTemp) return "temp";
+        if (hasPower) return "elec";
+        throw new IllegalArgumentException(
+                "menu가 없고 rows에서 온도/전력 관련 값도 찾을 수 없어 판단할 수 없습니다.");
+    }
+
+    private boolean hasKeyContaining(Map<String, Object> row, String keyword) {
+        return row.keySet().stream().anyMatch(k -> k.contains(keyword));
     }
 
     @Transactional
