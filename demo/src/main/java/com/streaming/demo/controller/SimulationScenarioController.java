@@ -22,8 +22,9 @@ public class SimulationScenarioController {
     private final SimulationScenarioService service;
 
     @GetMapping
-    public List<SimulationScenarioSummaryDto> list(@AuthenticationPrincipal String userId) {
-        return service.getScenariosForUser(userId);
+    public List<SimulationScenarioSummaryDto> list(@RequestParam(value = "menu", required = false) String menu,
+                                                     @AuthenticationPrincipal String userId) {
+        return service.getScenariosForUser(userId, menu);
     }
 
     @GetMapping("/{id}")
@@ -35,7 +36,7 @@ public class SimulationScenarioController {
     @PostMapping
     public SimulationScenarioDetailDto upload(@RequestBody SimulationScenarioDetailDto request,
                                                @AuthenticationPrincipal String userId) {
-        return service.saveScenario(userId, request.getFileName(), request.getRows());
+        return service.saveScenario(userId, request.getFileName(), request.getMenu(), request.getRows());
     }
 
     @PutMapping("/{id}")

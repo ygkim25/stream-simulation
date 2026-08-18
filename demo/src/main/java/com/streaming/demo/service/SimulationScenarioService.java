@@ -33,9 +33,11 @@ public class SimulationScenarioService {
     private final SimulationScenarioEditRepository editRepository;
     private final ObjectMapper objectMapper;
 
-    public List<SimulationScenarioSummaryDto> getScenariosForUser(String userId) {
-        return repository.findByUserIdOrderByUploadedAtDesc(userId)
-                .stream()
+    public List<SimulationScenarioSummaryDto> getScenariosForUser(String userId, String menu) {
+        List<SimulationScenario> scenarios = (menu == null || menu.isBlank())
+                ? repository.findByUserIdOrderByUploadedAtDesc(userId)
+                : repository.findByUserIdAndMenuOrderByUploadedAtDesc(userId, menu);
+        return scenarios.stream()
                 .map(SimulationScenarioSummaryDto::new)
                 .collect(Collectors.toList());
     }
@@ -45,9 +47,13 @@ public class SimulationScenarioService {
     }
 
     @Transactional
-    public SimulationScenarioDetailDto saveScenario(String userId, String fileName, List<Map<String, Object>> rows) {
+    public SimulationScenarioDetailDto saveScenario(String userId, String fileName, String menu,
+                                                      List<Map<String, Object>> rows) {
+        if (!"temp".equals(menu) && !"elec".equals(menu)) {
+            throw new IllegalArgumentException("menu는 temp 또는 elec만 가능합니다.");
+        }
         SimulationScenario saved = repository.save(new SimulationScenario(
-                userId, fileName, LocalDateTime.now(), writeJson(rows)));
+                userId, fileName, menu, LocalDateTime.now(), writeJson(rows)));
         return toDetail(saved);
     }
 
@@ -96,7 +102,7 @@ public class SimulationScenarioService {
             }
         }
 
-        return new SimulationScenarioDetailDto(s.getId(), s.getFileName(), s.getUploadedAt(), rows);
+        return new SimulationScenarioDetailDto(s.getId(), s.getFileName(), s.getMenu(), s.getUploadedAt(), rows);
     }
 
     // cutoff 이후 첫 로우부터 끝까지 새 값 적용 + 상태 재판정 (그 이전 로우는 보존).
@@ -173,6 +179,6 @@ public class SimulationScenarioService {
 
     private SimulationScenarioDetailDto toDetail(SimulationScenario s) {
         return new SimulationScenarioDetailDto(
-                s.getId(), s.getFileName(), s.getUploadedAt(), readJson(s.getRowsJson()));
+                s.getId(), s.getFileName(), s.getMenu(), s.getUploadedAt(), readJson(s.getRowsJson()));
     }
 }
