@@ -92,6 +92,7 @@ public class SimulationScenarioService {
     public SimulationScenarioDetailDto updateScenarioRows(Long id, String userId, List<Map<String, Object>> rows) {
         SimulationScenario s = findOwned(id, userId);
         s.setRowsJson(writeJson(rows));
+        s.setUploadedAt(LocalDateTime.now());
         return toDetail(s);
     }
 

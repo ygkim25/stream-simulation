@@ -49,4 +49,5 @@ public class SimulationScenario {
 
     public void setFileName(String fileName) { this.fileName = fileName; }
     public void setRowsJson(String rowsJson) { this.rowsJson = rowsJson; }
+    public void setUploadedAt(LocalDateTime uploadedAt) { this.uploadedAt = uploadedAt; }
 }
