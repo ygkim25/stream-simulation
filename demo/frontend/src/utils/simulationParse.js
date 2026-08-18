@@ -65,8 +65,9 @@ export const computeCombinedStatus = (temperature, threshold, power, powerThresh
 
 export const isWarningStatus = (status) => status === '경고' || status === '위험';
 
-// 업로드한 File(.xlsx)을 읽어 { equipId, equipName, temperature, power, threshold, status, time } 배열로 정규화
-// (실시간 모니터링 화면의 "엑셀 내보내기" 형식: ID / 설비명 / 수신 시간 / 온도(℃) / 전력 / 임계값(온도) / 상태)
+// 업로드한 File(.xlsx)을 읽어 { equipId, equipName, location, temperature, power, threshold,
+// powerThreshold, status, powerStatus, time } 배열로 정규화. 헤더 후보는 실시간 모니터링의
+// "엑셀 내보내기" 결과물(온도/전력 중 하나만 있거나 둘 다 있는 경우 모두)과 호환됨
 export const parseSimulationFile = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
