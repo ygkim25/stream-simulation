@@ -763,12 +763,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       return next;
     });
     await loadScenarios();
-    // 백엔드가 아직 저장 시각을 안 갱신해줘서, 목록 재정렬(맨 위로)/날짜 표시는 일단 프론트에서만 임의로 반영
-    // (새로고침하면 서버의 원래 업로드 시각으로 되돌아감 - 백엔드에서 uploadedAt 갱신을 지원하면 제거)
-    const now = new Date().toISOString();
-    setScenarios(prev => [...prev]
-      .map(s => (s.id === selectedScenarioId ? { ...s, uploadedAt: now } : s))
-      .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()));
     showAlert('저장되었습니다.');
   };
 
