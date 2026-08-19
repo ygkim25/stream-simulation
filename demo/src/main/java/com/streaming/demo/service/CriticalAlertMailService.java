@@ -32,6 +32,7 @@ public class CriticalAlertMailService {
                                    double value, double threshold) {
         List<Login> admins = loginRepository.findByRoleIgnoreCase("admin");
         if (admins.isEmpty()) {
+            log.warn("위험 알림 메일 발송 스킵: role=ADMIN 계정이 없음. equipId={}", equipId);
             return;
         }
 
@@ -49,7 +50,7 @@ public class CriticalAlertMailService {
                 message.setText(text);
                 mailSender.send(message);
             } catch (Exception e) {
-                log.error("위험 알림 메일 발송 실패: equipId={}, to={}", equipId, toAddress);
+                log.error("위험 알림 메일 발송 실패: equipId={}, to={}", equipId, toAddress, e);
             }
         }
     }
