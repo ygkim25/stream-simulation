@@ -68,7 +68,8 @@ public class UserInfoController {
                 login.getDivisionCode(),
                 login.getRole(),
                 login.getDivisionName(),
-                login.getResponsibility()
+                login.getResponsibility(),
+                login.getAlarmEnable()
             );
 
         return ResponseEntity.ok(response);
@@ -93,7 +94,8 @@ public class UserInfoController {
                         login.getDivisionCode(),
                         login.getRole(),
                         login.getDivisionName(),
-                        login.getResponsibility()
+                        login.getResponsibility(),
+                        login.getAlarmEnable()
                 ))
                 .collect(Collectors.toList());
 
@@ -101,6 +103,38 @@ public class UserInfoController {
     }
 
     private static final Set<String> VALID_ROLES = Set.of("ADMIN", "USER");
+    private static final Set<String> VALID_ALARM_VALUES = Set.of("on", "off");
+
+    // 마이페이지 - 본인 메일 알림 on/off 토글
+    @PatchMapping("/employee/me/alarm")
+    public ResponseEntity<?> updateMyAlarmEnable(
+            @RequestBody Map<String, String> body,
+            @RequestHeader("Authorization") String authHeader) {
+        System.out.println("========== UserInfoController ---- updateMyAlarmEnable() ==========");
+
+        String token = authHeader.replace("Bearer ", "");
+
+        if (!jwtUtil.isTokenValid(token)) {
+            return ResponseEntity.status(401).body("인증이 만료되었습니다.");
+        }
+
+        String newAlarmEnable = body.get("alarmEnable");
+        if (!VALID_ALARM_VALUES.contains(newAlarmEnable)) {
+            return ResponseEntity.badRequest().body("alarmEnable 값은 on 또는 off여야 합니다.");
+        }
+
+        String userId = jwtUtil.extractUserId(token);
+        var loginOpt = loginRepository.findByUserId(userId);
+        if (loginOpt.isEmpty()) {
+            return ResponseEntity.status(404).body("사용자를 찾을 수 없습니다.");
+        }
+
+        Login login = loginOpt.get();
+        login.setAlarmEnable(newAlarmEnable);
+        loginRepository.save(login);
+
+        return ResponseEntity.ok(Map.of("userId", userId, "alarmEnable", newAlarmEnable));
+    }
 
     // 마이페이지 - 사용자 조회 탭에서 권한 변경 (관리자만 가능)
     @PatchMapping("/users/{userId}/role")

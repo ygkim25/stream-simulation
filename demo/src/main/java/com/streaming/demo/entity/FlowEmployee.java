@@ -40,6 +40,9 @@ public class FlowEmployee {
     @Column(name = "role")
     private String role = "일반";
 
+    @Column(name = "alarm_enable", columnDefinition = "varchar(10) default 'on'")
+    private String alarmEnable = "on";
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -99,6 +102,9 @@ public class FlowEmployee {
 
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+
+    public String getAlarmEnable() { return alarmEnable; }
+    public void setAlarmEnable(String alarmEnable) { this.alarmEnable = alarmEnable; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

@@ -30,9 +30,9 @@ public class CriticalAlertMailService {
     @Async("mailExecutor")
     public void sendCriticalAlert(String equipId, String equipName, String metricLabel,
                                    double value, double threshold) {
-        List<Login> admins = loginRepository.findByRoleIgnoreCase("admin");
+        List<Login> admins = loginRepository.findByRoleIgnoreCaseAndAlarmEnableIgnoreCase("admin", "on");
         if (admins.isEmpty()) {
-            log.warn("위험 알림 메일 발송 스킵: role=ADMIN 계정이 없음. equipId={}", equipId);
+            log.warn("위험 알림 메일 발송 스킵: 메일 알림이 켜진 admin 계정이 없음. equipId={}", equipId);
             return;
         }
 
