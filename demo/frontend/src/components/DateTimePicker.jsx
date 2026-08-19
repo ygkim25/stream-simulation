@@ -7,16 +7,14 @@ const isSameDay = (a, b) => (
 );
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
-// 트리거 버튼에 보여줄 "yyyy.M.d 오전/오후 h:mm" 형식
+// 트리거 버튼에 보여줄 "yyyy.M.d HH:mm" 형식(24시간제)
 const formatTrigger = (date) => {
   const yyyy = date.getFullYear();
   const mm = date.getMonth() + 1;
   const dd = date.getDate();
-  const hours24 = date.getHours();
-  const period = hours24 < 12 ? '오전' : '오후';
-  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  const hh = String(date.getHours()).padStart(2, '0');
   const min = String(date.getMinutes()).padStart(2, '0');
-  return `${yyyy}.${mm}.${dd} ${period} ${hours12}:${min}`;
+  return `${yyyy}.${mm}.${dd} ${hh}:${min}`;
 };
 
 // ==========================================

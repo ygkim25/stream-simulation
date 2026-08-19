@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
   // 자동로그인 체크 시 저장해둔 아이디/비밀번호를 화면에 미리 채워둠
@@ -27,7 +28,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
     };
 
     try {
-      const response = await axios.post('http://localhost:8086/api/auth/login', loginData);
+      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, loginData);
       
       const { 
         token, 

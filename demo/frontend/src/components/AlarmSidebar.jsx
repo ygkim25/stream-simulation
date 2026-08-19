@@ -11,7 +11,6 @@ const AlarmSidebar = ({
   // (그리드/설비별 온도추이/알람이 각자 따로 노는 토글이었는데, 그리드 탭 하나로 다같이 움직이도록 통일함)
   metricTab: controlledMetricTab,
 }) => {
-  const counts = statusCounts || { normal: 0, warning: 0, danger: 0 };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
@@ -24,6 +23,11 @@ const AlarmSidebar = ({
   const [internalMetricTab, setInternalMetricTab] = useState(forcedMetricTab ?? 'temperature');
   const effectiveMetricTab = isControlled ? controlledMetricTab : (forcedMetricTab ?? internalMetricTab);
   const filteredAlarms = alarms.filter(a => (a.metric || 'temperature') === effectiveMetricTab);
+
+  // statusCounts는 단일 지표 화면(실시간)에선 그냥 {normal,warning,danger}로, 두 지표를 다 다루는
+  // 화면(시뮬레이션)에선 {temperature:{...}, power:{...}}로 내려옴 - 지금 탭에 맞는 값을 뽑아 씀
+  const counts = (statusCounts && 'normal' in statusCounts ? statusCounts : statusCounts?.[effectiveMetricTab])
+    || { normal: 0, warning: 0, danger: 0 };
 
   // "지우기" 버튼 클릭 시 바로 지우지 않고 확인 팝업을 먼저 띄움
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
@@ -227,7 +231,7 @@ const AlarmSidebar = ({
                   <span className={`font-bold text-[13px] flex items-center gap-1.5 ${
                     isDarkMode ? 'text-[#FB5D75]' : 'text-red-600'
                   }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                    <span className={`status-dot animate-pulse ${
                       isDarkMode ? 'bg-[#FB5D75]' : 'bg-red-500'
                     }`}></span>
                     {alarm.equipName}
@@ -276,7 +280,7 @@ const AlarmSidebar = ({
             ? 'bg-[#34D399]/10 text-[#34D399]'
             : 'bg-green-50 text-green-700 border border-green-200'
         }`}>
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          <span className="status-dot bg-green-500" />
           정상 {counts.normal}
         </span>
         <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
@@ -284,7 +288,7 @@ const AlarmSidebar = ({
             ? 'bg-[#FBBF24]/10 text-[#FBBF24]'
             : 'bg-amber-50 text-amber-700 border border-amber-200'
         }`}>
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+          <span className="status-dot bg-amber-500" />
           경고 {counts.warning}
         </span>
         <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
@@ -292,7 +296,7 @@ const AlarmSidebar = ({
             ? 'bg-[#FB5D75]/10 text-[#FB5D75]'
             : 'bg-red-50 text-red-600 border border-red-200'
         }`}>
-          <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+          <span className="status-dot bg-red-500" />
           위험 {counts.danger}
         </span>
       </div>

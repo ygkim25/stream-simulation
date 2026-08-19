@@ -4,6 +4,7 @@ import {
   CartesianGrid, Tooltip, ReferenceLine, ReferenceDot,
 } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
+import { formatClockTime } from '../utils/simulationParse';
 
 // 처음에 한 번에 미리 가져와 둘 최대 건수 (스크롤로 확대/축소할 때는 이 안에서 클라이언트에서만
 // 잘라서 보여주므로 DB를 다시 조회하지 않음 -> 스크롤 중 렉이 생기지 않음)
@@ -125,7 +126,7 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, onClose, isDarkM
         const mapped = recent
           .filter(item => item.receivedAt)
           .map(item => ({
-            time: new Date(item.receivedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            time: formatClockTime(new Date(item.receivedAt)),
             temperature: item.temperature != null ? Number(Number(item.temperature).toFixed(1)) : null,
             power: item.power != null ? Number(Number(item.power).toFixed(1)) : null,
           }));

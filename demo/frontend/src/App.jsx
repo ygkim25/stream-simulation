@@ -69,15 +69,18 @@ export default function App() {
   const handleMyPageClose = () => setIsMyPageOpen(false);
   const handleLogOpen = () => setIsLogOpen(true);
   const handleLogClose = () => setIsLogOpen(false);
-  const handleClearLogs = async () => {
+  // 지금 보고 있는 지표(온도/전력)의 로그만 지움 - 다른 지표 로그는 그대로 둠
+  const handleClearLogs = async (metric) => {
+    const domain = metric === 'power' ? 'elec' : 'temp';
     try {
-      await axios.post('http://localhost:8086/api/live/monitoring/logs/clear', {}, {
+      await axios.post(`${API_BASE_URL}/api/live/monitoring/${domain}/logs/clear`, {}, {
         headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
       });
     } catch (err) {
       console.error('로그 초기화 실패:', err);
+      return;
     }
-    setLogs([]);
+    setLogs(prev => prev.filter(l => (l.metric || 'temperature') !== (domain === 'temp' ? 'temperature' : 'power')));
   };
 
   return (

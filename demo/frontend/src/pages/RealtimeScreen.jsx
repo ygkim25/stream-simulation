@@ -14,27 +14,27 @@ import DateTimePicker from '../components/DateTimePicker';
 import EquipTimelineBar from '../components/EquipTimelineBar';
 import { saveToDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
 import { formatKoreanDateTime } from '../utils/dateFormat';
+import { formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
+import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
-// "전체 흐름" 타임라인이 보여주는 고정 창 크기 (항상 "지금" 기준 최근 1시간)
-const TIMELINE_WINDOW_MS = 60 * 60 * 1000;
-// 브라우저 로컬 기록(IndexedDB) 보관 기간 - 이보다 오래된 데이터는 주기적으로 지워서
-// 저장소가 무한정 커지는 것을 막음 (자정 기준 "당일"로 끊으면 자정 직후 "최근 1시간" 흐름이
-// 끊기는 문제가 있어서, 달력 날짜 대신 롤링 24시간 창으로 둠)
-const LOCAL_DB_RETENTION_MS = 24 * 60 * 60 * 1000;
+// IndexedDB엔 "오늘 00:00 이후" 데이터만 남겨둠 - 그 이전 기록은 백엔드 DB(히스토리 API)에서
+// 받아오면 되므로 로컬엔 하루치 이상 쌓아둘 필요가 없음. 자정을 넘기면 자동으로 그 전날 로컬
+// 기록이 정리 대상이 됨 (다음날 새 하루가 시작되며 다시 로컬에 쌓이기 시작함)
+const getTodayStartMs = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
 const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(자주 할 필요 없음)
 
-// "전체 흐름"을 새로고침 직후에도 빈 상태로 보이지 않게, 마지막으로 계산된 결과를 로컬에 캐싱해둠
-// (IndexedDB 조회는 비동기라 아무리 빨라도 첫 페인트 전엔 못 끝내지만, localStorage는 동기라
-// state 초기값으로 바로 쓸 수 있음 - 새로고침 직후 잠깐 살짝 오래된 값이 보이다가 곧바로
-// 최신 조회 결과로 갱신되는 정도라 실사용상 문제없음)
-// v2: 캐시 형태를 {metric: {equipId: segments}}에서 {equipId: {temperature, power}}로 바꿔서
-// (온도/전력을 항상 같이 계산하도록 변경) 키도 같이 바꿈 - 안 바꾸면 이전 형태로 저장된 캐시를
-// 읽었을 때 equipId로 조회해도 아무것도 안 나와서 "전체 흐름"이 새로고침 직후 텅 비어 보였음
+// "전체 흐름"이 새로고침 직후 빈 상태로 안 보이게, 마지막 계산 결과를 동기적으로 읽을 수 있는
+// localStorage에 캐싱함 (IndexedDB 조회는 비동기라 첫 페인트 전엔 못 끝남). v2: 캐시 형태를
+// {equipId: {temperature, power}}로 바꾸며 키도 같이 바꿈 (안 바꾸면 예전 캐시가 안 읽혀 텅 비어 보임)
 const TIMELINE_CACHE_KEY = 'realtimeTimelineCacheV2';
 
 const loadCachedTimelines = () => {
@@ -103,9 +103,8 @@ const STATUS_FILTER_ACTIVE_CLASS = {
   danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
 };
 
-// 백엔드가 온도(EquipmentTempStatusDto)/전력(EquipmentElecStatusDto)을 완전히 별개 도메인으로 내려주므로
-// (둘 다 threshold/status라는 같은 이름의 필드를 각자 갖고 있음), 화면에서 쓰는 한 행으로 합칠 때
-// 전력 쪽은 powerThreshold/powerStatus로 이름을 바꿔서 온도 값과 섞이지 않게 함
+// 백엔드가 온도/전력을 완전히 별개 도메인(threshold/status 필드명이 겹침)으로 내려주므로,
+// 한 행으로 합칠 때 전력 쪽은 powerThreshold/powerStatus로 이름을 바꿔서 온도 값과 안 섞이게 함
 const EMPTY_EQUIP_ROW = { temperature: null, threshold: null, status: null, power: null, powerThreshold: null, powerStatus: null };
 const mergeTempDto = (row, dto) => ({
   ...row,
@@ -140,10 +139,8 @@ const mergeEquipmentLists = (tempList, elecList) => {
   return [...byId.values()];
 };
 
-// 온도/전력 API를 항상 같이 호출하는데, Promise.all로 묶어서 기다리면
-// (1) 하나만 실패해도 둘 다 날아가고 (2) 느린 쪽 하나 때문에 다 받아온 빠른 쪽까지 화면에 늦게 뜨는
-// 문제가 있었음. 각 요청을 독립적으로 처리해서, 먼저 도착한 쪽은 바로 반영하고 실패한 쪽은
-// 그 쪽만 빈 값으로 대체함. 그래도 "둘 다 끝난 뒤"가 필요한 호출부(예: 저장 후 새로고침)를 위해
+// 온도/전력 API를 Promise.all로 묶으면 하나만 실패해도 둘 다 날아가고 느린 쪽 때문에 빠른 쪽도
+// 늦게 뜸 - 각 요청을 독립 처리해 먼저 온 쪽부터 바로 반영. "둘 다 끝난 뒤"가 필요한 호출부를 위해
 // 두 요청이 모두 끝나는 Promise도 반환함
 const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
   let tempData;
@@ -204,10 +201,10 @@ const parseCsv = (text) => {
   });
 };
 
-// 로컬 보관 기간(24시간)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서 가져와서
-// 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
+// 로컬 보관 기간(오늘 00:00 이후)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서
+// 가져와서 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
 const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
-  const url = `http://localhost:8086/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
+  const url = `${API_BASE_URL}/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
   const res = await axios.get(url, { headers, responseType: 'text', transformResponse: [(data) => data] });
   const rows = parseCsv(res.data);
   return rows.map(row => ({
@@ -215,8 +212,7 @@ const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
     temperature: domain === 'temp' && row.temperature !== '' ? Number(row.temperature) : undefined,
     power: domain === 'elec' && row.power !== '' ? Number(row.power) : undefined,
     status: row.status,
-    // 백엔드는 "yyyy-MM-dd HH:mm:ss" 형식이라 그대로는 Date로 안정적으로 파싱되지 않는 브라우저가
-    // 있어서, 로컬 레코드와 같은 ISO 형식으로 맞춰줌
+    // 백엔드의 "yyyy-MM-dd HH:mm:ss"는 일부 브라우저에서 Date 파싱이 불안정해 ISO로 맞춰줌
     receivedAt: row.recordedAt ? row.recordedAt.replace(' ', 'T') : null,
   }));
 };
@@ -283,6 +279,9 @@ const RealtimeScreen = ({
   };
 
   const [equipments, setEquipments] = useState([]);
+  // 온도/전력 둘 다 최초 로딩이 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 문구를 계속 보여줌
+  // (먼저 온 쪽만 반영하면 반쪽 데이터가 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로 추가함)
+  const [hasLoadedEquipmentsOnce, setHasLoadedEquipmentsOnce] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState('');
   // 설정 탭 (설비명/위치/임계값(온도)/임계값(전력))
@@ -307,9 +306,8 @@ const RealtimeScreen = ({
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
 
-  // 알림 매핑 시 최신 설비명/위치를 참조하기 위한 ref
-  // (useEffect로 state를 미러링하면 웹소켓 메시지가 연달아 도착할 때 ref가 한 렌더 뒤처져서
-  //  상태 전환이 아닌데도 전환으로 오탐지될 수 있어, 웹소켓 핸들러에서 직접 동기적으로 갱신함)
+  // 알림 매핑용 최신 설비명/위치 ref. useEffect 미러링은 웹소켓 연타 시 한 렌더 뒤처져 상태
+  // 전환 오탐지가 생길 수 있어, 웹소켓 핸들러에서 직접 동기적으로 갱신함
   const equipmentsRef = useRef([]);
 
   // 짧은 시간에 상태 전환이 연달아 발생해도 noti-warn/logs 조회는 한 번으로 묶어서 보내기 위한 디바운스
@@ -385,7 +383,7 @@ const RealtimeScreen = ({
   // 막음 (안 지우면 시간이 지날수록 조회들이 갈수록 느려짐). 마운트 시 한 번 + 30분마다 반복
   useEffect(() => {
     const prune = () => {
-      pruneOldRecordsFromDB(Date.now() - LOCAL_DB_RETENTION_MS).catch(err => {
+      pruneOldRecordsFromDB(getTodayStartMs()).catch(err => {
         console.error('로컬 기록 정리 실패:', err);
       });
     };
@@ -405,7 +403,7 @@ const RealtimeScreen = ({
       }
 
       const client = new Client({
-        brokerURL: 'ws://localhost:8086/ws/websocket',
+        brokerURL: `${WS_BASE_URL}/ws/websocket`,
 
         connectHeaders: {
           Authorization: user?.token ? `Bearer ${user.token}` : '',
@@ -423,9 +421,8 @@ const RealtimeScreen = ({
           fetchAlerts();
           fetchLogs();
 
-          // 온도/전력 각각의 실시간 틱을 처리하는 핸들러. 도메인이 완전히 분리되어 있어서
-          // (온도 틱은 temperature/threshold/status만, 전력 틱은 power/threshold/status만 들고 옴)
-          // 기존 행을 통째로 덮어쓰면 안 되고, 해당 도메인 필드만 갱신해야 다른 쪽 값이 안 날아감
+          // 온도/전력 실시간 틱 핸들러. 도메인이 분리돼 있어 기존 행을 통째로 덮어쓰지 않고
+          // 해당 도메인 필드만 갱신해야 다른 쪽 값이 안 날아감
           const handleLiveMessage = (domain) => async (message) => {
             if (!isMounted) return;
 
@@ -527,7 +524,7 @@ const RealtimeScreen = ({
     try {
       const headers = { Authorization: `Bearer ${user.token}` };
       await axios.post(
-        `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/noti-warn/clear`,
+        `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/noti-warn/clear`,
         {},
         { headers }
       );
@@ -596,7 +593,7 @@ const RealtimeScreen = ({
   };
 
   // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
-  // 로컬 보관 기간(24시간) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
+  // 로컬 보관 기간(오늘 00:00 이후) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
   const handleExport = async () => {
     if (startTime >= endTime) {
       showAlert('시작 시각은 종료 시각보다 빨라야 합니다.');
@@ -606,19 +603,17 @@ const RealtimeScreen = ({
     try {
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
-      const cutoffMs = Date.now() - LOCAL_DB_RETENTION_MS;
+      const cutoffMs = getTodayStartMs();
 
-      // 요청 구간 중 최근 24시간과 겹치는 부분은 IndexedDB에서
+      // 요청 구간 중 오늘 자정 이후와 겹치는 부분은 IndexedDB에서
       let localData = [];
       if (endMs > cutoffMs) {
         const localStartMs = Math.max(startMs, cutoffMs);
         localData = await getByDateRangeFromDB(localStartMs, endMs);
       }
 
-      // 요청 구간 중 24시간보다 오래된 부분은 백엔드 히스토리에서 (온도/전력 각각 CSV로 내려줌).
-      // 온도/전력을 독립적으로 조회해서, 한쪽이 실패해도(혹은 그 구간에 데이터가 없어도) 성공한
-      // 쪽 데이터는 그대로 내보내기에 포함시킴 (Promise.all로 묶으면 하나만 실패해도 둘 다 날아감).
-      // 온도만/전력만 선택했으면 필요 없는 쪽은 아예 조회하지 않음
+      // 24시간보다 오래된 부분은 백엔드 히스토리 CSV에서, 온도/전력 독립 조회로 한쪽이 실패해도
+      // 성공한 쪽은 그대로 포함시킴 (Promise.all이면 하나만 실패해도 둘 다 날아감)
       const needsTemp = exportIncludeTemp;
       const needsPower = exportIncludePower;
       let backendData = [];
@@ -626,8 +621,8 @@ const RealtimeScreen = ({
         const backendEndMs = Math.min(endMs, cutoffMs);
         const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
         const equipInfoById = new Map(equipmentsRef.current.map(eq => [String(eq.equipId), eq]));
-        // 히스토리 원본엔 설비명/위치/임계값이 없어서, 현재 설비 목록으로 최대한 채워 넣음
-        // (과거 시점의 실제 임계값은 따로 저장돼있지 않아 현재 값으로 대체하는 것뿐이라 참고용임)
+        // 히스토리 원본엔 설비명/위치/임계값이 없어서 현재 설비 목록으로 채워 넣음 (과거 임계값은
+        // 저장돼있지 않아 현재 값으로 대체, 참고용)
         const enrich = (rows) => rows.map(r => {
           const info = equipInfoById.get(String(r.equipId));
           const fallbackThreshold = r.temperature != null ? info?.threshold : info?.powerThreshold;
@@ -667,9 +662,8 @@ const RealtimeScreen = ({
         return;
       }
 
-      // 온도/전력이 서로 다른 시점에 독립적으로 기록돼서 원본은 한 행에 한쪽 값만 있는 경우가 많음.
-      // equipId별로 시간순으로 훑으면서, 방금 값이 없는 쪽은 마지막으로 알려진 값을 이어붙여
-      // 한 행에 온도/전력이 같이 보이도록 합침
+      // 온도/전력이 독립적으로 기록돼 한 행에 한쪽 값만 있는 경우가 많음 - equipId별 시간순으로
+      // 훑으며 값이 없는 쪽은 마지막 알려진 값을 이어붙여 한 행에 같이 보이도록 합침
       const byEquip = new Map();
       combinedRecords.forEach(r => {
         if (!byEquip.has(r.equipId)) byEquip.set(r.equipId, []);
@@ -710,7 +704,7 @@ const RealtimeScreen = ({
           '수신 시간': eq.receivedAt ? formatKoreanDateTime(eq.receivedAt) : '-',
         };
         if (needsTemp) {
-          row['온도(℃)'] = eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-';
+          row['온도'] = eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-';
           row['임계값(온도)'] = eq.tempThreshold ?? '-';
           row['상태(온도)'] = eq.tempStatus ? getStatusMeta(eq.tempStatus).label : '-';
         }
@@ -758,19 +752,23 @@ const RealtimeScreen = ({
   };
 
   // 설비 그리드만 최신 데이터로 다시 불러오기 (전체 새로고침 없이) - 온도/전력 API를 둘 다 불러서 합침.
-  // 둘 중 먼저 도착한 쪽부터 바로 화면에 반영됨
+  // 먼저 온 쪽을 바로 반영하면 아직 안 온 쪽 값이 빈 반쪽 상태(혹은 테이블에 남아있던 예전 값)가
+  // 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로, 둘 다 끝난 뒤 한 번에만 반영하도록 함
   const fetchEquipments = () => {
     const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+    let latestTemp = [];
+    let latestElec = [];
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp',
-      'http://localhost:8086/api/live/monitoring/elec',
+      `${API_BASE_URL}/api/live/monitoring/temp`,
+      `${API_BASE_URL}/api/live/monitoring/elec`,
       headers,
-      (tempData, elecData) => {
-        const data = mergeEquipmentLists(tempData, elecData);
-        equipmentsRef.current = data;
-        setEquipments(data);
-      }
-    );
+      (tempData, elecData) => { latestTemp = tempData; latestElec = elecData; }
+    ).then(() => {
+      const data = mergeEquipmentLists(latestTemp, latestElec);
+      equipmentsRef.current = data;
+      setEquipments(data);
+      setHasLoadedEquipmentsOnce(true);
+    });
   };
 
   // 알람 조회 (온도/전력 알람을 각각 조회해서 시간순으로 합침, 먼저 온 쪽부터 반영)
@@ -778,8 +776,8 @@ const RealtimeScreen = ({
     if (!user?.token) return Promise.resolve();
     const headers = { Authorization: `Bearer ${user.token}` };
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp/noti-warn',
-      'http://localhost:8086/api/live/monitoring/elec/noti-warn',
+      `${API_BASE_URL}/api/live/monitoring/temp/noti-warn`,
+      `${API_BASE_URL}/api/live/monitoring/elec/noti-warn`,
       headers,
       (tempData, elecData) => {
         const tempAlerts = tempData.map(item => ({ ...item, metric: 'temperature', value: item.temperature }));
@@ -792,7 +790,7 @@ const RealtimeScreen = ({
               id: `${item.metric}-${item.equipId}-${item.recordedAt}`,
               equipId: item.equipId,
               equipName: eq?.equipName || item.equipId,
-              time: item.recordedAt ? new Date(item.recordedAt).toLocaleTimeString('ko-KR') : '-',
+              time: item.recordedAt ? formatClockTime(new Date(item.recordedAt)) : '-',
               value: item.value,
               threshold: item.threshold,
               location: eq?.location || '-',
@@ -811,8 +809,8 @@ const RealtimeScreen = ({
     if (!user?.token) return Promise.resolve();
     const headers = { Authorization: `Bearer ${user.token}` };
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp/logs',
-      'http://localhost:8086/api/live/monitoring/elec/logs',
+      `${API_BASE_URL}/api/live/monitoring/temp/logs`,
+      `${API_BASE_URL}/api/live/monitoring/elec/logs`,
       headers,
       (tempData, elecData) => {
         // 온도/전력 로그는 서로 독립된 테이블이라 id가 우연히 겹칠 수 있어서(예: 둘 다 464번),
@@ -824,12 +822,13 @@ const RealtimeScreen = ({
           .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
           .map(item => ({
             id: `log-${item.__domain}-${item.id}`,
-            time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString('ko-KR') : '-',
+            time: item.createdAt ? formatClockTime(new Date(item.createdAt)) : '-',
             type: item.type,
             equipName: item.equipName,
             message: item.message,
             value: item.value,
             threshold: item.threshold,
+            metric: item.__domain === 'temp' ? 'temperature' : 'power',
           }));
         setLogs(mapped.slice(-MAX_LOGS));
       }
@@ -926,7 +925,7 @@ const RealtimeScreen = ({
     }));
 
     const payload = [...existingPayload, ...newRowsPayload];
-    const updateUrl = `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
+    const updateUrl = `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
 
     try {
       const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
@@ -1016,18 +1015,17 @@ const RealtimeScreen = ({
     return list;
   }, [sortedEquipments, equipSearch, statusFilter, metricTab]);
 
-  // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용)
+  // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용, 온도/전력 탭에 따라 다르게 집계)
   const statusCounts = equipments.reduce((acc, eq) => {
-    const label = getStatusMeta(eq.status).label;
+    const label = getStatusMeta(metricTab === 'temperature' ? eq.status : eq.powerStatus).label;
     if (label === '위험') acc.danger += 1;
     else if (label === '경고') acc.warning += 1;
     else acc.normal += 1;
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
 
-  // 설비별 "최근 1시간" 상태 흐름을 온도/전력 각각 따로 색 구간으로 계산.
-  // 날짜 범위 선택기와 무관하게 항상 "지금"을 오른쪽 끝으로 하는 고정 1시간 창을 보여주고,
-  // 주기적으로 다시 계산해서 창 자체가 계속 앞으로 흘러가며 새 데이터를 반영함
+  // 설비별 "오늘 00:00부터 지금까지" 상태 흐름을 온도/전력 각각 색 구간으로 계산. 날짜 범위
+  // 선택기와 무관하게 항상 오늘 자정을 왼쪽 끝, "지금"을 오른쪽 끝으로 해서 주기적으로 다시 계산함
   const [equipTimelines, setEquipTimelines] = useState(() => loadCachedTimelines() || {});
   // 첫 조회가 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 표시를 해줌
   // (캐시된 값이 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작함)
@@ -1036,8 +1034,9 @@ const RealtimeScreen = ({
     let cancelled = false;
     const load = async () => {
       const endMs = Date.now();
-      const startMs = endMs - TIMELINE_WINDOW_MS;
+      const startMs = getTodayStartMs();
       try {
+        // IndexedDB가 딱 "오늘 00:00 이후"만 보관하므로 시작점이 항상 일치해서, 로컬 조회만으로 충분함
         const records = await getByDateRangeIndexedFromDB(startMs, endMs);
         if (cancelled) return;
 
@@ -1384,7 +1383,7 @@ const RealtimeScreen = ({
                     {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[11%]')}
                     {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[12%]')}
                     {renderSortableHeader('status', '상태', 'w-[14%]')}
-                    <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
+                    <th className={`w-[16%] grid-th`}>전체 흐름</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1454,7 +1453,9 @@ const RealtimeScreen = ({
                   {equipments.length === 0 && newRows.length === 0 && (
                     <tr>
                       <td colSpan={8} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                        {isConnected ? '웹소켓 수신 대기 중...' : '웹소켓 연결을 확인해 주세요.'}
+                        {!hasLoadedEquipmentsOnce
+                          ? '데이터를 불러오는 중...'
+                          : isConnected ? '등록된 설비가 없습니다.' : '웹소켓 연결을 확인해 주세요.'}
                       </td>
                     </tr>
                   )}
@@ -1556,8 +1557,8 @@ const RealtimeScreen = ({
                             )}
                           </div>
                         </td>
-                        <td className={`px-3 py-0 h-[52px] font-mono text-xs text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-                          {eq.receivedAt ? new Date(eq.receivedAt).toLocaleTimeString('ko-KR') : '-'}
+                        <td className={`px-3 py-0 h-[52px] font-mono text-[13px] text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
+                          {eq.receivedAt ? formatClockTime(new Date(eq.receivedAt)) : '-'}
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
                           <span className={`text-sm font-mono font-bold tabular-nums ${
@@ -1592,7 +1593,7 @@ const RealtimeScreen = ({
                             <span className={`text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>–</span>
                           ) : (
                             <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
+                              <span className={`status-dot ${statusStyle.dot}`} />
                               {statusMeta.label}
                             </span>
                           )}

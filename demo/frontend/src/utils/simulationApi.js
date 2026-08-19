@@ -1,9 +1,7 @@
 import axios from 'axios';
+import { API_BASE_URL } from './apiConfig';
 
-// ==========================================
-// 시뮬레이션 시나리오 백엔드 API (simulation_scenario 테이블, 유저별 소유권 분리)
-// ==========================================
-const BASE_URL = 'http://localhost:8086/api/simulation/scenarios';
+const BASE_URL = `${API_BASE_URL}/api/simulation/scenarios`;
 
 const authHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : {});
 

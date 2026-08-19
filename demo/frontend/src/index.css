@@ -144,3 +144,64 @@ button:focus,
 button:focus-visible {
   outline: none;
 }
+
+/* ------------------------------------------
+ * 실시간/시뮬레이션 화면 표(grid)들에서 공통으로 반복되던 조합을 클래스로 뺌 (여러 페이지에서
+ * 같이 씀). 너비/높이·다크모드 테두리색·상태별 글자색처럼 칸마다 달라지는 부분만 className에서
+ * 그대로 조합해서 씀
+ * ------------------------------------------ */
+.grid-cell-input {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  border-radius: 0.25rem;
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
+  text-align: center;
+  font-weight: 700;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.75rem;
+  line-height: 1;
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+  appearance: textfield;
+}
+.grid-cell-input:focus {
+  outline: none;
+}
+.grid-cell-input::-webkit-outer-spin-button,
+.grid-cell-input::-webkit-inner-spin-button {
+  appearance: none;
+}
+
+/* 표 헤더 셀 - 다크모드 테두리색만 .dark로 자동 전환되고, 나머지는 항상 동일 */
+.grid-th {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  border-bottom-width: 1px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-color: #D1D5DB; /* gray-300 */
+}
+.dark .grid-th {
+  border-color: #2A335A;
+}
+
+/* 상태(정상/경고/위험) 뱃지 - 점+글자 배치 구조만 공통, 색은 그대로 동적으로 조합 */
+.status-badge {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+}
