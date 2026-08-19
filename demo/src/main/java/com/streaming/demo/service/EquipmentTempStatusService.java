@@ -38,6 +38,7 @@ public class EquipmentTempStatusService {
     private final EquipmentTempHistoryRepository historyRepository;
     private final EquipmentTempAlertRepository alertRepository;
     private final EquipmentTempLogService equipmentLogService;
+    private final CriticalAlertMailService mailService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Qualifier("taskScheduler")
@@ -89,6 +90,8 @@ public class EquipmentTempStatusService {
                         "/topic/live/monitoring/temp",
                         List.of(new EquipmentTempStatusDto(eq)));
 
+                repository.updateLiveValue(eq.getEquipId(), eq.getTemperature(), newStatus, now);
+
                 historyRepository.save(new EquipmentTempHistory(
                         eq.getEquipId(), eq.getTemperature(), newStatus, now));
 
@@ -103,6 +106,12 @@ public class EquipmentTempStatusService {
 
                 if (statusChanged) {
                     equipmentLogService.recordStatusChange(eq, newStatus, now);
+                }
+
+                // 정상/경고 → 위험으로 새로 진입할 때만 메일 발송 (경고는 메일 대상 아님)
+                if ("위험".equals(newStatus) && statusChanged) {
+                    mailService.sendCriticalAlert(eq.getEquipId(), eq.getEquipName(), "온도",
+                            eq.getTemperature(), eq.getThreshold());
                 }
             }
 

@@ -38,6 +38,7 @@ public class EquipmentElecStatusService {
     private final EquipmentElecHistoryRepository historyRepository;
     private final EquipmentElecAlertRepository alertRepository;
     private final EquipmentElecLogService equipmentLogService;
+    private final CriticalAlertMailService mailService;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Qualifier("taskScheduler")
@@ -89,6 +90,8 @@ public class EquipmentElecStatusService {
                         "/topic/live/monitoring/elec",
                         List.of(new EquipmentElecStatusDto(eq)));
 
+                repository.updateLiveValue(eq.getEquipId(), eq.getPower(), newStatus, now);
+
                 historyRepository.save(new EquipmentElecHistory(
                         eq.getEquipId(), eq.getPower(), newStatus, now));
 
@@ -103,6 +106,12 @@ public class EquipmentElecStatusService {
 
                 if (statusChanged) {
                     equipmentLogService.recordStatusChange(eq, newStatus, now);
+                }
+
+                // 정상/경고 → 위험으로 새로 진입할 때만 메일 발송 (경고는 메일 대상 아님)
+                if ("위험".equals(newStatus) && statusChanged) {
+                    mailService.sendCriticalAlert(eq.getEquipId(), eq.getEquipName(), "전력",
+                            eq.getPower(), eq.getThreshold());
                 }
             }
 
