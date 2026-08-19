@@ -50,7 +50,7 @@ public class CriticalAlertMailService {
                 message.setText(text);
                 mailSender.send(message);
             } catch (Exception e) {
-                log.error("위험 알림 메일 발송 실패: equipId={}, to={}", equipId, toAddress, e);
+                log.error("위험 알림 메일 발송 실패: equipId={}, to={}", equipId, toAddress);
             }
         }
     }
