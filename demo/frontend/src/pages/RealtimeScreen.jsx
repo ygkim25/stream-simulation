@@ -828,6 +828,7 @@ const RealtimeScreen = ({
             message: item.message,
             value: item.value,
             threshold: item.threshold,
+            metric: item.__domain === 'temp' ? 'temperature' : 'power',
           }));
         setLogs(mapped.slice(-MAX_LOGS));
       }

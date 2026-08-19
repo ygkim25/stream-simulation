@@ -369,6 +369,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     message: e.kind === 'warning' ? '임계값 초과 감지' : '정상 범위로 복구됨',
     value: e.value,
     threshold: e.threshold,
+    metric: e.metric,
   });
 
   // 재생 위치(elapsedMs)가 바뀔 때마다 지금까지 발생한 전환 이벤트를 알람/로그에 반영
@@ -709,6 +710,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         message: `임계값 초과 감지 (${newStatus}) [수동 수정]`,
         value: alarmValue,
         threshold: alarmThreshold,
+        metric,
       }]);
     }
   };
@@ -1662,9 +1664,11 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       {isLogOpen && (
         <FullLogModal
           logs={simLogs}
-          onClear={() => setSimLogs([])}
+          onClear={(metric) => setSimLogs(prev => prev.filter(l => (l.metric || 'temperature') !== metric))}
           onClose={() => setIsLogOpen(false)}
           isDarkMode={isDarkMode}
+          showTemperatureTab={hasTemperatureData}
+          showPowerTab={hasPowerData}
         />
       )}
 
