@@ -17,12 +17,11 @@ import { formatKoreanDateTime } from '../utils/dateFormat';
 import { formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
+import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
-// "전체 흐름" 타임라인이 보여주는 고정 창 크기 (항상 "지금" 기준 최근 1시간)
-const TIMELINE_WINDOW_MS = 60 * 60 * 1000;
 // IndexedDB엔 "오늘 00:00 이후" 데이터만 남겨둠 - 그 이전 기록은 백엔드 DB(히스토리 API)에서
 // 받아오면 되므로 로컬엔 하루치 이상 쌓아둘 필요가 없음. 자정을 넘기면 자동으로 그 전날 로컬
 // 기록이 정리 대상이 됨 (다음날 새 하루가 시작되며 다시 로컬에 쌓이기 시작함)
@@ -205,7 +204,7 @@ const parseCsv = (text) => {
 // 로컬 보관 기간(오늘 00:00 이후)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서
 // 가져와서 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
 const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
-  const url = `http://localhost:8086/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
+  const url = `${API_BASE_URL}/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
   const res = await axios.get(url, { headers, responseType: 'text', transformResponse: [(data) => data] });
   const rows = parseCsv(res.data);
   return rows.map(row => ({
@@ -404,7 +403,7 @@ const RealtimeScreen = ({
       }
 
       const client = new Client({
-        brokerURL: 'ws://localhost:8086/ws/websocket',
+        brokerURL: `${WS_BASE_URL}/ws/websocket`,
 
         connectHeaders: {
           Authorization: user?.token ? `Bearer ${user.token}` : '',
@@ -525,7 +524,7 @@ const RealtimeScreen = ({
     try {
       const headers = { Authorization: `Bearer ${user.token}` };
       await axios.post(
-        `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/noti-warn/clear`,
+        `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/noti-warn/clear`,
         {},
         { headers }
       );
@@ -760,8 +759,8 @@ const RealtimeScreen = ({
     let latestTemp = [];
     let latestElec = [];
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp',
-      'http://localhost:8086/api/live/monitoring/elec',
+      `${API_BASE_URL}/api/live/monitoring/temp`,
+      `${API_BASE_URL}/api/live/monitoring/elec`,
       headers,
       (tempData, elecData) => { latestTemp = tempData; latestElec = elecData; }
     ).then(() => {
@@ -777,8 +776,8 @@ const RealtimeScreen = ({
     if (!user?.token) return Promise.resolve();
     const headers = { Authorization: `Bearer ${user.token}` };
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp/noti-warn',
-      'http://localhost:8086/api/live/monitoring/elec/noti-warn',
+      `${API_BASE_URL}/api/live/monitoring/temp/noti-warn`,
+      `${API_BASE_URL}/api/live/monitoring/elec/noti-warn`,
       headers,
       (tempData, elecData) => {
         const tempAlerts = tempData.map(item => ({ ...item, metric: 'temperature', value: item.temperature }));
@@ -810,8 +809,8 @@ const RealtimeScreen = ({
     if (!user?.token) return Promise.resolve();
     const headers = { Authorization: `Bearer ${user.token}` };
     return fetchBothDomains(
-      'http://localhost:8086/api/live/monitoring/temp/logs',
-      'http://localhost:8086/api/live/monitoring/elec/logs',
+      `${API_BASE_URL}/api/live/monitoring/temp/logs`,
+      `${API_BASE_URL}/api/live/monitoring/elec/logs`,
       headers,
       (tempData, elecData) => {
         // 온도/전력 로그는 서로 독립된 테이블이라 id가 우연히 겹칠 수 있어서(예: 둘 다 464번),
@@ -925,7 +924,7 @@ const RealtimeScreen = ({
     }));
 
     const payload = [...existingPayload, ...newRowsPayload];
-    const updateUrl = `http://localhost:8086/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
+    const updateUrl = `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
 
     try {
       const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
@@ -1024,8 +1023,8 @@ const RealtimeScreen = ({
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
 
-  // 설비별 "최근 1시간" 상태 흐름을 온도/전력 각각 색 구간으로 계산. 날짜 범위 선택기와 무관하게
-  // 항상 "지금"을 오른쪽 끝으로 하는 고정 1시간 창을 주기적으로 다시 계산함
+  // 설비별 "오늘 00:00부터 지금까지" 상태 흐름을 온도/전력 각각 색 구간으로 계산. 날짜 범위
+  // 선택기와 무관하게 항상 오늘 자정을 왼쪽 끝, "지금"을 오른쪽 끝으로 해서 주기적으로 다시 계산함
   const [equipTimelines, setEquipTimelines] = useState(() => loadCachedTimelines() || {});
   // 첫 조회가 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 표시를 해줌
   // (캐시된 값이 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작함)
@@ -1034,28 +1033,11 @@ const RealtimeScreen = ({
     let cancelled = false;
     const load = async () => {
       const endMs = Date.now();
-      const startMs = endMs - TIMELINE_WINDOW_MS;
-      const todayStartMs = getTodayStartMs();
+      const startMs = getTodayStartMs();
       try {
-        const localRecords = await getByDateRangeIndexedFromDB(Math.max(startMs, todayStartMs), endMs);
+        // IndexedDB가 딱 "오늘 00:00 이후"만 보관하므로 시작점이 항상 일치해서, 로컬 조회만으로 충분함
+        const records = await getByDateRangeIndexedFromDB(startMs, endMs);
         if (cancelled) return;
-
-        // 자정을 갓 넘겨 "최근 1시간" 창이 어제로 걸치면, 그 부분은 로컬(오늘 자정 이후만 보관)에
-        // 없으니 백엔드 히스토리에서 보충함 (하루 중 00:00~00:59에만 해당)
-        let records = localRecords;
-        if (startMs < todayStartMs) {
-          const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
-          const [tempResult, elecResult] = await Promise.allSettled([
-            fetchHistoryFromBackend('temp', new Date(startMs), new Date(todayStartMs), headers),
-            fetchHistoryFromBackend('elec', new Date(startMs), new Date(todayStartMs), headers),
-          ]);
-          if (cancelled) return;
-          const backendRecords = [
-            ...(tempResult.status === 'fulfilled' ? tempResult.value : []),
-            ...(elecResult.status === 'fulfilled' ? elecResult.value : []),
-          ];
-          records = [...backendRecords, ...localRecords];
-        }
 
         // 온도 도메인 기록엔 temperature가, 전력 도메인 기록엔 power가 들어있으므로
         // (한 레코드가 둘 다 갖지는 않음) 값이 있는 쪽 맵에만 넣어서 도메인별로 분리함
@@ -1096,7 +1078,6 @@ const RealtimeScreen = ({
       cancelled = true;
       clearInterval(intervalId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 정렬 가능한 표 헤더 셀 (클릭 시 그 컬럼 기준으로 정렬, 다시 누르면 오름/내림차순 전환)
@@ -1401,7 +1382,7 @@ const RealtimeScreen = ({
                     {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[11%]')}
                     {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[12%]')}
                     {renderSortableHeader('status', '상태', 'w-[14%]')}
-                    <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
+                    <th className={`w-[16%] grid-th`}>전체 흐름</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1611,7 +1592,7 @@ const RealtimeScreen = ({
                             <span className={`text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>–</span>
                           ) : (
                             <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
+                              <span className={`status-dot ${statusStyle.dot}`} />
                               {statusMeta.label}
                             </span>
                           )}

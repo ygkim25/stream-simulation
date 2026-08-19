@@ -71,7 +71,7 @@ export default function App() {
   const handleLogClose = () => setIsLogOpen(false);
   const handleClearLogs = async () => {
     try {
-      await axios.post('http://localhost:8086/api/live/monitoring/logs/clear', {}, {
+      await axios.post(`${API_BASE_URL}/api/live/monitoring/logs/clear`, {}, {
         headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
       });
     } catch (err) {

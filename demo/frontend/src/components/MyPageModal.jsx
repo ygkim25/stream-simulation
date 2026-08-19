@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import CustomAlert from './CustomAlert';
 import CustomConfirm from './CustomConfirm';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 // ==========================================
 // 설정(Settings) 팝업 컴포넌트 (내 정보 / 비밀번호 / 사용자 조회)
@@ -99,7 +100,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
 
     try {
       await axios.post(
-        'http://localhost:8086/api/auth/change-password',
+        `${API_BASE_URL}/api/auth/change-password`,
         {
           currentPassword: currentPassword,
           newPassword: newPassword,
@@ -128,7 +129,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
       const fetchEmployees = async () => {
         setIsEmployeesLoading(true);
         try {
-          const response = await axios.get('http://localhost:8086/api/users', {
+          const response = await axios.get(`${API_BASE_URL}/api/users`, {
             headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
           });
           setEmployees(response.data || [
@@ -156,7 +157,7 @@ const MyPageModal = ({ user, onClose, onLogout, isDarkMode, initialTab }) => {
     askConfirm(`${userId}의 권한을 [${roleLabel}]로 변경하시겠습니까?`, async () => {
       try {
         await axios.patch(
-          `http://localhost:8086/api/users/${encodeURIComponent(userId)}/role`,
+          `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/role`,
           { role: newRole },
           { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
         );

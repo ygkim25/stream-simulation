@@ -61,6 +61,21 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
   const [selectedEquipId, setSelectedEquipId] = useState(null);
   // 드롭다운에서 설비를 고르면 그 설비의 전체 시간별 이력을 쭉 나열해서 보여줌 (읽기 전용 보기)
   const [viewEquipId, setViewEquipId] = useState('');
+  // 설비를 바꾸면 무거운 이력 표/차트 렌더링이 바로 막히지 않도록, 로딩 표시부터 한 프레임
+  // 먼저 그리게 하고 실제 전환은 한 박자 늦게 함 (rows가 많을 때 드롭다운 클릭 시 렉의 체감을 줄임)
+  const [displayViewEquipId, setDisplayViewEquipId] = useState('');
+  const [isViewEquipPending, setIsViewEquipPending] = useState(false);
+  useEffect(() => {
+    if (viewEquipId === displayViewEquipId) return undefined;
+    setIsViewEquipPending(true);
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setDisplayViewEquipId(viewEquipId);
+        setIsViewEquipPending(false);
+      });
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [viewEquipId, displayViewEquipId]);
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -165,7 +180,15 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
 
   const fileInputRef = useRef(null);
   const prevElapsedRef = useRef(0);
-  const currentViewRowRef = useRef(null);
+
+  // 설비별 이력 표 가상 스크롤 (행이 몇 만 개씩 쌓이면 DOM에 전부 그려놓는 것만으로도 스크롤이
+  // 심하게 렉걸려서, 화면에 실제로 보이는 구간 근처만 <tr>로 렌더링하고 위아래는 빈 여백으로 채움)
+  const HISTORY_ROW_HEIGHT = 44;
+  const HISTORY_OVERSCAN = 8;
+  const historyScrollRef = useRef(null);
+  const [historyScrollTop, setHistoryScrollTop] = useState(0);
+  const [historyViewportHeight, setHistoryViewportHeight] = useState(400);
+  const handleHistoryScroll = (e) => setHistoryScrollTop(e.currentTarget.scrollTop);
 
   // 수정 후 저장된 시나리오 id 목록 (백엔드에 컬럼이 없어 localStorage에만 기록, 기기별로 다름)
   const [editedScenarioIds, setEditedScenarioIds] = useState(() => {
@@ -425,18 +448,44 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     return latestForward?.value;
   };
 
+  // equipId별로 시간 오름차순 정렬된 배열로 미리 인덱싱 (rows 변경 시 한 번만 계산).
+  // 재생 중 250ms마다 도는 currentEquipRows가 이걸 이진 탐색으로 훑어서, 데이터가 아주 많아도
+  // (예: 일주일치 엑셀) 매 tick마다 전체를 다시 스캔하지 않게 함 - 안 그러면 재생 중 브라우저가 멈춤
+  const sortedRowsByEquip = useMemo(() => {
+    const map = new Map();
+    rows.forEach(r => {
+      if (!map.has(r.equipId)) map.set(r.equipId, []);
+      map.get(r.equipId).push(r);
+    });
+    map.forEach(list => list.sort((a, b) => a.time.getTime() - b.time.getTime()));
+    return map;
+  }, [rows]);
+
+  // 정렬된 배열에서 time <= cutoff인 가장 마지막(최신) 원소를 이진 탐색으로 찾음
+  const findLatestAtOrBefore = (sortedList, cutoff) => {
+    let lo = 0;
+    let hi = sortedList.length - 1;
+    let result = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (sortedList[mid].time.getTime() <= cutoff) {
+        result = sortedList[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return result;
+  };
+
   // 현재 재생 시점 기준, 설비별 가장 최근 값(수동 수정값 있으면 그 값으로 덮어씀)
   const currentEquipRows = useMemo(() => {
     if (!rows.length) return [];
     const cutoff = startTimeMs + elapsedMs;
     const latestByEquip = new Map();
-    rows.forEach(r => {
-      if (r.time.getTime() <= cutoff) {
-        const existing = latestByEquip.get(r.equipId);
-        if (!existing || r.time.getTime() > existing.time.getTime()) {
-          latestByEquip.set(r.equipId, r);
-        }
-      }
+    sortedRowsByEquip.forEach((list, equipId) => {
+      const latest = findLatestAtOrBefore(list, cutoff);
+      if (latest) latestByEquip.set(equipId, latest);
     });
 
     return Array.from(latestByEquip.values())
@@ -496,7 +545,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         return cmp * dir;
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, elapsedMs, editedValues, startTimeMs, sortColumn, sortDirection]);
+  }, [rows, sortedRowsByEquip, elapsedMs, editedValues, startTimeMs, sortColumn, sortDirection]);
 
   // 설비별 전체 상태 흐름을 온도/전력 각각 색 구간으로 미리 계산 (elapsedMs 무관, 한 번만)
   const equipTimelines = useMemo(() => {
@@ -553,14 +602,27 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, editedValues, startTimeMs, durationMs]);
 
-  // 선택한 설비의 "지금까지" 추이 (재생 위치가 앞으로 갈수록 점이 이어져 그려짐)
+  // 선택한 설비의 "지금까지" 추이 (재생 위치가 앞으로 갈수록 점이 이어져 그려짐).
+  // rows 전체를 매 tick(250ms)마다 훑지 않도록, 정렬된 인덱스에서 이진 탐색으로 cutoff까지의
+  // 구간만 잘라서 씀 (전체 rows.filter는 데이터가 많을 때 재생 중 렉의 원인이었음)
   const selectedEquipSeries = useMemo(() => {
     if (!selectedEquipId || !rows.length) return [];
     const cutoff = startTimeMs + elapsedMs;
+    const sortedList = sortedRowsByEquip.get(selectedEquipId) || [];
+    const endIdx = (() => {
+      let lo = 0;
+      let hi = sortedList.length - 1;
+      let result = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (sortedList[mid].time.getTime() <= cutoff) { result = mid; lo = mid + 1; }
+        else { hi = mid - 1; }
+      }
+      return result;
+    })();
     let prevStatus = null;
-    return rows
-      .filter(r => r.equipId === selectedEquipId && r.time.getTime() <= cutoff)
-      .sort((a, b) => a.time.getTime() - b.time.getTime())
+    return sortedList
+      .slice(0, endIdx + 1)
       .map(r => {
         const rowTime = r.time.getTime();
         const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
@@ -581,7 +643,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         };
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, selectedEquipId, elapsedMs, editedValues, startTimeMs]);
+  }, [rows, sortedRowsByEquip, selectedEquipId, elapsedMs, editedValues, startTimeMs]);
 
   // 셀 직접 수정 - applyForward 꺼짐: 그 시각만(스파이크), 켜짐: 그 시각 이후 전체 적용.
   // 값이 바뀌면 즉시 재판정해서 새로 경고/위험 진입 시 알람에도 반영
@@ -826,12 +888,13 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
       .sort((a, b) => String(a.equipId).localeCompare(String(b.equipId)));
   }, [rows]);
 
-  // 드롭다운에서 고른 설비의 전체 시간별 이력 (시간순, 읽기 전용)
+  // 드롭다운에서 고른 설비의 전체 시간별 이력 (시간순, 읽기 전용).
+  // viewEquipId가 아니라 한 박자 늦게 따라가는 displayViewEquipId를 써서, 로딩 표시가 먼저
+  // 그려질 시간을 벌어줌 (안 그러면 이 무거운 계산이 같은 렌더에서 바로 실행돼 화면이 멈춤)
   const equipHistoryRows = useMemo(() => {
-    if (!viewEquipId) return [];
-    return rows
-      .filter(r => r.equipId === viewEquipId)
-      .sort((a, b) => a.time.getTime() - b.time.getTime())
+    if (!displayViewEquipId) return [];
+    // rows 전체를 훑지 않고 이미 설비별로 정렬해둔 인덱스에서 바로 꺼냄 (드롭다운 클릭 시 렉의 원인)
+    return (sortedRowsByEquip.get(displayViewEquipId) || [])
       .map(r => {
         const rowTime = r.time.getTime();
         const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
@@ -851,17 +914,54 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
         return { ...r, temperature, power, threshold, powerThreshold, status, powerStatus };
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, viewEquipId, editedValues]);
+  }, [sortedRowsByEquip, displayViewEquipId, editedValues]);
 
   // 설비별 이력 표에서, 지금 재생 위치에 해당하는 행(전체보기에 표시되는 것과 같은 행)을 테두리로 표시
   const currentViewEquipTime = currentEquipRows.find(r => r.equipId === viewEquipId)?.time?.getTime();
 
-  // 재생 위치가 바뀌어 테두리로 표시되는 행이 이동하면, 그 행이 보이도록 표를 자동으로 스크롤
+  // 표 컨테이너 크기가 바뀌면(창 크기 조절 등) 가상 스크롤 계산에 반영
   useEffect(() => {
-    if (currentViewRowRef.current) {
-      currentViewRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const el = historyScrollRef.current;
+    if (!el) return undefined;
+    setHistoryViewportHeight(el.clientHeight);
+    const observer = new ResizeObserver((entries) => {
+      setHistoryViewportHeight(entries[0].contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [displayViewEquipId]);
+
+  // 재생 위치가 바뀌어 테두리로 표시되는 행이 이동하면, 그 행이 보이도록 표를 자동으로 스크롤.
+  // 가상 스크롤 때문에 그 행이 실제로 DOM에 없을 수도 있어서, ref로 찾는 대신 정렬된 배열에서
+  // 이진 탐색으로 인덱스를 구해 스크롤 위치를 직접 계산함
+  useEffect(() => {
+    if (currentViewEquipTime == null) return;
+    const el = historyScrollRef.current;
+    if (!el) return;
+    const list = sortedRowsByEquip.get(displayViewEquipId) || [];
+    let lo = 0;
+    let hi = list.length - 1;
+    let idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const midTime = list[mid].time.getTime();
+      if (midTime === currentViewEquipTime) { idx = mid; break; }
+      if (midTime < currentViewEquipTime) lo = mid + 1; else hi = mid - 1;
     }
-  }, [currentViewEquipTime, viewEquipId]);
+    if (idx === -1) return;
+    const rowTop = idx * HISTORY_ROW_HEIGHT;
+    el.scrollTo({ top: Math.max(0, rowTop - el.clientHeight / 2 + HISTORY_ROW_HEIGHT / 2), behavior: 'smooth' });
+  }, [currentViewEquipTime, viewEquipId, sortedRowsByEquip, displayViewEquipId]);
+
+  // 가상 스크롤: 실제로 화면에 보이는 구간(+여유분) 인덱스만 계산해서 그 부분만 <tr>로 렌더링
+  const historyRowCount = equipHistoryRows.length;
+  const historyStartIdx = Math.max(0, Math.floor(historyScrollTop / HISTORY_ROW_HEIGHT) - HISTORY_OVERSCAN);
+  const historyVisibleCount = Math.ceil(historyViewportHeight / HISTORY_ROW_HEIGHT) + HISTORY_OVERSCAN * 2;
+  const historyEndIdx = Math.min(historyRowCount, historyStartIdx + historyVisibleCount);
+  const historyTopSpacerHeight = historyStartIdx * HISTORY_ROW_HEIGHT;
+  const historyBottomSpacerHeight = (historyRowCount - historyEndIdx) * HISTORY_ROW_HEIGHT;
+  const visibleHistoryRows = equipHistoryRows.slice(historyStartIdx, historyEndIdx);
+  const historyColCount = 1 + (hasTemperatureData ? 3 : 0) + (hasPowerData ? 3 : 0);
 
   // 전체보기 표의 정렬 가능한 헤더 셀 (클릭 시 그 컬럼 기준 정렬, 다시 누르면 오름/내림차순 전환)
   const renderSortableHeader = (column, label, widthClass) => {
@@ -1196,6 +1296,11 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 <p className={`text-sm font-bold ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>여기에 놓으면 업로드됩니다</p>
               </div>
             )}
+            {isViewEquipPending && (
+              <div className={`absolute inset-0 z-20 flex items-center justify-center ${isDarkMode ? 'bg-[#12172A]/80' : 'bg-white/80'}`}>
+                <LoadingSpinner size="md" isDarkMode={isDarkMode} />
+              </div>
+            )}
             {!selectedScenario ? (
               <div className={`flex-1 flex flex-col items-center justify-center gap-2 text-sm text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                 <svg className={`w-10 h-10 mb-1 ${isDarkMode ? 'text-[#232B45]' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1209,7 +1314,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
               </div>
             ) : (
               <>
-              {viewEquipId ? (
+              {displayViewEquipId ? (
                 <>
                 {/* 실시간 추이 그래프 (드롭다운에서 설비를 선택했을 때만 표시) */}
                 <div className={`shrink-0 mb-3 pb-3 border-b ${isDarkMode ? 'border-[#1E253D]' : 'border-gray-200'}`}>
@@ -1224,42 +1329,51 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                 </div>
 
                 {/* 설비별 전체 시간 이력 보기 (읽기 전용) */}
-                <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar">
+                <div
+                  ref={historyScrollRef}
+                  onScroll={handleHistoryScroll}
+                  className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar"
+                >
                   <table className="w-full text-center border-collapse table-fixed min-w-[600px]">
                     <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
                       isDarkMode ? 'bg-[#0D1224] text-[#7D87A8]' : 'bg-gray-50 text-gray-500'
                     }`}>
                       <tr className="h-[40px]">
-                        <th className={`${hasTemperatureData && hasPowerData ? 'w-[22%]' : 'w-[28%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>수신 시간</th>
+                        <th className={`${hasTemperatureData && hasPowerData ? 'w-[22%]' : 'w-[28%]'} grid-th`}>수신 시간</th>
                         {hasTemperatureData && (
-                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[22%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>온도(℃)</th>
+                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[22%]'} grid-th`}>온도(℃)</th>
                         )}
                         {hasPowerData && (
-                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[22%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전력</th>
+                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[22%]'} grid-th`}>전력</th>
                         )}
                         {hasTemperatureData && (
-                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[25%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(온도)</th>
+                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[25%]'} grid-th`}>임계값(온도)</th>
                         )}
                         {hasPowerData && (
-                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[25%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>임계값(전력)</th>
+                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[25%]'} grid-th`}>임계값(전력)</th>
                         )}
                         {hasTemperatureData && (
-                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[25%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>{hasPowerData ? '상태(온도)' : '상태'}</th>
+                          <th className={`${hasPowerData ? 'w-[13%]' : 'w-[25%]'} grid-th`}>{hasPowerData ? '상태(온도)' : '상태'}</th>
                         )}
                         {hasPowerData && (
-                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[25%]'} px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>{hasTemperatureData ? '상태(전력)' : '상태'}</th>
+                          <th className={`${hasTemperatureData ? 'w-[13%]' : 'w-[25%]'} grid-th`}>{hasTemperatureData ? '상태(전력)' : '상태'}</th>
                         )}
                       </tr>
                     </thead>
                     <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#2A335A] text-[#B9C2DE]' : 'divide-gray-300 text-gray-600'}`}>
                       {equipHistoryRows.length === 0 ? (
                         <tr>
-                          <td colSpan={1 + (hasTemperatureData ? 2 : 0) + (hasPowerData ? 2 : 0) + 1} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                          <td colSpan={historyColCount} className={`px-3.5 py-10 text-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                             이 설비의 데이터가 없습니다.
                           </td>
                         </tr>
                       ) : (
-                        equipHistoryRows.map((r, idx) => {
+                        <>
+                        {historyTopSpacerHeight > 0 && (
+                          <tr style={{ height: historyTopSpacerHeight }} aria-hidden="true"><td colSpan={historyColCount} /></tr>
+                        )}
+                        {visibleHistoryRows.map((r, i) => {
+                          const idx = historyStartIdx + i;
                           const tempStatusMeta = getStatusMeta(r.status);
                           const tempStatusStyle = STATUS_STYLES[tempStatusMeta.color][isDarkMode ? 'dark' : 'light'];
                           const powerStatusMeta = getStatusMeta(r.powerStatus);
@@ -1274,7 +1388,6 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                           return (
                             <tr
                               key={`${r.equipId}-${r.time.getTime()}-${idx}`}
-                              ref={isCurrentPlayheadRow ? currentViewRowRef : undefined}
                               className={`h-[44px] max-h-[44px] transition-colors ${
                                 isCurrentPlayheadRow ? `border-2 ${isDarkMode ? 'border-[#22D3EE]' : 'border-green-600'}` : ''
                               } ${
@@ -1294,7 +1407,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                     key={`hist-temp-${r.equipId}-${r.time.getTime()}`}
                                     initialValue={r.temperature}
                                     onChangeValue={(v) => handleCellValueEdit(r, 'temperature', v)}
-                                    className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    className={`w-[64px] h-[28px] grid-cell-input ${
                                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                     } ${tempStatusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : tempStatusStyle.text}`}
                                   />
@@ -1306,7 +1419,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                     key={`hist-power-${r.equipId}-${r.time.getTime()}`}
                                     initialValue={r.power ?? ''}
                                     onChangeValue={(v) => handleCellValueEdit(r, 'power', v)}
-                                    className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    className={`w-[64px] h-[28px] grid-cell-input ${
                                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                     } ${powerStatusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : powerStatusStyle.text}`}
                                   />
@@ -1318,7 +1431,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                     key={`hist-threshold-${r.equipId}-${r.time.getTime()}`}
                                     initialValue={r.threshold ?? ''}
                                     onChangeValue={(v) => handleCellValueEdit(r, 'threshold', v)}
-                                    className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    className={`w-[64px] h-[28px] grid-cell-input ${
                                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                     }`}
                                   />
@@ -1330,7 +1443,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                     key={`hist-power-threshold-${r.equipId}-${r.time.getTime()}`}
                                     initialValue={r.powerThreshold ?? ''}
                                     onChangeValue={(v) => handleCellValueEdit(r, 'powerThreshold', v)}
-                                    className={`w-[64px] h-[28px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                    className={`w-[64px] h-[28px] grid-cell-input ${
                                       isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                     }`}
                                   />
@@ -1338,23 +1451,27 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                               )}
                               {hasTemperatureData && (
                                 <td className="px-3 py-0 h-[44px]">
-                                  <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${tempStatusStyle.text}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${tempStatusStyle.dot}`} />
+                                  <div className={`status-badge ${tempStatusStyle.text}`}>
+                                    <span className={`status-dot ${tempStatusStyle.dot}`} />
                                     {tempStatusMeta.label}
                                   </div>
                                 </td>
                               )}
                               {hasPowerData && (
                                 <td className="px-3 py-0 h-[44px]">
-                                  <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${powerStatusStyle.text}`}>
-                                    <span className={`w-1.5 h-1.5 rounded-full ${powerStatusStyle.dot}`} />
+                                  <div className={`status-badge ${powerStatusStyle.text}`}>
+                                    <span className={`status-dot ${powerStatusStyle.dot}`} />
                                     {powerStatusMeta.label}
                                   </div>
                                 </td>
                               )}
                             </tr>
                           );
-                        })
+                        })}
+                        {historyBottomSpacerHeight > 0 && (
+                          <tr style={{ height: historyBottomSpacerHeight }} aria-hidden="true"><td colSpan={historyColCount} /></tr>
+                        )}
+                        </>
                       )}
                     </tbody>
                   </table>
@@ -1377,7 +1494,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                       {hasPowerData && renderSortableHeader('powerThreshold', '임계값(전력)', hasTemperatureData ? 'w-[9%]' : 'w-[10%]')}
                       {hasTemperatureData && renderSortableHeader('status', hasPowerData ? '상태(온도)' : '상태', hasPowerData ? 'w-[8%]' : 'w-[11%]')}
                       {hasPowerData && renderSortableHeader('powerStatus', hasTemperatureData ? '상태(전력)' : '상태', hasTemperatureData ? 'w-[8%]' : 'w-[11%]')}
-                      <th className={`w-[16%] px-3 border-b font-semibold uppercase ${isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'}`}>전체 흐름</th>
+                      <th className={`w-[16%] grid-th`}>전체 흐름</th>
                     </tr>
                   </thead>
                   <tbody className={`divide-y text-xs sm:text-[13px] ${isDarkMode ? 'divide-[#2A335A] text-[#B9C2DE]' : 'divide-gray-300 text-gray-600'}`}>
@@ -1437,7 +1554,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   key={`temp-${eq.equipId}-${eq.time.getTime()}`}
                                   initialValue={eq.temperature}
                                   onChangeValue={(v) => handleCellValueEdit(eq, 'temperature', v)}
-                                  className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  className={`w-[70px] h-[30px] grid-cell-input ${
                                     isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                   } ${tempStatusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : tempStatusStyle.text}`}
                                 />
@@ -1449,7 +1566,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   key={`power-${eq.equipId}-${eq.time.getTime()}`}
                                   initialValue={eq.power ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(eq, 'power', v)}
-                                  className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  className={`w-[70px] h-[30px] grid-cell-input ${
                                     isDarkMode ? 'bg-[#0D1224] border-[#2A335A] focus:border-[#22D3EE]' : 'bg-white border-gray-300 focus:border-green-600'
                                   } ${powerStatusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : powerStatusStyle.text}`}
                                 />
@@ -1461,7 +1578,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   key={`threshold-${eq.equipId}-${eq.time.getTime()}`}
                                   initialValue={eq.threshold ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(eq, 'threshold', v)}
-                                  className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  className={`w-[70px] h-[30px] grid-cell-input ${
                                     isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                   }`}
                                 />
@@ -1473,7 +1590,7 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                                   key={`power-threshold-${eq.equipId}-${eq.time.getTime()}`}
                                   initialValue={eq.powerThreshold ?? ''}
                                   onChangeValue={(v) => handleCellValueEdit(eq, 'powerThreshold', v)}
-                                  className={`w-[70px] h-[30px] mx-auto block rounded px-1.5 text-center font-bold focus:outline-none border text-xs leading-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                                  className={`w-[70px] h-[30px] grid-cell-input ${
                                     isDarkMode ? 'bg-[#0D1224] border-[#2A335A] text-[#7D87A8] focus:border-[#22D3EE]' : 'bg-white border-gray-300 text-gray-500 focus:border-green-600'
                                   }`}
                                 />
@@ -1481,16 +1598,16 @@ const SimulationScreen = ({ user, setRoute, openMyPage, isDarkMode, setIsDarkMod
                             )}
                             {hasTemperatureData && (
                               <td className={`px-3 py-0 h-[52px]`}>
-                                <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${tempStatusStyle.text}`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${tempStatusStyle.dot}`} />
+                                <div className={`status-badge ${tempStatusStyle.text}`}>
+                                  <span className={`status-dot ${tempStatusStyle.dot}`} />
                                   {tempStatusMeta.label}
                                 </div>
                               </td>
                             )}
                             {hasPowerData && (
                               <td className={`px-3 py-0 h-[52px]`}>
-                                <div className={`h-full flex items-center justify-center gap-1 text-xs font-bold whitespace-nowrap ${powerStatusStyle.text}`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${powerStatusStyle.dot}`} />
+                                <div className={`status-badge ${powerStatusStyle.text}`}>
+                                  <span className={`status-dot ${powerStatusStyle.dot}`} />
                                   {powerStatusMeta.label}
                                 </div>
                               </td>
