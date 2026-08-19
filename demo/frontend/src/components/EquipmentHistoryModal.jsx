@@ -68,8 +68,12 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
         </div>
         <span className={`text-[10px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>최근 {chartData.length}건</span>
       </div>
-      <div ref={wheelAreaRef} className="select-none chart-reveal" style={{ cursor: 'ns-resize' }}>
-        <ResponsiveContainer width="100%" height={height}>
+      {/* chart-reveal(선이 그려지는 900ms 연출)을 빼서 데이터가 오자마자 바로 그려지게 함 -
+          이 연출 때문에 실제로 로딩이 끝났는데도 아직 로딩 중인 것처럼 느껴졌음 */}
+      <div ref={wheelAreaRef} className="select-none" style={{ cursor: 'ns-resize' }}>
+        {/* initialDimension 없이는 ResizeObserver로 실제 크기를 잴 때까지 빈 화면이라, 모달을
+            열자마자 바로 그려지지 않고 한 박자 늦게 뜨는 것처럼 보였음 */}
+        <ResponsiveContainer width="100%" height={height} initialDimension={{ width: 660, height }}>
           <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -113,7 +117,7 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
 // ==========================================
 // focusMetric: 'temperature' | 'power' | null
 // null이면 그리드 행 클릭처럼 온도/전력 둘 다 보여주고, 지정되면 해당 그래프 하나만 크게 보여줌
-const EquipmentHistoryModal = ({ equipId, equipName, threshold, onClose, isDarkMode, focusMetric = null }) => {
+const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, onClose, isDarkMode, focusMetric = null }) => {
   const [rawData, setRawData] = useState([]); // 최근 FETCH_LIMIT건 (시간 오름차순, 가공된 형태)
   const [isLoading, setIsLoading] = useState(true);
 
@@ -240,7 +244,7 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, onClose, isDarkM
                   dotClass={isDarkMode ? 'bg-[#22D3EE]' : 'bg-green-600'}
                   color={isDarkMode ? '#22D3EE' : '#16A34A'}
                   dataKeyName="power"
-                  threshold={null}
+                  threshold={powerThreshold}
                   tooltipStyle={tooltipStyle}
                   axisColor={axisColor}
                   gridColor={gridColor}

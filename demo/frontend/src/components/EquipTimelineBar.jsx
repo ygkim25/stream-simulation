@@ -18,16 +18,16 @@ const EquipTimelineBar = ({ segments, playheadPct, isDarkMode, loading }) => {
   // 아직 첫 조회가 끝나기 전(로딩 중)에는 "데이터가 확실히 없음"과 구분되도록 스피너를 보여줌
   if (loading) {
     return (
-      <div className="w-full h-3.5 rounded flex items-center justify-center" style={{ backgroundColor: trackColor }}>
+      <div className="w-full h-4 rounded flex items-center justify-center" style={{ backgroundColor: trackColor }}>
         <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
       </div>
     );
   }
   if (!segments || segments.length === 0) {
-    return <div className="w-full h-3.5 rounded" style={{ backgroundColor: trackColor }} />;
+    return <div className="w-full h-4 rounded" style={{ backgroundColor: trackColor }} />;
   }
   return (
-    <div className="relative w-full h-3.5 rounded overflow-hidden flex" style={{ backgroundColor: trackColor }}>
+    <div className="relative w-full h-4 rounded overflow-hidden flex" style={{ backgroundColor: trackColor }}>
       {segments.map((seg, i) => (
         <div
           key={i}

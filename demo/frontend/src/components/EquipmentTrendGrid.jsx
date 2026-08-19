@@ -9,6 +9,25 @@ const MAX_POINTS = 40;
 // IndexedDB 재조회 주기 (모든 웹소켓 틱마다 조회하면 부하가 크므로 주기적으로만 갱신)
 const REFRESH_MS = 4000;
 
+// 새로고침 직후 빈 카드가 잠깐 보였다가 채워지지 않도록, 마지막 조회 결과를 로컬에 캐싱해둠
+// (IndexedDB 조회는 비동기라 첫 페인트 전엔 못 끝나지만, localStorage는 동기라 초기값으로 바로 씀 -
+// "전체 흐름"에 쓰던 것과 동일한 패턴)
+const HISTORY_CACHE_KEY = 'equipmentTrendHistoryCache';
+const loadCachedHistory = () => {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_CACHE_KEY)) || null;
+  } catch {
+    return null;
+  }
+};
+const saveCachedHistory = (result) => {
+  try {
+    localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(result));
+  } catch {
+    // localStorage를 못 쓰는 환경(프라이빗 모드 등)이면 캐싱 없이 그냥 조회 결과만 사용
+  }
+};
+
 const STATUS_COLOR = {
   green: { dark: '#34D399', light: '#22C55E' },
   amber: { dark: '#FBBF24', light: '#F59E0B' },
@@ -24,9 +43,10 @@ const STATUS_COLOR = {
 // (예전엔 이 컴포넌트가 자체 토글을 따로 갖고 있었는데, 그리드/알람 탭이랑 따로 놀아서 헷갈린다는
 // 피드백으로 그리드의 탭 하나로 통일함)
 const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts, metric }) => {
-  const [historyMap, setHistoryMap] = useState({}); // equipId -> 시간순 정렬된 최근 데이터 배열
+  // equipId -> 시간순 정렬된 최근 데이터 배열 (캐시가 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작)
+  const [historyMap, setHistoryMap] = useState(() => loadCachedHistory() || {});
   // 첫 조회가 끝나기 전까지는 "데이터가 확실히 부족함"과 구분해서 로딩 표시를 해줌
-  const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(false);
+  const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(() => loadCachedHistory() !== null);
 
   // 카드가 많으면(설비 수만큼 recharts 인스턴스가 동시에 다시 그려짐) 탭 전환 시 눈에 띄게 버벅이는데,
   // 그 렌더링이 끝날 때까지 그냥 화면이 멈춘 것처럼 보이는 문제가 있었음. metric이 바뀌면 일단
@@ -69,6 +89,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
         ids.forEach((id, i) => { grouped[id] = results[i]; });
         setHistoryMap(grouped);
         setHasLoadedHistoryOnce(true);
+        saveCachedHistory(grouped);
       } catch (e) {
         console.error('설비 추이 조회 실패:', e);
       }
@@ -173,7 +194,11 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
                         <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
                       </div>
                     ) : points.length > 1 ? (
-                      <ResponsiveContainer width="100%" height="100%">
+                      // initialDimension을 안 주면 ResponsiveContainer가 ResizeObserver로 실제 크기를
+                      // 잴 때까지 아무것도 안 그리는데, 카드가 한꺼번에 12개 넘게 마운트되면 이 측정
+                      // 콜백들이 프레임마다 조금씩 흩어져서 카드가 하나씩 순차적으로 나타나는 것처럼
+                      // 보였음. 대략적인 크기를 미리 줘서 첫 페인트부터 바로 그려지게 함
+                      <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 140, height: 42 }}>
                         <AreaChart data={points} margin={{ top: 2, right: 4, left: 4, bottom: 0 }}>
                           <defs>
                             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">

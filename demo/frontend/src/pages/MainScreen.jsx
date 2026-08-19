@@ -4,7 +4,7 @@ import Header from '../components/Header';
 // "나중에 하기" 클릭 시 다시 안 뜨게 할 기간 (24시간)
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
-const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
+const MainScreen = ({ route, setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   // ★ 화면 진입 시 user 객체 내의 mustChangePassword 상태 체크
@@ -48,13 +48,13 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
     <div className={`h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] w-full min-w-[340px] flex flex-col overflow-y-auto transition-colors ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
-      <Header 
-        title="메인 메뉴" 
-        user={user} 
-        setRoute={setRoute} 
-        openMyPage={openMyPage} 
-        isDarkMode={isDarkMode} 
-        setIsDarkMode={setIsDarkMode} 
+      <Header
+        user={user}
+        route={route}
+        setRoute={setRoute}
+        openMyPage={openMyPage}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
       />
       
       <div className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-8 p-6 lg:p-20 max-w-[1920px] mx-auto w-full">
@@ -105,7 +105,7 @@ const MainScreen = ({ setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) =
             </svg>
           </div>
           <h2 className={`text-3xl font-bold mb-4 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
-            시뮬레이션 모드
+            시뮬레이션
           </h2>
           <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
             과거 장애 이력 엑셀 파일을 업로드하여 상황을 재현하고 시나리오 데이터를 수정하여 테스트합니다.

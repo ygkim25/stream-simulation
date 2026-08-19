@@ -222,6 +222,7 @@ const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
 // ==========================================
 const RealtimeScreen = ({
   user,
+  route,
   setRoute,
   openMyPage,
   alarms = [],
@@ -813,15 +814,15 @@ const RealtimeScreen = ({
       `${API_BASE_URL}/api/live/monitoring/elec/logs`,
       headers,
       (tempData, elecData) => {
-        // 온도/전력 로그는 서로 독립된 테이블이라 id가 우연히 겹칠 수 있어서(예: 둘 다 464번),
-        // 합치기 전에 도메인을 구분해둬야 React key가 안 겹침
+        // 로그 응답에 id가 따로 없어서(equipId/threshold/type/value/message/createdAt만 옴),
+        // equipId+createdAt+도메인 조합으로 직접 고유 키를 만듦 (알림/alarm 쪽과 동일한 방식)
         const mapped = [
           ...tempData.map(item => ({ ...item, __domain: 'temp' })),
           ...elecData.map(item => ({ ...item, __domain: 'elec' })),
         ]
           .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
           .map(item => ({
-            id: `log-${item.__domain}-${item.id}`,
+            id: `log-${item.__domain}-${item.equipId}-${item.createdAt}`,
             time: item.createdAt ? formatClockTime(new Date(item.createdAt)) : '-',
             type: item.type,
             equipName: item.equipName,
@@ -1103,11 +1104,11 @@ const RealtimeScreen = ({
     <div className={`w-full min-w-[320px] flex flex-col transition-colors h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] overflow-hidden ${
       isDarkMode ? 'bg-[#0A0E1A]' : 'bg-gray-50'
     }`}>
-      <Header 
-        title="실시간 모니터링" 
-        user={user} 
-        setRoute={setRoute} 
-        openMyPage={openMyPage} 
+      <Header
+        user={user}
+        route={route}
+        setRoute={setRoute}
+        openMyPage={openMyPage}
         isDarkMode={isDarkMode}
         setIsDarkMode={setIsDarkMode}
       />
@@ -1379,11 +1380,11 @@ const RealtimeScreen = ({
                     {renderSortableHeader('equipId', 'ID', 'w-[9%]')}
                     {renderSortableHeader('equipName', '설비명', 'w-[18%]')}
                     {renderSortableHeader('location', '위치', 'w-[9%]')}
-                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[17%]')}
+                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[16%]')}
                     {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[11%]')}
-                    {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[12%]')}
+                    {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[11%]')}
                     {renderSortableHeader('status', '상태', 'w-[14%]')}
-                    <th className={`w-[16%] grid-th`}>전체 흐름</th>
+                    <th className={`w-[18%] grid-th`}>전체 흐름</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y text-[13px] sm:text-sm ${
@@ -1468,7 +1469,7 @@ const RealtimeScreen = ({
                       </td>
                     </tr>
                   )}
-                  {filteredEquipments.map((eq, idx) => {
+                  {filteredEquipments.map((eq) => {
                     const isTemp = metricTab === 'temperature';
                     const value = isTemp ? eq.temperature : eq.power;
                     const threshold = isTemp ? eq.threshold : eq.powerThreshold;
@@ -1484,7 +1485,7 @@ const RealtimeScreen = ({
 
                     return (
                       <tr
-                        key={`${eq.equipId}-${idx}`}
+                        key={eq.equipId}
                         id={`equip-row-${eq.equipId}`}
                         onClick={() => {
                           setSelectedEquipId(isSelected ? null : eq.equipId);
@@ -1653,6 +1654,7 @@ const RealtimeScreen = ({
             equipId={historyEquipId}
             equipName={historyEquip?.equipName}
             threshold={historyEquip?.threshold}
+            powerThreshold={historyEquip?.powerThreshold}
             focusMetric={historyMetric}
             onClose={() => { setHistoryEquipId(null); setHistoryMetric(null); }}
             isDarkMode={isDarkMode}
