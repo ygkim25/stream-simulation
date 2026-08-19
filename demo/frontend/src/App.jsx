@@ -20,10 +20,10 @@ export default function App() {
     }
   });
 
-  // 2. 세션 유무에 따라 초기 화면 라우트 설정
+  // 2. 세션 유무에 따라 초기 화면 라우트 설정 (메인 화면 안 거치고 바로 실시간 모니터링으로)
   const [route, setRoute] = useState(() => {
     const savedUser = sessionStorage.getItem('user');
-    return savedUser ? 'main' : 'login';
+    return savedUser ? 'realtime' : 'login';
   });
 
   const [isMyPageOpen, setIsMyPageOpen] = useState(false);
@@ -51,7 +51,7 @@ export default function App() {
     if (userInfo) {
       sessionStorage.setItem('user', JSON.stringify(userInfo));
     }
-    setRoute('main');
+    setRoute('realtime');
   };
 
   // 로그아웃 처리
@@ -69,18 +69,23 @@ export default function App() {
   const handleMyPageClose = () => setIsMyPageOpen(false);
   const handleLogOpen = () => setIsLogOpen(true);
   const handleLogClose = () => setIsLogOpen(false);
-  // 지금 보고 있는 지표(온도/전력)의 로그만 지움 - 다른 지표 로그는 그대로 둠
+  // 전체 로그 팝업의 지금 탭(전체/온도/전력)에 맞춰 지움 - "전체"면 온도/전력 둘 다 지움
   const handleClearLogs = async (metric) => {
-    const domain = metric === 'power' ? 'elec' : 'temp';
+    const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+    const domains = metric === 'all' ? ['temp', 'elec'] : [metric === 'power' ? 'elec' : 'temp'];
     try {
-      await axios.post(`${API_BASE_URL}/api/live/monitoring/${domain}/logs/clear`, {}, {
-        headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {},
-      });
+      await Promise.all(domains.map(domain =>
+        axios.post(`${API_BASE_URL}/api/live/monitoring/${domain}/logs/clear`, {}, { headers })
+      ));
     } catch (err) {
       console.error('로그 초기화 실패:', err);
       return;
     }
-    setLogs(prev => prev.filter(l => (l.metric || 'temperature') !== (domain === 'temp' ? 'temperature' : 'power')));
+    if (metric === 'all') {
+      setLogs([]);
+    } else {
+      setLogs(prev => prev.filter(l => (l.metric || 'temperature') !== metric));
+    }
   };
 
   return (
@@ -94,18 +99,20 @@ export default function App() {
       )}
 
       {route === 'main' && (
-        <MainScreen 
-          user={user} 
-          setRoute={setRoute} 
-          openMyPage={handleMyPageOpen} 
-          isDarkMode={isDarkMode} 
-          setIsDarkMode={setIsDarkMode} 
+        <MainScreen
+          user={user}
+          route={route}
+          setRoute={setRoute}
+          openMyPage={handleMyPageOpen}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
         />
       )}
 
       {route === 'realtime' && (
         <RealtimeScreen
           user={user}
+          route={route}
           setRoute={setRoute}
           openMyPage={handleMyPageOpen}
           alarms={alarms}
@@ -120,6 +127,7 @@ export default function App() {
       {route === 'simulation' && (
         <SimulationScreen
           user={user}
+          route={route}
           setRoute={setRoute}
           openMyPage={handleMyPageOpen}
           isDarkMode={isDarkMode}

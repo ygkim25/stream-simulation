@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 
-const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
+// 헤더에서 바로 이동 가능한 모드 목록 (메인 화면까지 안 거치고 바로 전환)
+const NAV_ITEMS = [
+  { value: 'realtime', label: '실시간 모니터링' },
+  { value: 'simulation', label: '시뮬레이션' },
+];
+
+const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
   const [isAlarmOn, setIsAlarmOn] = useState(true);
   const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin';
   return (
@@ -26,13 +32,24 @@ const Header = ({ title, user, setRoute, openMyPage, isDarkMode, setIsDarkMode }
             WeCT
           </span>
         </h1>
-        {title && (
-          <span className={`text-[13px] border-l pl-4 font-medium hidden sm:inline-block tracking-wide ${
-            isDarkMode ? 'border-[#232B45] text-[#9FACC9]' : 'border-gray-200 text-gray-500'
-          }`}>
-            {title}
-          </span>
-        )}
+        {/* 헤더에서 바로 모드 전환 (메인 화면 안 거치고 실시간/시뮬레이션 바로 이동).
+            헤더 전체 높이만큼 늘려서, 활성 탭의 밑줄이 헤더 하단 테두리에 딱 붙게 함 */}
+        <nav className="hidden md:flex items-stretch gap-6 self-stretch ml-4">
+          {NAV_ITEMS.map(item => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => setRoute(item.value)}
+              className={`flex items-center text-[13px] font-bold tracking-wide border-b-2 transition-all outline-none cursor-pointer hover:scale-110 ${
+                route === item.value
+                  ? (isDarkMode ? 'text-[#22D3EE] border-[#22D3EE]' : 'text-green-700 border-green-700')
+                  : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border-transparent' : 'text-gray-500 hover:text-gray-800 border-transparent')
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
       </div>
 
       <div className="flex items-center gap-3">
