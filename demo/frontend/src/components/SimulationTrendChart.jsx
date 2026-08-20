@@ -42,9 +42,15 @@ const useWarningDotPositions = (positionRef, chartRef, refreshKey) => {
     };
     recompute();
     // recharts는 ReferenceDot을 별도 zIndex 포털로 렌더링해서 최초 마운트 시
-    // 한 프레임 늦게 DOM에 붙는 경우가 있음 -> MutationObserver로 그 시점도 잡아줌
+    // 한 프레임 늦게 DOM에 붙는 경우가 있음 -> MutationObserver로 그 시점도 잡아줌.
+    // attributes:true도 필요함 - 마커를 클릭해 재생 위치가 바뀌면 같은 경고 지점(같은 key라 DOM
+    // 노드는 재사용됨)이 바뀐 x축 범위 때문에 화면상 다른 좌표로 옮겨가는데, 이때는 노드 추가/삭제
+    // 없이 cx/cy 속성만 바뀌므로 childList만 보면 이 변화를 놓쳐서 버튼이 예전 좌표에 남아있게 됨
+    // (그래서 클릭이 씹히는 것처럼 보였음)
     const mo = new MutationObserver(recompute);
-    mo.observe(chartEl, { childList: true, subtree: true });
+    // attributeFilter로 cx/cy만 보게 좁혀서, 툴팁 hover 등 차트 내 다른 속성 변화까지 매번
+    // recompute가 돌지 않게 함 (안 그러면 마우스만 움직여도 계속 재계산됨)
+    mo.observe(chartEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['cx', 'cy'] });
     const ro = new ResizeObserver(recompute);
     ro.observe(chartEl);
     return () => {
