@@ -374,33 +374,28 @@ const RealtimeScreen = ({
     setAlarms(prev => prev.filter(a => a.id !== id));
   };
 
-  // 위험 알람 브라우저 알림 - 최초 조회분은 알림 없이 조용히 기록만 하고, 그 이후 새로 나타난
-  // 알람에 대해서만 알림을 띄움 (새로고침할 때마다 기존 알람으로 알림이 쏟아지는 걸 방지)
+  // 위험 알람 브라우저 알림 - id 기반으로 "이미 본 것"을 추적하는 방식은 켜고 끄는 타이밍과
+  // 얽히면서 계속 문제가 반복됐음(꺼도 계속 오거나, 다시 켜면 밀린 게 쏟아지거나). 그 대신 훨씬
+  // 단순하고 확실한 기준을 씀: 알람을 "켠 시각" 이후에 실제로 발생한(recordedAt) 것만 알려주고,
+  // 그 전부터 쌓여있던 건 절대 알림 대상이 아님 - 켤 때마다 밀린 게 쏟아질 일 자체가 없음
   const notifiedAlarmIdsRef = useRef(new Set());
-  const hasNotifiedInitialRef = useRef(false);
+  const isAlarmOnRef = useRef(isAlarmOn);
+  const alarmEnabledAtMsRef = useRef(isAlarmOn ? new Date().getTime() : null);
   useEffect(() => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
-  // 웹소켓 연결 effect가 마운트 시 한 번만 실행돼 그 안의 콜백들이 그때의 isAlarmOn 값을 그대로
-  // 캡처해버리는 문제(버튼으로 꺼도 알림이 계속 오던 원인)가 있어, 최신 값을 ref로 따로 추적함
-  const isAlarmOnRef = useRef(isAlarmOn);
   useEffect(() => {
+    alarmEnabledAtMsRef.current = isAlarmOn ? new Date().getTime() : null;
     isAlarmOnRef.current = isAlarmOn;
   }, [isAlarmOn]);
   const notifyDangerAlarms = (dangerAlarms) => {
-    if (!hasNotifiedInitialRef.current) {
-      dangerAlarms.forEach(a => notifiedAlarmIdsRef.current.add(a.id));
-      hasNotifiedInitialRef.current = true;
-      return;
-    }
-    // 헤더의 알람 on/off 토글이 꺼져 있으면 그냥 아무것도 안 하고 넘어감(추적도 안 함) - 꺼진
-    // 동안 온 알람을 "이미 본 것"으로 미리 찍어두면, 다시 켰을 때 그 알람은 영영 안 떠서 "켜도
-    // 안 온다"는 문제가 있었음. 안 찍어두면 다시 켰을 때 그 시점에 떠 있는 알람이 자연스럽게 뜸
-    const canNotify = isAlarmOnRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    const canNotify = isAlarmOnRef.current && alarmEnabledAtMsRef.current != null
+      && typeof Notification !== 'undefined' && Notification.permission === 'granted';
     if (!canNotify) return;
     dangerAlarms.forEach(a => {
+      if (a.recordedAtMs == null || a.recordedAtMs <= alarmEnabledAtMsRef.current) return;
       if (notifiedAlarmIdsRef.current.has(a.id)) return;
       notifiedAlarmIdsRef.current.add(a.id);
       new Notification(`⚠ ${a.equipName} 위험`, {
@@ -830,6 +825,7 @@ const RealtimeScreen = ({
               equipId: item.equipId,
               equipName: eq?.equipName || item.equipId,
               time: item.recordedAt ? formatClockTime(new Date(item.recordedAt)) : '-',
+              recordedAtMs: item.recordedAt ? new Date(item.recordedAt).getTime() : null,
               value: item.value,
               threshold: item.threshold,
               location: eq?.location || '-',
