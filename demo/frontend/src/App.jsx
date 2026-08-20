@@ -44,6 +44,19 @@ export default function App() {
     }
   }, [isDarkMode]);
 
+  // 알람 on/off는 서버(Login.alarmEnable)에 저장돼 있으므로, 로그인 상태로 새로고침해도
+  // 항상 켜짐으로 리셋되지 않도록 로그인된 유저가 있으면 저장된 값을 불러와 맞춰줌
+  useEffect(() => {
+    if (!user?.token) return;
+    axios.get(`${API_BASE_URL}/api/employee/me`, {
+      headers: { Authorization: `Bearer ${user.token}` },
+    }).then(res => {
+      setIsAlarmOn(res.data?.alarmEnable !== 'off');
+    }).catch(err => {
+      console.error('알람 설정 조회 실패:', err);
+    });
+  }, [user?.token]);
+
   // 알람/로그 데이터 (RealtimeScreen 마운트 시 백엔드 noti-warn/logs API로 채워짐)
   const [alarms, setAlarms] = useState([]);
   const [logs, setLogs] = useState([]);

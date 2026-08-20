@@ -395,13 +395,14 @@ const RealtimeScreen = ({
       hasNotifiedInitialRef.current = true;
       return;
     }
-    // 헤더의 알람 on/off 토글이 꺼져 있으면 브라우저 알림을 안 띄움. 꺼진 동안 온 알람도
-    // "이미 본 것"으로는 기록해둬서, 나중에 다시 켰을 때 그동안 쌓인 알람이 한꺼번에 쏟아지지 않게 함
+    // 헤더의 알람 on/off 토글이 꺼져 있으면 그냥 아무것도 안 하고 넘어감(추적도 안 함) - 꺼진
+    // 동안 온 알람을 "이미 본 것"으로 미리 찍어두면, 다시 켰을 때 그 알람은 영영 안 떠서 "켜도
+    // 안 온다"는 문제가 있었음. 안 찍어두면 다시 켰을 때 그 시점에 떠 있는 알람이 자연스럽게 뜸
     const canNotify = isAlarmOnRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    if (!canNotify) return;
     dangerAlarms.forEach(a => {
       if (notifiedAlarmIdsRef.current.has(a.id)) return;
       notifiedAlarmIdsRef.current.add(a.id);
-      if (!canNotify) return;
       new Notification(`⚠ ${a.equipName} 위험`, {
         body: `${a.metric === 'power' ? '전력' : '온도'} ${a.value} (기준 ${a.threshold}) - ${a.location}`,
       });

@@ -17,6 +17,16 @@ import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { formatKoreanDateTime } from '../utils/dateFormat';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
+// 알람/로그 패널에 표시할 최대 개수 - 예전엔 재생 중 계속 이어붙이기만(unbounded) 해서, 전환
+// 이벤트가 많은(=일주일치 같은) 시나리오는 재생이 진행될수록 이 배열이 계속 커지며 매 틱마다
+// 복사/리렌더 비용이 누적돼 뒤로 갈수록 전체가 버벅였음(재생바까지 같이 밀림)
+const MAX_SIM_ALARMS = 200;
+const MAX_SIM_LOGS = 500;
+// "선택한 설비의 지금까지 추이" 그래프에 실제로 그릴 최대 점 개수 - 이보다 많으면 균등 간격으로
+// 표본을 뽑아서(마지막 점은 항상 포함) 재생 위치가 뒤로 갈수록 매 틱 처리량이 계속 늘어나지 않게 함
+const MAX_SERIES_POINTS = 1000;
+// 데이터가 이만큼 이상 비어있으면(기본 1시간) 그 구간은 재생 시간에서 통째로 뺌
+const GAP_THRESHOLD_MS = 60 * 60 * 1000;
 
 // 값 수정 셀 (온도/전력/임계값 입력창) - 입력 중 부모 재계산에 값이 씹히지 않도록 로컬 상태로 관리
 const EditableCell = ({ initialValue, onChangeValue, className }) => {
@@ -272,9 +282,62 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     });
   };
 
-  // 재생 구간의 전체 길이(ms) 및 시작 시각
+  // 재생 구간의 시작 시각
   const startTimeMs = rows.length ? rows[0].time.getTime() : 0;
-  const durationMs = rows.length ? rows[rows.length - 1].time.getTime() - startTimeMs : 0;
+
+  // 데이터가 아예 없는 구간(기본 1시간 이상)은 재생 시간(durationMs)에서 통째로 빼기 위한
+  // "압축 타임라인". 실제 시각(real) <-> 압축된 재생 경과시간(compressed)을 서로 변환할 수 있게
+  // 데이터가 있는 연속 구간별로 압축된 타임라인상의 시작 위치를 미리 계산해둠. 재생/탐색/그래프 등
+  // elapsedMs를 쓰는 곳은 전부 이 압축된 값을 기준으로 동작함
+  const globalSortedTimes = useMemo(() => (
+    rows.map(r => r.time.getTime()).sort((a, b) => a - b)
+  ), [rows]);
+  const timelineSegments = useMemo(() => {
+    if (!globalSortedTimes.length) return [];
+    const segments = [];
+    let segStart = globalSortedTimes[0];
+    let segRealEnd = globalSortedTimes[0];
+    let compressedCursor = 0;
+    for (let i = 1; i < globalSortedTimes.length; i++) {
+      const t = globalSortedTimes[i];
+      if (t - segRealEnd >= GAP_THRESHOLD_MS) {
+        segments.push({ realStart: segStart, realEnd: segRealEnd, compressedStart: compressedCursor });
+        compressedCursor += segRealEnd - segStart;
+        segStart = t;
+      }
+      segRealEnd = t;
+    }
+    segments.push({ realStart: segStart, realEnd: segRealEnd, compressedStart: compressedCursor });
+    return segments;
+  }, [globalSortedTimes]);
+  const durationMs = timelineSegments.length
+    ? timelineSegments[timelineSegments.length - 1].compressedStart
+      + (timelineSegments[timelineSegments.length - 1].realEnd - timelineSegments[timelineSegments.length - 1].realStart)
+    : 0;
+  // 실제 시각 -> 압축된 경과시간 (구간을 이진 탐색으로 찾음). 시간이 구간 사이 빈 곳(gap)에
+  // 떨어지면 그 직전 구간이 끝나는 지점(gap이 없는 것처럼)으로 스냅함
+  const realToCompressed = useCallback((realMs) => {
+    if (!timelineSegments.length) return 0;
+    let lo = 0, hi = timelineSegments.length - 1, idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (timelineSegments[mid].realStart <= realMs) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    const seg = timelineSegments[idx];
+    const clamped = Math.min(Math.max(realMs, seg.realStart), seg.realEnd);
+    return seg.compressedStart + (clamped - seg.realStart);
+  }, [timelineSegments]);
+  // 압축된 경과시간 -> 실제 시각
+  const compressedToReal = useCallback((compressedMs) => {
+    if (!timelineSegments.length) return startTimeMs;
+    let lo = 0, hi = timelineSegments.length - 1, idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (timelineSegments[mid].compressedStart <= compressedMs) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    const seg = timelineSegments[idx];
+    return seg.realStart + (compressedMs - seg.compressedStart);
+  }, [timelineSegments, startTimeMs]);
 
   // 시나리오에 온도/전력 중 뭐가 있는지 (있는 지표만 값/컬럼/그래프에 표시)
   const hasTemperatureData = rows.some(r => r.temperature != null);
@@ -302,7 +365,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
               equipId: r.equipId,
               equipName: r.equipName,
               location: r.location,
-              elapsedMs: r.time.getTime() - startTimeMs,
+              elapsedMs: realToCompressed(r.time.getTime()),
               kind: 'warning',
               status,
               metric,
@@ -314,7 +377,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
               id: `log-${metric}-${r.equipId}-${r.time.getTime()}`,
               equipId: r.equipId,
               equipName: r.equipName,
-              elapsedMs: r.time.getTime() - startTimeMs,
+              elapsedMs: realToCompressed(r.time.getTime()),
               kind: 'success',
               metric,
               value: r[valueKey],
@@ -362,27 +425,41 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     metric: e.metric,
   });
 
+  // transitionEvents는 elapsedMs 오름차순으로 정렬돼 있으므로, 매 틱(250ms)마다 전체를
+  // filter로 훑는 대신 이진 탐색으로 구간의 경계 인덱스만 찾아 slice함. 전환 이벤트가 많은
+  // (일주일치 같은) 시나리오는 재생 내내 매 틱 O(n) 스캔 비용이 그대로 쌓여 갈수록 버벅였음
+  const upperBoundByElapsedMs = (value) => {
+    let lo = 0;
+    let hi = transitionEvents.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (transitionEvents[mid].elapsedMs <= value) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  };
+
   // 재생 위치(elapsedMs)가 바뀔 때마다 지금까지 발생한 전환 이벤트를 알람/로그에 반영
   useEffect(() => {
     if (!rows.length) return;
     const prev = prevElapsedRef.current;
     if (elapsedMs < prev) {
       // 되감기(스크럽): 처음부터 현재 위치까지 다시 계산
-      const upto = transitionEvents.filter(e => e.elapsedMs <= elapsedMs);
-      setSimAlarms(upto.filter(e => e.kind === 'warning').map(toAlarmCard));
-      setSimLogs(upto.map(toLogCard));
+      const upto = transitionEvents.slice(0, upperBoundByElapsedMs(elapsedMs));
+      setSimAlarms(upto.filter(e => e.kind === 'warning').map(toAlarmCard).slice(-MAX_SIM_ALARMS));
+      setSimLogs(upto.map(toLogCard).slice(-MAX_SIM_LOGS));
     } else if (elapsedMs > prev) {
-      const newly = transitionEvents.filter(e => e.elapsedMs > prev && e.elapsedMs <= elapsedMs);
+      const newly = transitionEvents.slice(upperBoundByElapsedMs(prev), upperBoundByElapsedMs(elapsedMs));
       if (newly.length > 0) {
-        setSimAlarms(p => [...p, ...newly.filter(e => e.kind === 'warning').map(toAlarmCard)]);
-        setSimLogs(p => [...p, ...newly.map(toLogCard)]);
+        setSimAlarms(p => [...p, ...newly.filter(e => e.kind === 'warning').map(toAlarmCard)].slice(-MAX_SIM_ALARMS));
+        setSimLogs(p => [...p, ...newly.map(toLogCard)].slice(-MAX_SIM_LOGS));
       }
     }
     prevElapsedRef.current = elapsedMs;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elapsedMs, transitionEvents]);
 
-  // 재생 타이머
+  // 재생 타이머 - durationMs/elapsedMs가 이미 빈 구간이 빠진 "압축된" 시간이라 여기서 따로
+  // 건너뛸 필요 없이 그냥 일정하게 흘려보내면 됨
   useEffect(() => {
     if (playState !== 'playing' || !rows.length || durationMs <= 0) return;
     const tickMs = 250;
@@ -418,8 +495,21 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     resetPlayback();
   };
 
+  // 재생바를 드래그하면 <input type="range">의 onChange가 프레임당 여러 번(브라우저가 보낼 수
+  // 있는 만큼 빠르게) 연달아 발생하는데, 그때마다 setElapsedMs를 바로 호출하면 currentEquipRows/
+  // selectedEquipSeries 같은 무거운 재계산이 그 횟수만큼 겹쳐 실행돼서(재생 중 250ms 간격보다
+  // 훨씬 잦음) 데이터가 많은 시나리오는 드래그 중 화면이 멈춘 것처럼 보였음. 실제 반영은 프레임당
+  // 최대 1번으로 묶고, 그사이 들어온 값 중 가장 최신 값만 씀
+  const pendingSeekRef = useRef(null);
+  const seekRafScheduledRef = useRef(false);
   const handleSeek = (e) => {
-    setElapsedMs(Number(e.target.value));
+    pendingSeekRef.current = Number(e.target.value);
+    if (seekRafScheduledRef.current) return;
+    seekRafScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      seekRafScheduledRef.current = false;
+      setElapsedMs(pendingSeekRef.current);
+    });
   };
 
   // timeMs에 적용될 수정값 조회: 정확히 그 시각의 수정 우선, 없으면 그 이전 "이후 전체 적용" 중 최신 값
@@ -472,7 +562,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   // 현재 재생 시점 기준, 설비별 가장 최근 값(수동 수정값 있으면 그 값으로 덮어씀)
   const currentEquipRows = useMemo(() => {
     if (!rows.length) return [];
-    const cutoff = startTimeMs + elapsedMs;
+    const cutoff = compressedToReal(elapsedMs);
     const latestByEquip = new Map();
     sortedRowsByEquip.forEach((list, equipId) => {
       const latest = findLatestAtOrBefore(list, cutoff);
@@ -547,13 +637,18 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       byEquip.get(r.equipId).push(r);
     });
 
-    const scenarioEndMs = startTimeMs + durationMs;
+    // 막대 너비 비율은 압축된(빈 구간 뺀) 시간 기준으로 계산해야 durationMs와 맞음 -
+    // 실제 시각을 그대로 쓰면 빈 구간을 포함한 실제 간격이 압축된 총 길이로 나눠지면서
+    // 그 구간의 너비가 실제보다 훨씬 크게 부풀어 보임
+    const scenarioEndReal = rows.length ? rows[rows.length - 1].time.getTime() : startTimeMs;
     const buildSegments = (resolved) => {
       const segments = [];
       resolved.forEach((point, idx) => {
         // 첫 구간은 startTimeMs부터 채워서 막대 길이가 항상 100%로 보이게 함
-        const segStart = idx === 0 ? startTimeMs : point.time;
-        const segEnd = idx < resolved.length - 1 ? resolved[idx + 1].time : scenarioEndMs;
+        const segStartReal = idx === 0 ? startTimeMs : point.time;
+        const segEndReal = idx < resolved.length - 1 ? resolved[idx + 1].time : scenarioEndReal;
+        const segStart = realToCompressed(segStartReal);
+        const segEnd = realToCompressed(segEndReal);
         const widthPct = ((segEnd - segStart) / durationMs) * 100;
         if (widthPct <= 0) return;
         const last = segments[segments.length - 1];
@@ -598,7 +693,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   // 구간만 잘라서 씀 (전체 rows.filter는 데이터가 많을 때 재생 중 렉의 원인이었음)
   const selectedEquipSeries = useMemo(() => {
     if (!selectedEquipId || !rows.length) return [];
-    const cutoff = startTimeMs + elapsedMs;
+    const cutoff = compressedToReal(elapsedMs);
     const sortedList = sortedRowsByEquip.get(selectedEquipId) || [];
     const endIdx = (() => {
       let lo = 0;
@@ -611,9 +706,23 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       }
       return result;
     })();
+    // 위 이진 탐색은 "경계를 찾는 것"만 빠르게 했을 뿐, 그동안 slice(0, endIdx+1)로 재생 시작부터
+    // 지금까지의 전 구간을 그대로 다시 map 돌리고 있었음 - 재생이 진행될수록(=endIdx가 커질수록)
+    // 이 작업 자체가 매 틱 점점 더 무거워져서, 데이터가 많은 시나리오는 뒤로 갈수록 심하게
+    // 버벅이다 못해 멈춘 것처럼 보였음(가장 큰 원인). 상한을 넘으면 균등 간격으로 표본을 뽑아
+    // 그래프 모양은 그대로 유지하면서 매 틱 처리량을 일정하게 묶어둠
+    const totalCount = endIdx + 1;
+    let sourceList;
+    if (totalCount <= MAX_SERIES_POINTS) {
+      sourceList = sortedList.slice(0, totalCount);
+    } else {
+      const step = totalCount / MAX_SERIES_POINTS;
+      sourceList = Array.from({ length: MAX_SERIES_POINTS }, (_, i) => sortedList[Math.floor(i * step)]);
+      const last = sortedList[totalCount - 1];
+      if (sourceList[sourceList.length - 1] !== last) sourceList[sourceList.length - 1] = last;
+    }
     let prevStatus = null;
-    return sortedList
-      .slice(0, endIdx + 1)
+    return sourceList
       .map(r => {
         const rowTime = r.time.getTime();
         const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
@@ -625,7 +734,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         prevStatus = r.status;
         return {
           time: formatClockTime(r.time),
-          elapsedMs: rowTime - startTimeMs,
+          elapsedMs: realToCompressed(rowTime),
           temperature: editedTemp !== undefined ? editedTemp : r.temperature,
           power: editedPower !== undefined ? editedPower : r.power,
           threshold: editedThreshold !== undefined ? editedThreshold : r.threshold,
@@ -683,7 +792,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       // 지금까지 실제 현재 시각(수정한 시점의 벽시계 시각)으로 표시되고 있어서 서로 형식이 달랐음.
       // 수정한 행 자체의 시나리오 경과시간으로 통일함
       const editedAt = new Date();
-      const timeLabel = formatMmSs(row.time.getTime() - startTimeMs);
+      const timeLabel = formatMmSs(realToCompressed(row.time.getTime()));
       const cardId = `manual-${metric}-${equipId}-${editedAt.getTime()}`;
       setSimAlarms(p => [...p, {
         id: cardId,
@@ -694,7 +803,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         threshold: alarmThreshold,
         location: row.location || '-',
         metric,
-      }]);
+      }].slice(-MAX_SIM_ALARMS));
       setSimLogs(p => [...p, {
         id: `log-${cardId}`,
         time: timeLabel,
@@ -704,7 +813,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         value: alarmValue,
         threshold: alarmThreshold,
         metric,
-      }]);
+      }].slice(-MAX_SIM_LOGS));
     }
   };
 
@@ -913,6 +1022,23 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   // 설비별 이력 표에서, 지금 재생 위치에 해당하는 행(전체보기에 표시되는 것과 같은 행)을 테두리로 표시
   const currentViewEquipTime = currentEquipRows.find(r => r.equipId === viewEquipId)?.time?.getTime();
 
+  // 테두리를 표시할 정확한 행의 인덱스 (이진 탐색). 같은 시각을 가진 행이 여러 개 있을 수 있어서
+  // 시간 값만으로 비교하면 그 시각을 가진 행 전부에 테두리가 걸림 - 인덱스 하나로만 비교해서
+  // 정확히 그 행에만 표시되게 함
+  const currentViewRowIdx = useMemo(() => {
+    if (currentViewEquipTime == null) return -1;
+    const list = sortedRowsByEquip.get(displayViewEquipId) || [];
+    let lo = 0;
+    let hi = list.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const midTime = list[mid].time.getTime();
+      if (midTime === currentViewEquipTime) return mid;
+      if (midTime < currentViewEquipTime) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+  }, [currentViewEquipTime, sortedRowsByEquip, displayViewEquipId]);
+
   // 표 컨테이너 크기가 바뀌면(창 크기 조절 등) 가상 스크롤 계산에 반영
   useEffect(() => {
     const el = historyScrollRef.current;
@@ -942,9 +1068,31 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       if (midTime === currentViewEquipTime) { idx = mid; break; }
       if (midTime < currentViewEquipTime) lo = mid + 1; else hi = mid - 1;
     }
-    if (idx === -1) return;
+    // 정확히 일치하는 게 없어도(예: 방금 다른 설비로 전환하는 도중이라 리스트가 아직 안 맞물린
+    // 경우) 그냥 포기하지 않고, 이진 탐색이 멈춘 자리(가장 가까운 위치)로라도 이동함 - 데이터가
+    // 많을수록 정확히 못 맞고 그냥 아무것도 안 하는 경우가 잦아서 "안 움직이는 것처럼" 보였음
+    if (idx === -1) idx = Math.max(0, Math.min(list.length - 1, lo));
+    if (idx < 0) return;
     const rowTop = idx * HISTORY_ROW_HEIGHT;
-    el.scrollTo({ top: Math.max(0, rowTop - el.clientHeight / 2 + HISTORY_ROW_HEIGHT / 2), behavior: 'smooth' });
+    // 화면 정중앙이 아니라 위쪽 1/3 지점에 현재 위치 행이 오도록 (조금 더 위쪽에 걸리게)
+    const target = Math.max(0, rowTop - el.clientHeight / 3 + HISTORY_ROW_HEIGHT / 2);
+
+    // 재생 틱(250ms)마다 이 위치가 갱신되는데, 브라우저 기본 behavior:'smooth'는 애니메이션
+    // 길이를 우리가 정할 수 없어서 다음 틱이 오기 전에 안 끝나면 서로 취소되며 안 움직이는
+    // 것처럼 보였음(데이터가 많을수록 자주 발생). 그래서 직접 짧게(틱보다 확실히 짧게) 이징
+    // 애니메이션을 돌리고, 다음 틱이 오면 cleanup에서 반드시 취소해 서로 안 겹치게 함
+    const startTop = el.scrollTop;
+    const distance = target - startTop;
+    if (Math.abs(distance) < 1) return undefined;
+    const duration = 180;
+    const startTime = performance.now();
+    let rafId = requestAnimationFrame(function step(now) {
+      const t = Math.min(1, (now - startTime) / duration);
+      const eased = 1 - (1 - t) * (1 - t); // ease-out
+      el.scrollTop = startTop + distance * eased;
+      if (t < 1) rafId = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(rafId);
   }, [currentViewEquipTime, viewEquipId, sortedRowsByEquip, displayViewEquipId]);
 
   // 가상 스크롤: 실제로 화면에 보이는 구간(+여유분) 인덱스만 계산해서 그 부분만 <tr>로 렌더링
@@ -1048,7 +1196,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                 selectedScenario && rows.length > 0 ? '' : 'invisible'
               } ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
                 {selectedScenario && rows.length > 0
-                  ? `${formatKoreanDateTime(startTimeMs)} ~ ${formatKoreanDateTime(startTimeMs + durationMs)}`
+                  ? `${formatKoreanDateTime(startTimeMs)} ~ ${formatKoreanDateTime(rows[rows.length - 1].time.getTime())}`
                   : ' '}
               </span>
             </div>
@@ -1343,7 +1491,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                 <div
                   ref={historyScrollRef}
                   onScroll={handleHistoryScroll}
-                  className="flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar"
+                  className="relative flex-1 overflow-x-auto overflow-y-auto min-h-0 custom-scrollbar"
                 >
                   <table className="w-full text-center border-collapse table-fixed min-w-[600px]">
                     <thead className={`sticky top-0 text-[11px] z-10 transition-colors ${
@@ -1395,7 +1543,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                             .reduce((worst, m) => (STATUS_SORT_ORDER[m.label] > STATUS_SORT_ORDER[worst.label] ? m : worst), { label: '정상', color: 'green' });
                           const isDanger = worstMeta.color === 'red';
                           const isWarning = worstMeta.color === 'amber';
-                          const isCurrentPlayheadRow = r.time.getTime() === currentViewEquipTime;
+                          const isCurrentPlayheadRow = idx === currentViewRowIdx;
                           return (
                             <tr
                               key={`${r.equipId}-${r.time.getTime()}-${idx}`}

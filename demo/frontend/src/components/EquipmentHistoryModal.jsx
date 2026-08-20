@@ -47,18 +47,12 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
   // 실제로 있는 레코드만 걸러서 끊김 없는 배열로 만들어 사용
   const metricData = rawData.filter(item => item[dataKeyName] != null);
 
-  const [visibleCount, setVisibleCount] = useState(() => Math.min(DEFAULT_VISIBLE, metricData.length) || DEFAULT_VISIBLE);
+  // 항상 MIN_VISIBLE(가장 좁은 폭)로 고정해두고 그 안에서 실제 데이터로 채움(slice는 배열
+  // 길이를 넘는 개수를 요청해도 있는 만큼만 반환하므로 문제없음) - 데이터가 캐시(적음) ->
+  // 실제 조회(많음)로 몇 번 갱신되는 동안 보이는 구간 폭 자체가 따라 늘어나며 "갑자기 확
+  // 넓어지는" 것처럼 보이는 걸 막음. 사용자가 휠로 직접 조정한 뒤에는 그 값을 그대로 유지함
+  const [visibleCount, setVisibleCount] = useState(MIN_VISIBLE);
   const wheelAreaRef = useRef(null);
-  // 사용자가 휠로 직접 확대/축소하기 전까지는 표시 건수를 데이터 증가에 맞춰 같이 늘림.
-  // (이게 없으면 처음 열었을 때 데이터가 적었을 경우 - 예: 백엔드 막 재기동한 직후 - 그 적은
-  //  건수에 영구히 멈춰서, 이후 데이터가 아무리 쌓여도 그래프가 그대로인 것처럼 보임)
-  const hasUserZoomedRef = useRef(false);
-
-  useEffect(() => {
-    if (!hasUserZoomedRef.current) {
-      setVisibleCount(Math.min(DEFAULT_VISIBLE, metricData.length) || DEFAULT_VISIBLE);
-    }
-  }, [metricData.length]);
 
   // 모달을 열자마자(캐시로 즉시 그려진 뒤) 바로 이어서 DEFAULT_VISIBLE -> FETCH_LIMIT 순으로
   // 데이터가 짧은 간격으로 몇 번 더 갱신되는데, 이 리스너가 metricData.length에 걸려 있으면 그때마다
@@ -77,7 +71,6 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
     if (!el) return;
     const handleWheel = (e) => {
       e.preventDefault();
-      hasUserZoomedRef.current = true;
       const dir = e.deltaY > 0 ? 1 : -1; // 아래로 스크롤 = 더 넓은 기간, 위로 스크롤 = 더 좁은 기간
       setVisibleCount(prev => {
         const step = Math.max(4, Math.round(prev * 0.15));

@@ -163,13 +163,15 @@ export const parseSimulationFileInWorker = (file) => {
   });
 };
 
-// 밀리초 -> "mm:ss" 표기
+// 밀리초 -> "mm:ss" (1시간 넘으면 "h:mm:ss") 표기. 일주일치처럼 경과 시간이 긴 시나리오는
+// 분(mm)이 두 자리를 넘어가서 "1156:06"처럼 알아보기 힘든 표기가 되는 걸 막음
 export const formatMmSs = (ms) => {
   if (!ms || ms < 0 || !isFinite(ms)) return '00:00';
   const totalSec = Math.floor(ms / 1000);
-  const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+  const hh = Math.floor(totalSec / 3600);
+  const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
   const ss = String(totalSec % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
+  return hh > 0 ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
 };
 
 // Date -> "HH:mm:ss" 표기 (엑셀의 실제 수신 시간을 그대로 보여줄 때 사용)

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+import axios from 'axios';
 import CustomAlert from './CustomAlert';
+import { API_BASE_URL } from '../utils/apiConfig';
 
 // 헤더에서 바로 이동 가능한 모드 목록 (메인 화면까지 안 거치고 바로 전환)
 const NAV_ITEMS = [
@@ -12,10 +14,23 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, 
   // 알람 on/off를 눌렀을 때, 그 상태가 바뀌었다는 걸 커스텀 알림창으로 한 번 확인시켜줌
   // (브라우저 알림은 밀린 알람이 몰려서 뜰 때와 헷갈리기 쉬워 인앱 알림으로 대체함)
   const [toggleMessage, setToggleMessage] = useState('');
-  const handleToggleAlarm = () => {
+  const handleToggleAlarm = async () => {
     const next = !isAlarmOn;
-    setIsAlarmOn(next);
-    setToggleMessage(next ? '알람이 켜졌습니다.' : '알람이 꺼졌습니다.');
+    setIsAlarmOn(next); // 응답 기다리지 않고 먼저 화면부터 반영 (실패하면 되돌림)
+    try {
+      const res = await axios.patch(
+        `${API_BASE_URL}/api/employee/me/alarm`,
+        { alarmEnable: next ? 'on' : 'off' },
+        { headers: user?.token ? { Authorization: `Bearer ${user.token}` } : {} }
+      );
+      const saved = res.data?.alarmEnable !== 'off';
+      setIsAlarmOn(saved);
+      setToggleMessage(saved ? '알람이 켜졌습니다.' : '알람이 꺼졌습니다.');
+    } catch (err) {
+      console.error('알람 설정 저장 실패:', err);
+      setIsAlarmOn(!next); // 저장 실패 시 원래 상태로 되돌림
+      setToggleMessage('알람 설정을 저장하지 못했습니다. 다시 시도해 주세요.');
+    }
   };
   return (
     <header className={`h-[64px] border-b flex items-center justify-between px-6 shrink-0 transition-colors ${
@@ -93,15 +108,13 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, 
             }`}
             title={isAlarmOn ? '알람 끄기' : '알람 켜기'}
           >
-            {isAlarmOn ? (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.143 17.082a24.248 24.248 0 003.844.148m-3.844-.148a23.856 23.856 0 01-5.455-1.31 8.964 8.964 0 002.3-5.542m3.155 6.852a3 3 0 005.667 1.97m1.965-2.277L21 21m-4.225-4.225a23.81 23.81 0 003.536-1.003A8.967 8.967 0 0118 9.75V9A6 6 0 006.53 5.66m8.75 8.75L6.53 5.66m0 0L3 3" />
-              </svg>
-            )}
+            {/* off 아이콘도 같은 종 모양에 사선만 그어서, on/off가 서로 다른 아이콘처럼 안 보이게 함 */}
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              {!isAlarmOn && (
+                <line x1="4" y1="4" x2="20" y2="20" strokeLinecap="round" strokeWidth="2" />
+              )}
+            </svg>
           </button>
         )}
 
