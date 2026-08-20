@@ -1,4 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
+import Dropdown from './Dropdown';
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}시` }));
+const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, m) => ({ value: m, label: `${String(m).padStart(2, '0')}분` }));
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -141,30 +145,22 @@ const DateTimePicker = ({ value, onChange, min, max, isDarkMode, label }) => {
             })}
           </div>
 
-          {/* 시:분 선택 */}
+          {/* 시:분 선택 (네이티브 select 대신 앱 전역에서 쓰는 커스텀 드롭다운) */}
           <div className={`flex items-center justify-center gap-1.5 mt-2 pt-2 border-t ${isDarkMode ? 'border-[#232B45]' : 'border-gray-200'}`}>
-            <select
+            <Dropdown
               value={value.getHours()}
-              onChange={(e) => handleTimeChange('hour', Number(e.target.value))}
-              className={`rounded-md px-1.5 py-1 text-xs font-mono outline-none border cursor-pointer ${
-                isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
-              }`}
-            >
-              {Array.from({ length: 24 }, (_, h) => (
-                <option key={h} value={h}>{String(h).padStart(2, '0')}시</option>
-              ))}
-            </select>
-            <select
+              onChange={(v) => handleTimeChange('hour', v)}
+              options={HOUR_OPTIONS}
+              isDarkMode={isDarkMode}
+              widthClass="w-[88px]"
+            />
+            <Dropdown
               value={value.getMinutes()}
-              onChange={(e) => handleTimeChange('minute', Number(e.target.value))}
-              className={`rounded-md px-1.5 py-1 text-xs font-mono outline-none border cursor-pointer ${
-                isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' : 'bg-gray-50 border-gray-200 text-gray-800'
-              }`}
-            >
-              {Array.from({ length: 60 }, (_, m) => (
-                <option key={m} value={m}>{String(m).padStart(2, '0')}분</option>
-              ))}
-            </select>
+              onChange={(v) => handleTimeChange('minute', v)}
+              options={MINUTE_OPTIONS}
+              isDarkMode={isDarkMode}
+              widthClass="w-[88px]"
+            />
           </div>
         </div>
       )}

@@ -3,13 +3,17 @@ import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, ReferenceDot,
 } from 'recharts';
-import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
+import { getRecentByEquipIdFromDB, getNewByEquipIdFromDB } from '../utils/indexedDb';
 import { formatClockTime } from '../utils/simulationParse';
+import { getTodayStartMs, fetchHistoryFromBackend } from '../utils/historyApi';
 import LoadingSpinner from './LoadingSpinner';
 
 // 처음에 한 번에 미리 가져와 둘 최대 건수 (스크롤로 확대/축소할 때는 이 안에서 클라이언트에서만
 // 잘라서 보여주므로 DB를 다시 조회하지 않음 -> 스크롤 중 렉이 생기지 않음)
 const FETCH_LIMIT = 500;
+// 로컬 공백을 메우려고 백엔드에서 오늘 하루치를 합치면 FETCH_LIMIT을 넘을 수 있어서, 그 뒤
+// 실시간으로 새로 들어오는 것을 이어붙일 때는 이 값을 넘지 않는 한 잘라내지 않음
+const DAY_CAP = 3000;
 // 처음 열었을 때 기본으로 보여줄 건수
 const DEFAULT_VISIBLE = 80;
 const MIN_VISIBLE = 20;
@@ -28,6 +32,32 @@ const loadCachedEquipHistory = (equipId) => {
     return null;
   }
 };
+// 백엔드 히스토리 보충 조회(오늘자 전체 설비 CSV)는 설비 수/하루 데이터량이 많으면 그 자체로
+// 무거워서, 같은 설비를 같은 날 다시 열 때마다 매번 다시 받지 않도록 결과를 캐싱해둠 (날짜가
+// 바뀌면 키가 달라져 자연히 새로 받아짐). 페이지를 새로고침하면 캐시도 같이 비워짐 - 그 정도
+// 빈도로만 다시 받아도 충분함
+const backendBackfillCache = new Map();
+const fetchBackendBackfillCached = (equipId, token) => {
+  const dateKey = new Date().toDateString();
+  const cacheKey = `${equipId}_${dateKey}`;
+  if (backendBackfillCache.has(cacheKey)) return backendBackfillCache.get(cacheKey);
+
+  const promise = (async () => {
+    const headers = { Authorization: `Bearer ${token}` };
+    const todayStart = new Date(getTodayStartMs());
+    const now = new Date();
+    const [tempHistory, powerHistory] = await Promise.all([
+      fetchHistoryFromBackend('temp', todayStart, now, headers),
+      fetchHistoryFromBackend('elec', todayStart, now, headers),
+    ]);
+    return [...tempHistory, ...powerHistory].filter(r => r.equipId === equipId);
+  })();
+  // 실패하면 캐시에서 지워서 다음 시도 때 다시 받게 함 (실패를 영구 캐싱하지 않음)
+  promise.catch(() => backendBackfillCache.delete(cacheKey));
+  backendBackfillCache.set(cacheKey, promise);
+  return promise;
+};
+
 const mapRecords = (recent) => recent
   .filter(item => item.receivedAt)
   .map(item => ({
@@ -36,11 +66,37 @@ const mapRecords = (recent) => recent
     power: item.power != null ? Number(Number(item.power).toFixed(1)) : null,
   }));
 
+// 로컬(IndexedDB)과 백엔드(오늘자 히스토리)를 합칠 때, 같은 순간의 같은 지표가 양쪽에 다
+// 있을 수 있어서(웹소켓 수신 시 로컬에도 쓰고 백엔드에도 쌓이므로) 중복으로 겹치지 않게
+// (지표종류 + 수신시각) 기준으로 걸러내며 합침
+const mergeHistoryRecords = (localRecords, backendRecords) => {
+  const keyOf = (r) => {
+    const ms = r.receivedAtMs ?? (r.receivedAt ? new Date(r.receivedAt).getTime() : null);
+    const metric = r.temperature != null ? 't' : r.power != null ? 'p' : '?';
+    return `${metric}|${ms}`;
+  };
+  const seen = new Set(localRecords.map(keyOf));
+  const merged = [...localRecords];
+  backendRecords.forEach(r => {
+    const k = keyOf(r);
+    if (!seen.has(k)) {
+      seen.add(k);
+      merged.push(r);
+    }
+  });
+  merged.sort((a, b) => {
+    const at = a.receivedAtMs ?? (a.receivedAt ? new Date(a.receivedAt).getTime() : 0);
+    const bt = b.receivedAtMs ?? (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
+    return at - bt;
+  });
+  return merged;
+};
+
 // ==========================================
 // 휠 스크롤로 독립적으로 확대/축소되는 단일 추이 차트
 // (온도/전력 차트가 서로 다른 인스턴스로 렌더되므로 각자 따로 확대/축소됨)
 // ==========================================
-const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, tooltipStyle, axisColor, gridColor, gradientId, isDarkMode, height = 180 }) => {
+const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, tooltipStyle, axisColor, gridColor, gradientId, isDarkMode, height = 180, isBackfilling = false, onNeedMore }) => {
   // 온도/전력이 완전히 분리된 레코드로 저장되다 보니, rawData에는 이 지표 값이 없는(다른
   // 지표 전용) 레코드도 섞여 있음. 그걸 그대로 Area의 dataKey에 넘기면 recharts가 null
   // 지점마다 영역을 0까지 닫아버려서 선이 뾰족뾰족한 막대처럼 끊겨 보임 -> 이 지표 값이
@@ -62,6 +118,12 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
   useEffect(() => {
     metricDataLengthRef.current = metricData.length;
   }, [metricData.length]);
+  // onNeedMore도 같은 이유로 ref에 담아 최신 값을 읽음 (매 렌더 새 함수라 이걸 그대로 의존성
+  // 배열에 넣으면 리스너가 계속 떼었다 다시 붙어야 함)
+  const onNeedMoreRef = useRef(onNeedMore);
+  useEffect(() => {
+    onNeedMoreRef.current = onNeedMore;
+  }, [onNeedMore]);
 
   // useEffect는 브라우저가 이미 한 번 그린 뒤에(paint 후) 실행돼서, 캐시로 즉시 그려진 차트에
   // 마우스가 이미 올라가 있다가 바로 스크롤하면 그 첫 틱이 리스너가 붙기 전이라 씹힐 수 있었음.
@@ -75,6 +137,11 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
       setVisibleCount(prev => {
         const step = Math.max(4, Math.round(prev * 0.15));
         const next = prev + dir * step;
+        // 지금까지 로컬에 불러온 만큼을 넘어서까지 넓히려고 하면(=더 과거로 스크롤), 그때 가서야
+        // 백엔드 보충 조회를 시작함 - 스크롤 안 하면 애초에 그 무거운 조회 자체가 필요 없음
+        if (dir > 0 && next > metricDataLengthRef.current) {
+          onNeedMoreRef.current?.();
+        }
         return Math.min(metricDataLengthRef.current || FETCH_LIMIT, Math.max(MIN_VISIBLE, next));
       });
     };
@@ -84,6 +151,9 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
 
   const chartData = metricData.slice(-visibleCount);
   const lastPoint = chartData[chartData.length - 1];
+  // 이미 확대/축소가 의미 있게 동작할 만큼 데이터가 쌓였으면(=최소 확대 단위 이상) 백그라운드
+  // 조회가 아직 안 끝났어도 스피너를 그만 보여줌 - "이미 스크롤 되는데 계속 돈다"는 위화감 방지
+  const showBackfillHint = isBackfilling && metricData.length < MIN_VISIBLE;
 
   return (
     <div>
@@ -92,7 +162,15 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
           <span className={`w-2 h-2 rounded-full ${dotClass}`} />
           <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>{title}</span>
         </div>
-        <span className={`text-[10px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>최근 {chartData.length}건</span>
+        <span className={`text-[10px] font-mono flex items-center gap-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+          최근 {chartData.length}건
+          {showBackfillHint && (
+            <span
+              title="더 많은 기록을 불러오는 중..."
+              className="w-2.5 h-2.5 rounded-full border-2 border-current border-t-transparent animate-spin opacity-70"
+            />
+          )}
+        </span>
       </div>
       {/* chart-reveal(선이 그려지는 900ms 연출)을 빼서 데이터가 오자마자 바로 그려지게 함 -
           이 연출 때문에 실제로 로딩이 끝났는데도 아직 로딩 중인 것처럼 느껴졌음 */}
@@ -143,7 +221,7 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
 // ==========================================
 // focusMetric: 'temperature' | 'power' | null
 // null이면 그리드 행 클릭처럼 온도/전력 둘 다 보여주고, 지정되면 해당 그래프 하나만 크게 보여줌
-const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, onClose, isDarkMode, focusMetric = null }) => {
+const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, onClose, isDarkMode, focusMetric = null, token }) => {
   // 온도추이 카드 캐시가 있으면 IndexedDB 조회를 기다리지 않고 바로 그 데이터로 시작 -
   // 카드가 이미 떠 있던 설비라면 사실상 로딩 없이 즉시 그려짐
   const [rawData, setRawData] = useState(() => {
@@ -151,15 +229,53 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
     return cached ? mapRecords(cached) : [];
   });
   const [isLoading, setIsLoading] = useState(() => loadCachedEquipHistory(equipId) === null);
+  // 처음엔 캐시/DEFAULT_VISIBLE만큼의 소량 데이터로 그려져서, 그 안에서는 휠로 확대/축소해도
+  // 보여줄 수 있는 범위 자체가 좁아 티가 잘 안 남 - 백그라운드로 나머지(FETCH_LIMIT)를 마저
+  // 불러오는 동안 "더 불러오는 중"임을 작은 스피너로 알려줌
+  const [isBackfilling, setIsBackfilling] = useState(true);
+
+  // 실시간 재조회 시 매번 최근 FETCH_LIMIT건 전체를 다시 읽는 대신, 마지막으로 반영한 시점
+  // 이후로 새로 쌓인 것만 이어붙이기 위해 그 시점을 기억해둠
+  const lastReceivedAtMsRef = useRef(null);
+  // 화면엔 이미 mapRecords()로 가공된 rawData만 있어서(receivedAtMs 등이 빠짐), 백엔드 보충분을
+  // 나중에 합치려면 원본(가공 전) 로컬 레코드를 따로 들고 있어야 함
+  const localRawRef = useRef([]);
+  // 백엔드 보충 조회(오늘자 전체 설비 CSV)는 무거워서, 실제로 로컬에 있는 것보다 더 과거로
+  // 스크롤해서 필요해질 때만 한 번 시도함 (열자마자 무조건 받지 않음)
+  const backendMergedRef = useRef(false);
+
+  const mergeBackendHistoryIfNeeded = async () => {
+    if (backendMergedRef.current || !token) return;
+    backendMergedRef.current = true;
+    try {
+      const backendForEquip = await fetchBackendBackfillCached(equipId, token);
+      if (backendForEquip.length === 0) return;
+      const merged = mergeHistoryRecords(localRawRef.current, backendForEquip);
+      localRawRef.current = merged;
+      setRawData(mapRecords(merged));
+    } catch (e) {
+      console.error('설비 히스토리 백엔드 보충 조회 실패:', e);
+      backendMergedRef.current = false; // 실패했으면 다음 스크롤 때 다시 시도할 수 있게 함
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
+    lastReceivedAtMsRef.current = null;
+    localRawRef.current = [];
+    backendMergedRef.current = false;
+    setIsBackfilling(true);
     const load = async (limit) => {
       const recent = await getRecentByEquipIdFromDB(equipId, limit);
-      if (!cancelled) setRawData(mapRecords(recent));
+      if (!cancelled) {
+        localRawRef.current = recent;
+        setRawData(mapRecords(recent));
+        if (recent.length) lastReceivedAtMsRef.current = recent[recent.length - 1].receivedAtMs ?? lastReceivedAtMsRef.current;
+      }
     };
     // 처음 열 때는 화면에 실제로 보이는 만큼(DEFAULT_VISIBLE)만 우선 조회해서 최대한 빨리 그려주고,
-    // 스크롤로 확대할 때 쓸 나머지(FETCH_LIMIT까지)는 첫 화면이 뜬 뒤 백그라운드에서 이어받음
+    // 스크롤로 확대할 때 쓸 나머지(FETCH_LIMIT까지)는 첫 화면이 뜬 뒤 백그라운드에서 이어받음.
+    // 그보다 더 과거(백엔드 보충분)는 실제로 그만큼 스크롤할 때만 받음 (mergeBackendHistoryIfNeeded)
     (async () => {
       try {
         await load(DEFAULT_VISIBLE);
@@ -169,15 +285,34 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
         if (!cancelled) setIsLoading(false);
       }
       if (cancelled) return;
-      load(FETCH_LIMIT).catch(e => console.error('설비 히스토리 전체 조회 실패:', e));
+      try {
+        await load(FETCH_LIMIT);
+      } catch (e) {
+        console.error('설비 히스토리 전체 조회 실패:', e);
+      } finally {
+        if (!cancelled) setIsBackfilling(false);
+      }
     })();
-    // 팝업이 떠 있는 동안 실시간으로 들어오는 새 데이터를 반영하기 위해 주기적으로 재조회
-    const intervalId = setInterval(() => load(FETCH_LIMIT).catch(e => console.error('설비 히스토리 재조회 실패:', e)), LIVE_REFRESH_MS);
+    // 팝업이 떠 있는 동안 실시간으로 들어오는 새 데이터를 반영하기 위해 주기적으로 재조회 -
+    // 아직 기준 시점이 없으면(초기 로드가 안 끝났으면) 건너뛰고, 있으면 그 이후 새 레코드만 이어붙임
+    const intervalId = setInterval(async () => {
+      if (lastReceivedAtMsRef.current == null) return;
+      try {
+        const fresh = await getNewByEquipIdFromDB(equipId, lastReceivedAtMsRef.current, FETCH_LIMIT);
+        if (cancelled || fresh.length === 0) return;
+        lastReceivedAtMsRef.current = fresh[fresh.length - 1].receivedAtMs ?? lastReceivedAtMsRef.current;
+        localRawRef.current = [...localRawRef.current, ...fresh];
+        if (localRawRef.current.length > DAY_CAP) localRawRef.current = localRawRef.current.slice(-DAY_CAP);
+        setRawData(mapRecords(localRawRef.current));
+      } catch (e) {
+        console.error('설비 히스토리 재조회 실패:', e);
+      }
+    }, LIVE_REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [equipId]);
+  }, [equipId, token]);
 
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) onClose();
@@ -263,6 +398,8 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
                   gradientId="tempGradient"
                   isDarkMode={isDarkMode}
                   height={focusMetric === 'temperature' ? 360 : 180}
+                  isBackfilling={isBackfilling}
+                  onNeedMore={mergeBackendHistoryIfNeeded}
                 />
               )}
               {focusMetric !== 'temperature' && (
@@ -280,6 +417,8 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
                   gradientId="powerGradient"
                   isDarkMode={isDarkMode}
                   height={focusMetric === 'power' ? 360 : 180}
+                  isBackfilling={isBackfilling}
+                  onNeedMore={mergeBackendHistoryIfNeeded}
                 />
               )}
 

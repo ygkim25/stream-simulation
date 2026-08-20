@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
-import * as XLSX from 'xlsx';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
 import AlarmSidebar from '../components/AlarmSidebar';
@@ -12,24 +11,18 @@ import Dropdown from '../components/Dropdown';
 import Checkbox from '../components/Checkbox';
 import DateTimePicker from '../components/DateTimePicker';
 import EquipTimelineBar from '../components/EquipTimelineBar';
-import { saveToDB, getByDateRangeFromDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
+import { saveToDB, getByDateRangeIndexedFromDB, pruneOldRecordsFromDB, backfillReceivedAtMsIfNeeded } from '../utils/indexedDb';
 import { formatKoreanDateTime } from '../utils/dateFormat';
 import { formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
+import { exportToXlsx } from '../utils/xlsxExport';
+import { getTodayStartMs, fetchHistoryFromBackend } from '../utils/historyApi';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
-// IndexedDB엔 "오늘 00:00 이후" 데이터만 남겨둠 - 그 이전 기록은 백엔드 DB(히스토리 API)에서
-// 받아오면 되므로 로컬엔 하루치 이상 쌓아둘 필요가 없음. 자정을 넘기면 자동으로 그 전날 로컬
-// 기록이 정리 대상이 됨 (다음날 새 하루가 시작되며 다시 로컬에 쌓이기 시작함)
-const getTodayStartMs = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-};
 const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(자주 할 필요 없음)
 
 // "전체 흐름"이 새로고침 직후 빈 상태로 안 보이게, 마지막 계산 결과를 동기적으로 읽을 수 있는
@@ -161,62 +154,6 @@ const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
   return Promise.all([tempPromise, elecPromise]);
 };
 
-// 엑셀 내보내기에서 백엔드 히스토리 조회에 쓰는 시간 형식 (yyyy-MM-dd'T'HH:mm:ss, 타임존 없이 서버와
-// 동일한 로컬 시각 그대로 보냄 - 백엔드가 LocalDateTime으로 그대로 파싱함)
-const formatLocalDateTime = (date) => {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-};
-
-// 백엔드 히스토리 내보내기 응답(CSV, 쌍따옴표로 콤마/줄바꿈 포함 필드를 감싸는 표준 형식)을 파싱함
-const parseCsv = (text) => {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.length > 0);
-  if (lines.length === 0) return [];
-  const headers = lines[0].split(',');
-  return lines.slice(1).map(line => {
-    const values = [];
-    let cur = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
-        } else {
-          cur += c;
-        }
-      } else if (c === '"') {
-        inQuotes = true;
-      } else if (c === ',') {
-        values.push(cur);
-        cur = '';
-      } else {
-        cur += c;
-      }
-    }
-    values.push(cur);
-    const row = {};
-    headers.forEach((h, i) => { row[h] = values[i]; });
-    return row;
-  });
-};
-
-// 로컬 보관 기간(오늘 00:00 이후)보다 오래된 구간은 IndexedDB에 없으므로, 백엔드 히스토리 CSV에서
-// 가져와서 로컬 레코드와 같은 형태({equipId, temperature/power, status, receivedAt})로 맞춰줌
-const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers) => {
-  const url = `${API_BASE_URL}/api/live/monitoring/${domain}/history/export?from=${encodeURIComponent(formatLocalDateTime(fromDate))}&to=${encodeURIComponent(formatLocalDateTime(toDate))}`;
-  const res = await axios.get(url, { headers, responseType: 'text', transformResponse: [(data) => data] });
-  const rows = parseCsv(res.data);
-  return rows.map(row => ({
-    equipId: row.equipId,
-    temperature: domain === 'temp' && row.temperature !== '' ? Number(row.temperature) : undefined,
-    power: domain === 'elec' && row.power !== '' ? Number(row.power) : undefined,
-    status: row.status,
-    // 백엔드의 "yyyy-MM-dd HH:mm:ss"는 일부 브라우저에서 Date 파싱이 불안정해 ISO로 맞춰줌
-    receivedAt: row.recordedAt ? row.recordedAt.replace(' ', 'T') : null,
-  }));
-};
-
 // ==========================================
 // 실시간 모니터링 화면 컴포넌트
 // ==========================================
@@ -300,6 +237,7 @@ const RealtimeScreen = ({
   });
   const [endTime, setEndTime] = useState(() => new Date());
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false); // 엑셀 내보내기 중 (조회+파일 생성 전체)
 
   const [selectedPreset, setSelectedPreset] = useState('');
   // 엑셀 내보내기 시 온도/전력을 각각 포함할지 (체크박스 - 최소 하나는 항상 선택돼 있어야 함)
@@ -633,23 +571,32 @@ const RealtimeScreen = ({
       return;
     }
 
+    setIsExporting(true);
+    const exportTimerLabel = `[내보내기] 전체`;
+    console.time(exportTimerLabel);
     try {
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
       const cutoffMs = getTodayStartMs();
 
-      // 요청 구간 중 오늘 자정 이후와 겹치는 부분은 IndexedDB에서
+      // 요청 구간 중 오늘 자정 이후와 겹치는 부분은 IndexedDB에서. receivedAtMs 인덱스로 구간만
+      // 바로 훑는 버전을 씀 - 저장소 전체를 스캔하는 이전 버전(getByDateRangeFromDB)이 몇 시간치를
+      // 뽑을 때 오래 걸리던 원인이었음
+      console.time('[내보내기] 1. IndexedDB 조회');
       let localData = [];
       if (endMs > cutoffMs) {
         const localStartMs = Math.max(startMs, cutoffMs);
-        localData = await getByDateRangeFromDB(localStartMs, endMs);
+        localData = await getByDateRangeIndexedFromDB(localStartMs, endMs);
       }
+      console.timeEnd('[내보내기] 1. IndexedDB 조회');
+      console.log(`[내보내기] IndexedDB 레코드 수: ${localData.length}`);
 
       // 24시간보다 오래된 부분은 백엔드 히스토리 CSV에서, 온도/전력 독립 조회로 한쪽이 실패해도
       // 성공한 쪽은 그대로 포함시킴 (Promise.all이면 하나만 실패해도 둘 다 날아감)
       const needsTemp = exportIncludeTemp;
       const needsPower = exportIncludePower;
       let backendData = [];
+      console.time('[내보내기] 2. 백엔드 히스토리 조회');
       if (startMs < cutoffMs) {
         const backendEndMs = Math.min(endMs, cutoffMs);
         const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
@@ -678,7 +625,10 @@ const RealtimeScreen = ({
           showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
         }
       }
+      console.timeEnd('[내보내기] 2. 백엔드 히스토리 조회');
+      console.log(`[내보내기] 백엔드 레코드 수: ${backendData.length}`);
 
+      console.time('[내보내기] 3. 병합/가공 (byEquip)');
       // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함
       const combinedRecords = [...localData, ...backendData]
         .filter(r => (r.temperature != null && needsTemp) || (r.power != null && needsPower))
@@ -696,13 +646,16 @@ const RealtimeScreen = ({
       }
 
       // 온도/전력이 독립적으로 기록돼 한 행에 한쪽 값만 있는 경우가 많음 - equipId별 시간순으로
-      // 훑으며 값이 없는 쪽은 마지막 알려진 값을 이어붙여 한 행에 같이 보이도록 합침
+      // 훑으며 값이 없는 쪽은 마지막 알려진 값을 이어붙여 한 행에 같이 보이도록 합침.
+      // (워커로 옮겨서 combinedRecords 자체를 postMessage로 보내봤는데, 레코드가 많으면 구조화
+      // 복제(structured clone) 비용이 계산 절감분보다 커서 오히려 더 느려짐 - 다시 메인 스레드로.
+      // 워커는 이미 다 조립된 rows만 받아서 시트 생성 + 인코딩만 담당하는 게 더 빠름)
       const byEquip = new Map();
       combinedRecords.forEach(r => {
         if (!byEquip.has(r.equipId)) byEquip.set(r.equipId, []);
         byEquip.get(r.equipId).push(r);
       });
-      const mergedRows = [];
+      const exportData = [];
       byEquip.forEach((list) => {
         let lastTemp = null;
         let lastTempThreshold = null;
@@ -713,53 +666,35 @@ const RealtimeScreen = ({
         list.forEach(r => {
           if (r.temperature != null) { lastTemp = r.temperature; lastTempThreshold = r.threshold; lastTempStatus = r.status; }
           if (r.power != null) { lastPower = r.power; lastPowerThreshold = r.threshold; lastPowerStatus = r.status; }
-          mergedRows.push({
-            equipId: r.equipId,
-            equipName: r.equipName,
-            location: r.location,
-            receivedAt: r.receivedAt,
-            temperature: lastTemp,
-            tempThreshold: lastTempThreshold,
-            tempStatus: lastTempStatus,
-            power: lastPower,
-            powerThreshold: lastPowerThreshold,
-            powerStatus: lastPowerStatus,
-          });
+          const row = {
+            'ID': `#${String(r.equipId).padStart(3, '0')}`,
+            '설비명': r.equipName,
+            '위치': r.location || '-',
+            '수신 시간': r.receivedAt ? formatKoreanDateTime(r.receivedAt) : '-',
+          };
+          if (needsTemp) {
+            row['온도'] = lastTemp != null ? Number(lastTemp).toFixed(1) : '-';
+            row['임계값(온도)'] = lastTempThreshold ?? '-';
+            row['상태(온도)'] = lastTempStatus ? getStatusMeta(lastTempStatus).label : '-';
+          }
+          if (needsPower) {
+            row['전력'] = lastPower != null ? Number(lastPower).toFixed(1) : '-';
+            row['임계값(전력)'] = lastPowerThreshold ?? '-';
+            row['상태(전력)'] = lastPowerStatus ? getStatusMeta(lastPowerStatus).label : '-';
+          }
+          exportData.push(row);
         });
       });
+      console.timeEnd('[내보내기] 3. 병합/가공 (byEquip)');
+      console.log(`[내보내기] 최종 행 수: ${exportData.length}`);
 
-      // 선택한 지표에 해당하는 컬럼만 넣음 (둘 다 선택했으면 온도/전력 컬럼을 모두 포함)
-      const exportData = mergedRows.map(eq => {
-        const row = {
-          'ID': `#${String(eq.equipId).padStart(3, '0')}`,
-          '설비명': eq.equipName,
-          '위치': eq.location || '-',
-          '수신 시간': eq.receivedAt ? formatKoreanDateTime(eq.receivedAt) : '-',
-        };
-        if (needsTemp) {
-          row['온도'] = eq.temperature != null ? Number(eq.temperature).toFixed(1) : '-';
-          row['임계값(온도)'] = eq.tempThreshold ?? '-';
-          row['상태(온도)'] = eq.tempStatus ? getStatusMeta(eq.tempStatus).label : '-';
-        }
-        if (needsPower) {
-          row['전력'] = eq.power != null ? Number(eq.power).toFixed(1) : '-';
-          row['임계값(전력)'] = eq.powerThreshold ?? '-';
-          row['상태(전력)'] = eq.powerStatus ? getStatusMeta(eq.powerStatus).label : '-';
-        }
-        return row;
-      });
-
-      const worksheet = XLSX.utils.json_to_sheet(exportData);
       const baseCols = [{ wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }];
       const metricCols = [{ wch: 10 }, { wch: 12 }, { wch: 10 }];
-      worksheet['!cols'] = [
+      const colWidths = [
         ...baseCols,
         ...(needsTemp ? metricCols : []),
         ...(needsPower ? metricCols : []),
       ];
-
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, '시간범위_누적데이터');
 
       const metricLabel = needsTemp && needsPower ? '온도전력' : needsTemp ? '온도' : '전력';
       const today = new Date();
@@ -767,10 +702,16 @@ const RealtimeScreen = ({
       const timeStr = today.toTimeString().slice(0, 5).replace(':', '');
       const fileName = `설비모니터링_구간추출_${metricLabel}_${dateStr}_${timeStr}.xlsx`;
 
-      XLSX.writeFile(workbook, fileName);
+      // 시트/워크북 생성 + 바이너리 인코딩만 워커에서 처리 (화면이 안 멈추게)
+      console.time('[내보내기] 4. 워커 시트생성+인코딩+다운로드');
+      await exportToXlsx(exportData, colWidths, fileName, '시간범위_누적데이터');
+      console.timeEnd('[내보내기] 4. 워커 시트생성+인코딩+다운로드');
     } catch (err) {
       console.error('엑셀 내보내기 실패:', err);
       showAlert('엑셀 파일 생성 실패');
+    } finally {
+      setIsExporting(false);
+      console.timeEnd(exportTimerLabel);
     }
   };
 
@@ -1359,21 +1300,28 @@ const RealtimeScreen = ({
 
                         <button
                           type="button"
+                          disabled={isExporting}
                           onClick={async () => {
                             await handleExport();
                             setIsRangeEditorOpen(false);
                           }}
-                          className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                          // disabled:cursor-not-allowed가 로딩 중 커서를 덮어써서 인라인 style로 강제함
+                          style={isExporting ? { cursor: 'wait' } : undefined}
+                          className={`w-full py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
                             isDarkMode ? 'bg-[#22D3EE] hover:bg-[#3FDCF0] text-[#0A0E1A]' : 'bg-green-700 hover:bg-green-800 text-white'
                           }`}
                         >
-                          <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
-                            <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
-                            <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
-                            <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
-                          </svg>
-                          내보내기
+                          {isExporting ? (
+                            <span className="w-3.5 h-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                          ) : (
+                            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="2" strokeLinejoin="round" />
+                              <line x1="3" y1="9.5" x2="21" y2="9.5" strokeWidth="2" strokeLinecap="round" />
+                              <line x1="3" y1="15" x2="21" y2="15" strokeWidth="2" strokeLinecap="round" />
+                              <line x1="9.5" y1="3" x2="9.5" y2="21" strokeWidth="2" strokeLinecap="round" />
+                            </svg>
+                          )}
+                          {isExporting ? '내보내는 중...' : '내보내기'}
                         </button>
                       </div>
                     </>
@@ -1695,6 +1643,7 @@ const RealtimeScreen = ({
             focusMetric={historyMetric}
             onClose={() => { setHistoryEquipId(null); setHistoryMetric(null); }}
             isDarkMode={isDarkMode}
+            token={user?.token}
           />
         );
       })()}

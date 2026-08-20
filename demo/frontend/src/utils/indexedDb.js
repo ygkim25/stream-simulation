@@ -111,53 +111,21 @@ export const countFromDB = async () => {
   });
 };
 
-// [startMs, endMs] 구간에 해당하는 데이터만 커서로 훑으며 골라냄
-// (전체를 먼저 배열로 올리지 않고 조건에 맞는 것만 결과에 담아서,
-//  누적량이 아무리 커도 최종적으로 메모리에 남는 건 실제 구간 안의 데이터뿐임)
-export const getByDateRangeFromDB = async (startMs, endMs) => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const results = [];
-    const request = store.openCursor();
-    request.onsuccess = (e) => {
-      const cursor = e.target.result;
-      if (!cursor) {
-        resolve(results);
-        return;
-      }
-      const item = cursor.value;
-      const itemMs = item.receivedAt ? new Date(item.receivedAt).getTime() : null;
-      if (itemMs === null || (itemMs >= startMs && itemMs <= endMs)) {
-        results.push(item);
-      }
-      cursor.continue();
-    };
-    request.onerror = () => reject(request.error);
-  });
-};
-
-// [startMs, endMs] 구간을 receivedAtMs 인덱스로 바로 검색함 (위 getByDateRangeFromDB와 달리
-// 저장소 전체를 훑지 않고 구간에 해당하는 레코드만 커서가 지나가므로, 데이터가 많이 쌓여도
-// 항상 "구간 크기"에 비례하는 속도로 빠름 - "전체 흐름"처럼 짧은 주기로 반복 조회하는 곳에서 사용)
+// [startMs, endMs] 구간을 receivedAtMs 인덱스로 바로 검색함 - 저장소 전체를 훑지 않고 구간에
+// 해당하는 레코드만 가져오므로, 데이터가 많이 쌓여도 항상 "구간 크기"에 비례하는 속도로 빠름
+// ("전체 흐름"처럼 짧은 주기로 반복 조회하는 곳과 엑셀 구간 추출 내보내기에서 사용).
+// openCursor + continue()로 한 건씩 돌던 예전 버전은, 실시간 스트림이 saveToDB로 계속 쓰기
+// 트랜잭션을 걸고 있는 동안 커서가 매 건마다 이벤트 루프를 오가며 그 사이에 끼어드는 쓰기들에
+// 밀려 수천 건 조회에 20초 넘게 걸리는 문제가 있었음. getAll은 브라우저 내부에서 구간 전체를
+// 한 번에 통째로 읽어 단일 결과로 돌려주므로 이런 왕복이 없어 훨씬 빠름
 export const getByDateRangeIndexedFromDB = async (startMs, endMs) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const index = store.index('receivedAtMs');
-    const results = [];
-    const request = index.openCursor(IDBKeyRange.bound(startMs, endMs));
-    request.onsuccess = (e) => {
-      const cursor = e.target.result;
-      if (!cursor) {
-        resolve(results);
-        return;
-      }
-      results.push(cursor.value);
-      cursor.continue();
-    };
+    const request = index.getAll(IDBKeyRange.bound(startMs, endMs));
+    request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 };
@@ -183,6 +151,35 @@ export const pruneOldRecordsFromDB = async (cutoffMs) => {
       }
       cursor.delete();
       deletedCount += 1;
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// 특정 설비의 afterMs 이후에 새로 들어온 레코드만 조회 (equipId 인덱스로 최신 것부터 훑다가
+// afterMs 이하인 레코드를 만나면 바로 멈춤 - 히스토리 팝업이 떠있는 동안 주기적으로 재조회할 때,
+// 매번 최근 N건 전체를 다시 읽는 대신 실제로 새로 쌓인 만큼만 읽어서 갈수록 무거워지는 걸 막음)
+export const getNewByEquipIdFromDB = async (equipId, afterMs, limit = 500) => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const index = store.index('equipId');
+    const results = [];
+    const request = index.openCursor(IDBKeyRange.only(equipId), 'prev');
+    request.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor || results.length >= limit) {
+        resolve(results.reverse());
+        return;
+      }
+      const item = cursor.value;
+      if (item.receivedAtMs != null && item.receivedAtMs <= afterMs) {
+        resolve(results.reverse());
+        return;
+      }
+      results.push(item);
       cursor.continue();
     };
     request.onerror = () => reject(request.error);

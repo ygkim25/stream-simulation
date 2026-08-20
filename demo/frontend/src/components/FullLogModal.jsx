@@ -215,9 +215,12 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode, showTemperatureTab =
                   && log.threshold !== undefined && log.threshold !== null;
                 // 메시지가 "설비명가 ..."처럼 이름을 다시 앞에 붙여서 오는 경우, 이름을 굵게 이미
                 // 따로 보여주고 있으니 메시지에서는 그 중복된 이름+조사 부분만 잘라냄
-                const displayMessage = log.equipName && log.message?.startsWith(log.equipName)
+                const displayMessage = (log.equipName && log.message?.startsWith(log.equipName)
                   ? log.message.slice(log.equipName.length).replace(/^(가|이)\s*/, '')
-                  : log.message;
+                  : log.message
+                  // 온도/전력 구분은 뱃지(logMetricLabel)나 탭으로 이미 보여주고 있어서, 메시지
+                  // 본문에서 "온도 위험 상태입니다"처럼 다시 언급하는 건 중복이라 빼고 보여줌
+                )?.replace(/^(온도|전력)\s*/, '');
                 // "전체"로 온도/전력을 같이 볼 때는 행마다 어느 쪽인지 작게 표시해줌
                 // (필터링해서 하나만 보고 있을 땐 이미 명확하니 굳이 안 보여줌)
                 const logMetricLabel = effectiveMetricTab === 'all'
