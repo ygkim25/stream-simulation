@@ -9,8 +9,9 @@ public class UserInfoDto {
     private String role;
     private String divisionName;
     private String responsibility;
+    private String alarmEnable;
 
-    public UserInfoDto(String userId, String userName, String phone, String divisionCode, String role, String divisionName, String responsibility) {
+    public UserInfoDto(String userId, String userName, String phone, String divisionCode, String role, String divisionName, String responsibility, String alarmEnable) {
         this.userId = userId;
         this.userName = userName;
         this.phone = phone;
@@ -18,6 +19,7 @@ public class UserInfoDto {
         this.role = role;
         this.divisionName = divisionName;
         this.responsibility = responsibility;
+        this.alarmEnable = alarmEnable;
     }
 
     public String getUserId() {
@@ -40,6 +42,9 @@ public class UserInfoDto {
     }
     public String getResponsibility() {
         return responsibility;
+    }
+    public String getAlarmEnable() {
+        return alarmEnable;
     }
 
 }

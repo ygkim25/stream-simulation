@@ -11,7 +11,7 @@ public class Login {
     @Id
     @Column(name = "user_id")
     private String userId;
-    @Column(name = "password", length = 255, nullable = false)
+    @Column(name = "password", length = 255)
     private String password;
 
     @Column(name = "user_name", length = 50, nullable = false)
@@ -31,6 +31,9 @@ public class Login {
 
     @Column(name = "role", length = 255)
     private String role;
+ 
+    @Column(name = "alarm_enable", length = 10, columnDefinition = "varchar(10) default 'on'")
+    private String alarmEnable = "on";
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
@@ -62,6 +65,9 @@ public class Login {
 
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+
+    public String getAlarmEnable() { return alarmEnable; }
+    public void setAlarmEnable(String alarmEnable) { this.alarmEnable = alarmEnable; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

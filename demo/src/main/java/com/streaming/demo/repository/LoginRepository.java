@@ -10,4 +10,5 @@ import com.streaming.demo.entity.Login;
 public interface LoginRepository extends JpaRepository<Login, String> {
     Optional<Login> findByUserId(String userId);
     List<Login> findByRoleIgnoreCase(String role);
+    List<Login> findByRoleIgnoreCaseAndAlarmEnableIgnoreCase(String role, String alarmEnable);
 }
