@@ -230,7 +230,9 @@ const RealtimeScreen = ({
   setLogs,
   openLogs,
   isDarkMode,
-  setIsDarkMode
+  setIsDarkMode,
+  isAlarmOn,
+  setIsAlarmOn
 }) => {
   const [tabMode, setTabMode] = useState('stream');
   // 온도/전력을 완전히 분리된 탭으로 봄 (값/임계값/상태 컬럼이 탭에 따라 통째로 바뀜)
@@ -370,6 +372,40 @@ const RealtimeScreen = ({
     dismissedAlarmIdsRef.current.add(id);
     persistDismissedAlarmIds();
     setAlarms(prev => prev.filter(a => a.id !== id));
+  };
+
+  // 위험 알람 브라우저 알림 - 최초 조회분은 알림 없이 조용히 기록만 하고, 그 이후 새로 나타난
+  // 알람에 대해서만 알림을 띄움 (새로고침할 때마다 기존 알람으로 알림이 쏟아지는 걸 방지)
+  const notifiedAlarmIdsRef = useRef(new Set());
+  const hasNotifiedInitialRef = useRef(false);
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+  // 웹소켓 연결 effect가 마운트 시 한 번만 실행돼 그 안의 콜백들이 그때의 isAlarmOn 값을 그대로
+  // 캡처해버리는 문제(버튼으로 꺼도 알림이 계속 오던 원인)가 있어, 최신 값을 ref로 따로 추적함
+  const isAlarmOnRef = useRef(isAlarmOn);
+  useEffect(() => {
+    isAlarmOnRef.current = isAlarmOn;
+  }, [isAlarmOn]);
+  const notifyDangerAlarms = (dangerAlarms) => {
+    if (!hasNotifiedInitialRef.current) {
+      dangerAlarms.forEach(a => notifiedAlarmIdsRef.current.add(a.id));
+      hasNotifiedInitialRef.current = true;
+      return;
+    }
+    // 헤더의 알람 on/off 토글이 꺼져 있으면 브라우저 알림을 안 띄움. 꺼진 동안 온 알람도
+    // "이미 본 것"으로는 기록해둬서, 나중에 다시 켰을 때 그동안 쌓인 알람이 한꺼번에 쏟아지지 않게 함
+    const canNotify = isAlarmOnRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    dangerAlarms.forEach(a => {
+      if (notifiedAlarmIdsRef.current.has(a.id)) return;
+      notifiedAlarmIdsRef.current.add(a.id);
+      if (!canNotify) return;
+      new Notification(`⚠ ${a.equipName} 위험`, {
+        body: `${a.metric === 'power' ? '전력' : '온도'} ${a.value} (기준 ${a.threshold}) - ${a.location}`,
+      });
+    });
   };
 
   // receivedAtMs 인덱스 도입 이전 기록들을 백그라운드에서 채워 넣음 (앱을 막지 않도록 fire-and-forget,
@@ -781,8 +817,9 @@ const RealtimeScreen = ({
       `${API_BASE_URL}/api/live/monitoring/elec/noti-warn`,
       headers,
       (tempData, elecData) => {
-        const tempAlerts = tempData.map(item => ({ ...item, metric: 'temperature', value: item.temperature }));
-        const elecAlerts = elecData.map(item => ({ ...item, metric: 'power', value: item.power }));
+        // 알람 패널에는 위험 상태만 표시 (경고는 제외)
+        const tempAlerts = tempData.filter(item => item.status === '위험').map(item => ({ ...item, metric: 'temperature', value: item.temperature }));
+        const elecAlerts = elecData.filter(item => item.status === '위험').map(item => ({ ...item, metric: 'power', value: item.power }));
         const mapped = [...tempAlerts, ...elecAlerts]
           .sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt)) // 오래된 것이 위 / 최신이 아래로 오도록 정렬
           .map(item => {
@@ -800,6 +837,7 @@ const RealtimeScreen = ({
           })
           // 사용자가 개별 삭제(x)한 알람은 재조회 시 다시 나타나지 않도록 제외
           .filter(a => !dismissedAlarmIdsRef.current.has(a.id));
+        notifyDangerAlarms(mapped);
         setAlarms(mapped.slice(-MAX_ALARMS));
       }
     );
@@ -1111,6 +1149,8 @@ const RealtimeScreen = ({
         openMyPage={openMyPage}
         isDarkMode={isDarkMode}
         setIsDarkMode={setIsDarkMode}
+        isAlarmOn={isAlarmOn}
+        setIsAlarmOn={setIsAlarmOn}
       />
 
       <div className="flex-1 p-3 sm:p-4 md:p-6 flex flex-col gap-4 max-w-[1920px] mx-auto w-full overflow-hidden h-full">

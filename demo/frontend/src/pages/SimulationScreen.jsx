@@ -10,7 +10,7 @@ import Dropdown from '../components/Dropdown';
 import EquipTimelineBar from '../components/EquipTimelineBar';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi, renameScenarioApi } from '../utils/simulationApi';
-import { parseSimulationFile, computeStatus, computeCombinedStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
+import { parseSimulationFileInWorker, computeStatus, computeCombinedStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { useClickOutside } from '../utils/useClickOutside';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
@@ -38,7 +38,7 @@ const EditableCell = ({ initialValue, onChangeValue, className }) => {
 };
 
 // 시뮬레이션 모드 화면 (엑셀 업로드 → 재생하며 시나리오 테스트, 유저별로 서버에 저장)
-const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
+const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const [scenarios, setScenarios] = useState([]);
   const [isLoadingScenarios, setIsLoadingScenarios] = useState(true); // 시나리오 목록 최초 조회 중
   const [isLoadingDetail, setIsLoadingDetail] = useState(false); // 선택한 시나리오 상세(로우) 조회 중
@@ -191,23 +191,6 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   const [historyViewportHeight, setHistoryViewportHeight] = useState(400);
   const handleHistoryScroll = (e) => setHistoryScrollTop(e.currentTarget.scrollTop);
 
-  // 수정 후 저장된 시나리오 id 목록 (백엔드에 컬럼이 없어 localStorage에만 기록, 기기별로 다름)
-  const [editedScenarioIds, setEditedScenarioIds] = useState(() => {
-    try {
-      const saved = localStorage.getItem('simEditedScenarioIds');
-      return new Set(saved ? JSON.parse(saved) : []);
-    } catch {
-      return new Set();
-    }
-  });
-  const persistEditedScenarioIds = (set) => {
-    try {
-      localStorage.setItem('simEditedScenarioIds', JSON.stringify([...set]));
-    } catch (e) {
-      console.error('수정 표시 저장 실패:', e);
-    }
-  };
-
   const selectedScenario = scenarios.find(s => s.id === selectedScenarioId) || null;
 
   // 등록된 시나리오 목록 새로고침
@@ -244,7 +227,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     setViewEquipId('');
   };
 
-  const handleSelectScenario = async (scenario) => {
+  const loadSelectedScenario = async (scenario) => {
     resetPlayback();
     setSelectedScenarioId(scenario.id);
     setIsLoadingDetail(true);
@@ -257,6 +240,16 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       setRows([]);
     } finally {
       setIsLoadingDetail(false);
+    }
+  };
+
+  // 저장하지 않은 수정 사항이 있는 상태에서 다른 시나리오로 넘어가면 그 내용이 사라지므로 먼저 확인
+  const handleSelectScenario = (scenario) => {
+    if (scenario.id === selectedScenarioId) return;
+    if (Object.keys(editedValues).length > 0) {
+      askConfirm('저장하지 않고 나가시겠습니까?', () => loadSelectedScenario(scenario));
+    } else {
+      loadSelectedScenario(scenario);
     }
   };
 
@@ -275,13 +268,6 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         setSelectedScenarioId(null);
         setRows([]);
       }
-      setEditedScenarioIds(prev => {
-        if (!prev.has(id)) return prev;
-        const next = new Set(prev);
-        next.delete(id);
-        persistEditedScenarioIds(next);
-        return next;
-      });
       await loadScenarios();
     });
   };
@@ -318,6 +304,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
               location: r.location,
               elapsedMs: r.time.getTime() - startTimeMs,
               kind: 'warning',
+              status,
               metric,
               value: r[valueKey],
               threshold: r[thresholdKey],
@@ -367,7 +354,9 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     time: formatMmSs(e.elapsedMs),
     type: e.kind,
     equipName: e.equipName,
-    message: e.kind === 'warning' ? '임계값 초과 감지' : '정상 범위로 복구됨',
+    message: e.kind === 'warning'
+      ? (e.status === '위험' ? '임계값 초과 감지' : '임계값 근접 감지')
+      : '정상 범위로 복구됨',
     value: e.value,
     threshold: e.threshold,
     metric: e.metric,
@@ -711,7 +700,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         time: timeLabel,
         type: 'warning',
         equipName: row.equipName,
-        message: `임계값 초과 감지 (${newStatus}) [수동 수정 - ${formatClockTime(editedAt)} 편집]`,
+        message: `${newStatus === '위험' ? '임계값 초과 감지' : '임계값 근접 감지'} (${newStatus}) [수동 수정 - ${formatClockTime(editedAt)} 편집]`,
         value: alarmValue,
         threshold: alarmThreshold,
         metric,
@@ -749,7 +738,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     try {
       for (const file of files) {
         try {
-          const { rows: parsedRows, missingTimeCount } = await parseSimulationFile(file);
+          const { rows: parsedRows, missingTimeCount } = await parseSimulationFileInWorker(file);
           if (parsedRows.length === 0) {
             failedNames.push(file.name);
             continue;
@@ -829,12 +818,6 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     setEditedValues({});
     setUndoStack([]);
     lastEditKeyRef.current = null;
-    setEditedScenarioIds(prev => {
-      const next = new Set(prev);
-      next.add(selectedScenarioId);
-      persistEditedScenarioIds(next);
-      return next;
-    });
     showAlert('저장되었습니다.');
     loadScenarios();
   };
@@ -1003,6 +986,8 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         openMyPage={openMyPage}
         isDarkMode={isDarkMode}
         setIsDarkMode={setIsDarkMode}
+        isAlarmOn={isAlarmOn}
+        setIsAlarmOn={setIsAlarmOn}
       />
 
       <input
@@ -1204,7 +1189,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                 되돌리기
               </button>
               <button
-                onClick={handleSaveScenario}
+                onClick={() => askConfirm('저장하시겠습니까?', handleSaveScenario)}
                 disabled={!selectedScenario}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   Object.keys(editedValues).length > 0
@@ -1254,34 +1239,30 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                       : (isDarkMode ? 'bg-[#0D1224] border-[#232B45] hover:border-[#2A335A]' : 'bg-gray-50 border-gray-200 hover:border-gray-300')
                   }`}
                 >
+                  {s.id === selectedScenarioId && Object.keys(editedValues).length > 0 && (
+                    <span
+                      title="저장하지 않은 수정 사항이 있습니다"
+                      className={`absolute -top-1 -left-1 text-sm font-bold leading-none ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}
+                    >
+                      *
+                    </span>
+                  )}
                   <p className={`text-xs font-bold truncate pr-5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
                     {s.fileName}
                   </p>
                   <p className={`text-[10px] font-mono mt-0.5 flex items-center ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
                     <span className="truncate">{formatKoreanDateTime(s.uploadedAt)}</span>
-                    <span className="shrink-0 ml-auto flex items-center gap-1">
-                      {s.menu && (
-                        <span className={`font-sans text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                          s.menu === 'all'
-                            ? (isDarkMode ? 'bg-[#A78BFA]/15 text-[#A78BFA]' : 'bg-purple-100 text-purple-700')
-                            : s.menu === 'temp'
-                              ? (isDarkMode ? 'bg-[#FB5D75]/15 text-[#FB5D75]' : 'bg-red-100 text-red-700')
-                              : (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-cyan-100 text-cyan-700')
-                        }`}>
-                          {s.menu === 'all' ? '온도+전력' : s.menu === 'temp' ? '온도' : '전력'}
-                        </span>
-                      )}
-                      {editedScenarioIds.has(s.id) && (
-                        <span
-                          title="수정 후 저장된 시나리오입니다"
-                          className={`font-sans text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                            isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-green-100 text-green-700'
-                          }`}
-                        >
-                          수정됨
-                        </span>
-                      )}
-                    </span>
+                    {s.menu && (
+                      <span className={`shrink-0 ml-auto font-sans text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        s.menu === 'all'
+                          ? (isDarkMode ? 'bg-[#A78BFA]/15 text-[#A78BFA]' : 'bg-purple-100 text-purple-700')
+                          : s.menu === 'temp'
+                            ? (isDarkMode ? 'bg-[#FB5D75]/15 text-[#FB5D75]' : 'bg-red-100 text-red-700')
+                            : (isDarkMode ? 'bg-[#22D3EE]/15 text-[#22D3EE]' : 'bg-cyan-100 text-cyan-700')
+                      }`}>
+                        {s.menu === 'all' ? '온도+전력' : s.menu === 'temp' ? '온도' : '전력'}
+                      </span>
+                    )}
                   </p>
                   <button
                     onClick={(e) => handleDeleteScenario(e, s.id)}

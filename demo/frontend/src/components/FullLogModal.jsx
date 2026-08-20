@@ -66,12 +66,20 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode, showTemperatureTab =
   // 빨강이라 따로 놀아서 헷갈렸음) 한눈에 심각도가 읽히게 함
   const typeBadge = {
     warning: {
-      label: '초과 감지',
+      label: '임계값 근접',
       className: isDarkMode
         ? 'bg-[#FBBF24]/10 text-[#FBBF24] border-[#FBBF24]/30'
         : 'bg-amber-50 text-amber-700 border-amber-200',
       accent: isDarkMode ? 'border-l-[#FBBF24]' : 'border-l-amber-400',
       valueText: isDarkMode ? 'text-[#FBBF24]' : 'text-amber-600',
+    },
+    danger: {
+      label: '초과 감지',
+      className: isDarkMode
+        ? 'bg-[#FB5D75]/10 text-[#FB5D75] border-[#FB5D75]/30'
+        : 'bg-red-50 text-red-700 border-red-200',
+      accent: isDarkMode ? 'border-l-[#FB5D75]' : 'border-l-red-500',
+      valueText: isDarkMode ? 'text-[#FB5D75]' : 'text-red-600',
     },
     info: {
       label: '시스템 정보',
@@ -199,7 +207,10 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode, showTemperatureTab =
           {filteredLogs.length > 0 ? (
             <div className={`divide-y ${isDarkMode ? 'divide-[#1A2036]' : 'divide-gray-200'}`}>
               {filteredLogs.map((log) => {
-                const badge = typeBadge[log.type] || typeBadge.info;
+                // WARNING 타입은 "경고(임계값 근접)"와 "위험(임계값 초과)"을 같은 type으로 묶어서 내려주므로
+                // 메시지 문구로 실제 심각도를 구분해 뱃지 색/라벨을 다르게 보여줌
+                const badgeKey = log.type === 'warning' && log.message?.includes('초과') ? 'danger' : log.type;
+                const badge = typeBadge[badgeKey] || typeBadge.info;
                 const hasReading = log.value !== undefined && log.value !== null
                   && log.threshold !== undefined && log.threshold !== null;
                 // 메시지가 "설비명가 ..."처럼 이름을 다시 앞에 붙여서 오는 경우, 이름을 굵게 이미
@@ -280,7 +291,7 @@ const FullLogModal = ({ logs, onClear, onClose, isDarkMode, showTemperatureTab =
         {/* 가장 아래(최신)로 이동하는 원형 플로팅 버튼 (맨 아래에 있을 땐 숨김) */}
         {filteredLogs.length > 0 && !isAtBottom && (
           <button
-            onClick={() => scrollToBottom()}
+            onClick={() => scrollToBottom('auto')}
             title="최신 로그로 이동"
             className={`absolute bottom-3 right-3 w-9 h-9 rounded-full flex items-center justify-center backdrop-blur-md border transition-all duration-200 cursor-pointer hover:scale-110 hover:shadow-lg active:scale-95 ${
               isDarkMode

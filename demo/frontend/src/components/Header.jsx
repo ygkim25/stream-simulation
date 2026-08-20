@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import CustomAlert from './CustomAlert';
 
 // 헤더에서 바로 이동 가능한 모드 목록 (메인 화면까지 안 거치고 바로 전환)
 const NAV_ITEMS = [
@@ -6,9 +7,16 @@ const NAV_ITEMS = [
   { value: 'simulation', label: '시뮬레이션' },
 ];
 
-const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode }) => {
-  const [isAlarmOn, setIsAlarmOn] = useState(true);
+const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const isAdmin = user?.role === 'ADMIN' || user?.userId === 'admin';
+  // 알람 on/off를 눌렀을 때, 그 상태가 바뀌었다는 걸 커스텀 알림창으로 한 번 확인시켜줌
+  // (브라우저 알림은 밀린 알람이 몰려서 뜰 때와 헷갈리기 쉬워 인앱 알림으로 대체함)
+  const [toggleMessage, setToggleMessage] = useState('');
+  const handleToggleAlarm = () => {
+    const next = !isAlarmOn;
+    setIsAlarmOn(next);
+    setToggleMessage(next ? '알람이 켜졌습니다.' : '알람이 꺼졌습니다.');
+  };
   return (
     <header className={`h-[64px] border-b flex items-center justify-between px-6 shrink-0 transition-colors ${
       isDarkMode 
@@ -77,7 +85,7 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode }
         {/* 알람 on/off 토글 버튼 (관리자 전용) */}
         {isAdmin && (
           <button
-            onClick={() => setIsAlarmOn(!isAlarmOn)}
+            onClick={handleToggleAlarm}
             className={`p-2 rounded-lg border transition-colors flex items-center justify-center ${
               isDarkMode
                 ? 'bg-[#151B30] border-[#232B45] text-[#22D3EE] hover:bg-[#1A223D]'
@@ -128,6 +136,8 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode }
           </svg>
         </div>
       </div>
+
+      <CustomAlert message={toggleMessage} onClose={() => setToggleMessage('')} isDarkMode={isDarkMode} />
     </header>
   );
 };

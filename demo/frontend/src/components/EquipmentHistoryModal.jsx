@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, ReferenceDot,
 } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
 import { formatClockTime } from '../utils/simulationParse';
+import LoadingSpinner from './LoadingSpinner';
 
 // 처음에 한 번에 미리 가져와 둘 최대 건수 (스크롤로 확대/축소할 때는 이 안에서 클라이언트에서만
 // 잘라서 보여주므로 DB를 다시 조회하지 않음 -> 스크롤 중 렉이 생기지 않음)
@@ -14,6 +15,26 @@ const DEFAULT_VISIBLE = 80;
 const MIN_VISIBLE = 20;
 // 팝업이 열려있는 동안 이 주기로 IndexedDB를 다시 조회해서 실시간 수신 데이터를 반영함
 const LIVE_REFRESH_MS = 2000;
+
+// 설비별 온도 추이 카드(EquipmentTrendGrid)가 이미 최근 데이터를 localStorage에 캐싱해두고
+// 있어서(같은 키를 그대로 공유), 이 팝업을 열 때 IndexedDB 조회가 끝나길 기다리지 않고
+// 그 캐시를 즉시 초기값으로 씀 - 카드가 이미 화면에 보이던 설비라면 사실상 즉시 그려짐
+const TREND_CACHE_KEY = 'equipmentTrendHistoryCache';
+const loadCachedEquipHistory = (equipId) => {
+  try {
+    const all = JSON.parse(localStorage.getItem(TREND_CACHE_KEY));
+    return (all && all[equipId]) || null;
+  } catch {
+    return null;
+  }
+};
+const mapRecords = (recent) => recent
+  .filter(item => item.receivedAt)
+  .map(item => ({
+    time: formatClockTime(new Date(item.receivedAt)),
+    temperature: item.temperature != null ? Number(Number(item.temperature).toFixed(1)) : null,
+    power: item.power != null ? Number(Number(item.power).toFixed(1)) : null,
+  }));
 
 // ==========================================
 // 휠 스크롤로 독립적으로 확대/축소되는 단일 추이 차트
@@ -39,7 +60,19 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
     }
   }, [metricData.length]);
 
+  // 모달을 열자마자(캐시로 즉시 그려진 뒤) 바로 이어서 DEFAULT_VISIBLE -> FETCH_LIMIT 순으로
+  // 데이터가 짧은 간격으로 몇 번 더 갱신되는데, 이 리스너가 metricData.length에 걸려 있으면 그때마다
+  // 떼었다 다시 붙어서 그 순간 들어온 휠 이벤트가 씹혀 "스크롤이 안 먹는" 것처럼 보였음. 리스너는
+  // 마운트 시 한 번만 붙이고, 최신 길이는 ref로 읽어서 데이터가 몇 번을 갱신되도 끊기지 않게 함
+  const metricDataLengthRef = useRef(metricData.length);
   useEffect(() => {
+    metricDataLengthRef.current = metricData.length;
+  }, [metricData.length]);
+
+  // useEffect는 브라우저가 이미 한 번 그린 뒤에(paint 후) 실행돼서, 캐시로 즉시 그려진 차트에
+  // 마우스가 이미 올라가 있다가 바로 스크롤하면 그 첫 틱이 리스너가 붙기 전이라 씹힐 수 있었음.
+  // useLayoutEffect는 그리기 전에(paint 전) 동기적으로 실행되므로 이 틈이 없음
+  useLayoutEffect(() => {
     const el = wheelAreaRef.current;
     if (!el) return;
     const handleWheel = (e) => {
@@ -49,12 +82,12 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
       setVisibleCount(prev => {
         const step = Math.max(4, Math.round(prev * 0.15));
         const next = prev + dir * step;
-        return Math.min(metricData.length || FETCH_LIMIT, Math.max(MIN_VISIBLE, next));
+        return Math.min(metricDataLengthRef.current || FETCH_LIMIT, Math.max(MIN_VISIBLE, next));
       });
     };
     el.addEventListener('wheel', handleWheel, { passive: false });
     return () => el.removeEventListener('wheel', handleWheel);
-  }, [metricData.length]);
+  }, []);
 
   const chartData = metricData.slice(-visibleCount);
   const lastPoint = chartData[chartData.length - 1];
@@ -118,32 +151,35 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
 // focusMetric: 'temperature' | 'power' | null
 // null이면 그리드 행 클릭처럼 온도/전력 둘 다 보여주고, 지정되면 해당 그래프 하나만 크게 보여줌
 const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, onClose, isDarkMode, focusMetric = null }) => {
-  const [rawData, setRawData] = useState([]); // 최근 FETCH_LIMIT건 (시간 오름차순, 가공된 형태)
-  const [isLoading, setIsLoading] = useState(true);
+  // 온도추이 카드 캐시가 있으면 IndexedDB 조회를 기다리지 않고 바로 그 데이터로 시작 -
+  // 카드가 이미 떠 있던 설비라면 사실상 로딩 없이 즉시 그려짐
+  const [rawData, setRawData] = useState(() => {
+    const cached = loadCachedEquipHistory(equipId);
+    return cached ? mapRecords(cached) : [];
+  });
+  const [isLoading, setIsLoading] = useState(() => loadCachedEquipHistory(equipId) === null);
 
   useEffect(() => {
     let cancelled = false;
-    const load = async (isInitial) => {
-      if (isInitial) setIsLoading(true);
+    const load = async (limit) => {
+      const recent = await getRecentByEquipIdFromDB(equipId, limit);
+      if (!cancelled) setRawData(mapRecords(recent));
+    };
+    // 처음 열 때는 화면에 실제로 보이는 만큼(DEFAULT_VISIBLE)만 우선 조회해서 최대한 빨리 그려주고,
+    // 스크롤로 확대할 때 쓸 나머지(FETCH_LIMIT까지)는 첫 화면이 뜬 뒤 백그라운드에서 이어받음
+    (async () => {
       try {
-        const recent = await getRecentByEquipIdFromDB(equipId, FETCH_LIMIT);
-        const mapped = recent
-          .filter(item => item.receivedAt)
-          .map(item => ({
-            time: formatClockTime(new Date(item.receivedAt)),
-            temperature: item.temperature != null ? Number(Number(item.temperature).toFixed(1)) : null,
-            power: item.power != null ? Number(Number(item.power).toFixed(1)) : null,
-          }));
-        if (!cancelled) setRawData(mapped);
+        await load(DEFAULT_VISIBLE);
       } catch (e) {
         console.error('설비 히스토리 조회 실패:', e);
       } finally {
-        if (!cancelled && isInitial) setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
-    };
-    load(true);
+      if (cancelled) return;
+      load(FETCH_LIMIT).catch(e => console.error('설비 히스토리 전체 조회 실패:', e));
+    })();
     // 팝업이 떠 있는 동안 실시간으로 들어오는 새 데이터를 반영하기 위해 주기적으로 재조회
-    const intervalId = setInterval(() => load(false), LIVE_REFRESH_MS);
+    const intervalId = setInterval(() => load(FETCH_LIMIT).catch(e => console.error('설비 히스토리 재조회 실패:', e)), LIVE_REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(intervalId);
@@ -207,8 +243,8 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
         {/* 본문 */}
         <div className="p-6 space-y-6">
           {isLoading ? (
-            <div className={`h-[280px] flex items-center justify-center text-sm ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-              불러오는 중...
+            <div className="h-[280px] flex items-center justify-center">
+              <LoadingSpinner size="md" isDarkMode={isDarkMode} label="불러오는 중..." />
             </div>
           ) : rawData.length === 0 ? (
             <div className={`h-[280px] flex flex-col items-center justify-center gap-2 text-sm ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>

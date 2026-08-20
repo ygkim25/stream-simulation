@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, memo } from 'react';
+import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
 import { ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
 import { getStatusMeta } from '../utils/statusStyles';
@@ -6,7 +6,12 @@ import LoadingSpinner from './LoadingSpinner';
 
 // 카드 하나당 표시할 최근 데이터 포인트 수 (많을수록 시간 흐름이 더 촘촘하게 보임)
 const MAX_POINTS = 40;
-// IndexedDB 재조회 주기 (모든 웹소켓 틱마다 조회하면 부하가 크므로 주기적으로만 갱신)
+// 아직 기록이 없는 설비의 기본값 - 매번 새 [] 리터럴을 주면 카드 memo가 매번 "달라졌다"고 오판함
+const EMPTY_POINTS = [];
+// IndexedDB 재조회 주기 - 큰 숫자/그래프 끝점은 이제 웹소켓 실시간 값으로 바로 그려지므로
+// (그리드와 같이 움직임) 이 폴링은 "과거 추이 선"만 채우면 됨. 예전엔 이걸 1초로 당겨놨었는데,
+// 그러면 설비마다 매초 IndexedDB를 동시 조회하게 돼서 다른 화면(카드 클릭 시 뜨는 큰 그래프
+// 등)의 조회가 순서를 기다리느라 오히려 다 같이 느려짐 - 다시 여유있게 늘림
 const REFRESH_MS = 4000;
 
 // 새로고침 직후 빈 카드가 잠깐 보였다가 채워지지 않도록, 마지막 조회 결과를 로컬에 캐싱해둠
@@ -33,6 +38,145 @@ const STATUS_COLOR = {
   amber: { dark: '#FBBF24', light: '#F59E0B' },
   red: { dark: '#FB5D75', light: '#EF4444' },
 };
+
+// 카드 하나를 독립된 컴포넌트로 분리하고 그 설비 값이 실제로 바뀐 경우에만 다시 그리게 함.
+// (예전엔 부모 하나가 24개 카드를 통째로 map으로 그려서, 설비 1개만 값이 바뀌어도 24개
+// AreaChart가 전부 다시 그려지며 계속 버벅였음)
+const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit }) => {
+  // 큰 숫자/그래프 맨 끝 점은 IndexedDB 폴링 결과 대신 웹소켓으로 갓 들어온 실시간 값을
+  // 바로 써서, 메인 그리드가 갱신되는 순간 이 카드도 같이 움직이게 함 (폴링 주기만큼
+  // 뒤처져 "따로 논다"는 느낌이 들지 않도록)
+  const liveValue = displayMetric === 'temperature' ? eq.temperature : eq.power;
+  const points = liveValue != null ? [...basePoints, { value: liveValue }] : basePoints;
+  const latest = points.length > 0 ? points[points.length - 1].value : null;
+
+  // ▲▼ 델타는 폴링으로 채워진 basePoints의 마지막 값이 아니라, 이 카드가 실제로 마지막
+  // 렌더링됐던 시점(=직전 실시간 틱)의 값과 비교함. basePoints 기준으로 비교하면 폴링
+  // 주기(1초)와 실제 틱 타이밍이 어긋나서 몇 틱 전 값과 비교돼 화살표가 튀어 보였음.
+  // 큰 숫자가 소수 첫째 자리까지만 보이므로, 그 반올림된 값 기준으로 비교해야 "숫자는 그대로인데
+  // 화살표만 뜬다"는 위화감 없이 실제로 화면에 보이는 변화와 화살표가 항상 같이 움직임
+  const roundedLatest = latest != null ? Number(Number(latest).toFixed(1)) : null;
+  // 새로고침 직후엔 아직 실시간 틱이 한 번도 안 왔으니, 첫 비교 기준값을 캐시된 과거
+  // 데이터(basePoints)의 마지막 값으로 미리 채워둠 - 그래야 카드마다 실시간 틱이 들어오는
+  // 타이밍이 제각각이라 화살표가 하나씩 따로 뜨지 않고, 새로고침 시 다같이 한번에 뜸
+  const [prevLive, setPrevLive] = useState(() => (
+    basePoints.length > 0 ? basePoints[basePoints.length - 1].value : null
+  ));
+  const rawDelta = roundedLatest != null && prevLive != null ? roundedLatest - prevLive : null;
+  useEffect(() => {
+    if (roundedLatest != null) setPrevLive(roundedLatest);
+  }, [roundedLatest]);
+  // 값이 안 바뀐 틱에는 방향이 0으로 리셋되어 화살표가 깜빡였다 사라졌다 했음 - 새로 방향이
+  // 생길 때만 갱신하고, 그 사이엔 마지막으로 감지된 방향을 계속 띄워둠
+  const [delta, setDelta] = useState(null);
+  useEffect(() => {
+    if (rawDelta) setDelta(rawDelta);
+  }, [rawDelta]);
+  const statusColor = getStatusMeta(displayMetric === 'temperature' ? eq.status : eq.powerStatus).color;
+  const color = STATUS_COLOR[statusColor][isDarkMode ? 'dark' : 'light'];
+  const gradientId = `spark-grad-${eq.equipId}-${displayMetric}`;
+  const glowId = `spark-glow-${eq.equipId}-${displayMetric}`;
+
+  return (
+    <div
+      onClick={() => onSelectEquip?.(eq.equipId, displayMetric)}
+      title="클릭하면 자세히 보기"
+      className={`group relative rounded-xl border overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${
+        isDarkMode
+          ? 'border-[#1E253D] hover:border-[#2A335A]'
+          : 'border-gray-200 hover:border-gray-300 shadow-sm'
+      }`}
+      style={{
+        background: isDarkMode
+          ? 'linear-gradient(160deg, #121A33 0%, #0C1122 100%)'
+          : 'linear-gradient(160deg, #FFFFFF 0%, #F7F9FC 100%)',
+      }}
+    >
+      {/* 상태 컬러 액센트 바 */}
+      <div className="absolute top-0 left-0 right-0 h-[2.5px]" style={{ backgroundColor: color, opacity: 0.85 }} />
+
+      <div className="px-2.5 pt-2 pb-1.5">
+        <div className="flex items-center justify-between gap-1 mb-0.5">
+          <span className={`truncate text-[11px] font-semibold tracking-tight ${isDarkMode ? 'text-[#DCE2F5]' : 'text-gray-700'}`} title={eq.equipName}>
+            {eq.equipName}
+          </span>
+        </div>
+        <div className="flex items-baseline gap-1">
+          <span className="text-[15px] font-bold font-mono tabular-nums" style={{ color }}>
+            {latest != null ? Number(latest).toFixed(1) : '–'}
+          </span>
+          <span className={`text-[10px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>{unit}</span>
+          {delta != null && delta !== 0 && (
+            <span className={`text-[10px] font-mono font-bold ml-auto ${
+              delta > 0
+                ? (isDarkMode ? 'text-[#FB5D75]' : 'text-red-500')
+                : (isDarkMode ? 'text-[#38BDF8]' : 'text-blue-500')
+            }`}>
+              {delta > 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div style={{ height: 42 }} className="px-0.5 pb-0.5">
+        {!hasLoadedHistoryOnce ? (
+          <div className="h-full flex items-center justify-center">
+            <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
+          </div>
+        ) : points.length > 1 ? (
+          // initialDimension을 안 주면 ResponsiveContainer가 ResizeObserver로 실제 크기를
+          // 잴 때까지 아무것도 안 그리는데, 카드가 한꺼번에 12개 넘게 마운트되면 이 측정
+          // 콜백들이 프레임마다 조금씩 흩어져서 카드가 하나씩 순차적으로 나타나는 것처럼
+          // 보였음. 대략적인 크기를 미리 줘서 첫 페인트부터 바로 그려지게 함
+          <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 140, height: 42 }}>
+            <AreaChart data={points} margin={{ top: 2, right: 4, left: 4, bottom: 0 }}>
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={color} stopOpacity={0.5} />
+                  <stop offset="100%" stopColor={color} stopOpacity={0} />
+                </linearGradient>
+                {isDarkMode && (
+                  <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="1.6" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                )}
+              </defs>
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke={color}
+                strokeWidth={1.75}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                isAnimationActive={false}
+                style={isDarkMode ? { filter: `url(#${glowId})` } : undefined}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className={`h-full flex items-center justify-center text-[10px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
+            수집 중...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prev, next) => {
+  if (prev.isDarkMode !== next.isDarkMode) return false;
+  if (prev.displayMetric !== next.displayMetric) return false;
+  if (prev.hasLoadedHistoryOnce !== next.hasLoadedHistoryOnce) return false;
+  if (prev.basePoints !== next.basePoints) return false;
+  const valueKey = next.displayMetric === 'temperature' ? 'temperature' : 'power';
+  const statusKey = next.displayMetric === 'temperature' ? 'status' : 'powerStatus';
+  if (prev.eq[valueKey] !== next.eq[valueKey]) return false;
+  if (prev.eq[statusKey] !== next.eq[statusKey]) return false;
+  if (prev.eq.equipName !== next.eq.equipName) return false;
+  return true;
+});
 
 // ==========================================
 // 설비별 미니 추이 카드 그리드
@@ -71,6 +215,12 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     equipIdsRef.current = equipments.map(eq => eq.equipId);
   }, [equipments]);
 
+  // load()가 클로저로 갇힌 옛 historyMap을 안 보고 항상 최신값을 보도록 ref로 미러링
+  const historyMapRef = useRef(historyMap);
+  useEffect(() => {
+    historyMapRef.current = historyMap;
+  }, [historyMap]);
+
   // 마운트 시점엔 설비 목록이 아직 안 온 경우가 많아서(REST 조회가 끝나기 전) 예전엔 첫 조회가 그냥
   // 빈 목록으로 건너뛰어지고, 다음 REFRESH_MS(4초) 주기까지 기다려야 카드가 채워졌음. 목록이 실제로
   // 채워지는 시점에 맞춰 바로 첫 조회가 실행되도록 이 시점을 deps로 잡음
@@ -85,8 +235,19 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
         // equipId 인덱스로 설비별 최근 데이터만 바로 조회 (전체 스캔 없이 항상 빠름)
         const results = await Promise.all(ids.map(id => getRecentByEquipIdFromDB(id, MAX_POINTS)));
         if (cancelled) return;
+        // 내용이 그대로인 설비는 이전 배열 참조를 그대로 재사용함 - 매번 새 객체를 만들면 카드별
+        // memo가 무의미해져서 폴링(1초)마다 카드 24개가 전부 다시 그려지며 버벅였음
+        const prevMap = historyMapRef.current;
         const grouped = {};
-        ids.forEach((id, i) => { grouped[id] = results[i]; });
+        ids.forEach((id, i) => {
+          const fresh = results[i];
+          const cached = prevMap[id];
+          const last = fresh[fresh.length - 1];
+          const cachedLast = cached?.[cached.length - 1];
+          const unchanged = cached && cached.length === fresh.length
+            && (last?.receivedAtMs ?? null) === (cachedLast?.receivedAtMs ?? null);
+          grouped[id] = unchanged ? cached : fresh;
+        });
         setHistoryMap(grouped);
         setHasLoadedHistoryOnce(true);
         saveCachedHistory(grouped);
@@ -105,6 +266,20 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
     return String(a.equipId).localeCompare(String(b.equipId));
   });
+
+  // equipId -> basePoints. historyMap/displayMetric이 바뀔 때만(=폴링될 때만) 다시 계산하고,
+  // 그 사이 설비 값이 실시간으로 바뀌어 부모가 리렌더링돼도 이전 배열 참조를 그대로 씀 - 그래야
+  // 안 바뀐 설비의 EquipTrendCard가 "새 배열이라 다르다"고 오판해 다시 그려지지 않음
+  const basePointsByEquip = useMemo(() => {
+    const map = new Map();
+    Object.keys(historyMap).forEach(equipId => {
+      const basePoints = (historyMap[equipId] || [])
+        .map(item => ({ value: displayMetric === 'temperature' ? item.temperature : item.power }))
+        .filter(p => p.value != null);
+      map.set(equipId, basePoints);
+    });
+    return map;
+  }, [historyMap, displayMetric]);
 
   const unit = displayMetric === 'temperature' ? '℃' : '';
   const dotColor = displayMetric === 'temperature'
@@ -135,105 +310,17 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
           )}
           <div className="grid grid-cols-2 gap-2.5 pr-1 pb-1">
             {sortedEquipments.map(eq => {
-              const points = (historyMap[eq.equipId] || [])
-                .map(item => ({ value: displayMetric === 'temperature' ? item.temperature : item.power }))
-                .filter(p => p.value != null);
-              const latest = points.length > 0 ? points[points.length - 1].value : null;
-              const prev = points.length > 1 ? points[points.length - 2].value : null;
-              const delta = latest != null && prev != null ? latest - prev : null;
-              const statusColor = getStatusMeta(displayMetric === 'temperature' ? eq.status : eq.powerStatus).color;
-              const color = STATUS_COLOR[statusColor][isDarkMode ? 'dark' : 'light'];
-              const gradientId = `spark-grad-${eq.equipId}-${displayMetric}`;
-              const glowId = `spark-glow-${eq.equipId}-${displayMetric}`;
-
               return (
-                <div
+                <EquipTrendCard
                   key={eq.equipId}
-                  onClick={() => onSelectEquip?.(eq.equipId, displayMetric)}
-                  title="클릭하면 자세히 보기"
-                  className={`group relative rounded-xl border overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${
-                    isDarkMode
-                      ? 'border-[#1E253D] hover:border-[#2A335A]'
-                      : 'border-gray-200 hover:border-gray-300 shadow-sm'
-                  }`}
-                  style={{
-                    background: isDarkMode
-                      ? 'linear-gradient(160deg, #121A33 0%, #0C1122 100%)'
-                      : 'linear-gradient(160deg, #FFFFFF 0%, #F7F9FC 100%)',
-                  }}
-                >
-                  {/* 상태 컬러 액센트 바 */}
-                  <div className="absolute top-0 left-0 right-0 h-[2.5px]" style={{ backgroundColor: color, opacity: 0.85 }} />
-
-                  <div className="px-2.5 pt-2 pb-1.5">
-                    <div className="flex items-center justify-between gap-1 mb-0.5">
-                      <span className={`truncate text-[11px] font-semibold tracking-tight ${isDarkMode ? 'text-[#DCE2F5]' : 'text-gray-700'}`} title={eq.equipName}>
-                        {eq.equipName}
-                      </span>
-                    </div>
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-[15px] font-bold font-mono tabular-nums" style={{ color }}>
-                        {latest != null ? Number(latest).toFixed(1) : '–'}
-                      </span>
-                      <span className={`text-[10px] font-mono ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>{unit}</span>
-                      {delta != null && Math.abs(delta) >= 0.05 && (
-                        <span className={`text-[10px] font-mono font-bold ml-auto ${
-                          delta > 0
-                            ? (isDarkMode ? 'text-[#FB5D75]' : 'text-red-500')
-                            : (isDarkMode ? 'text-[#38BDF8]' : 'text-blue-500')
-                        }`}>
-                          {delta > 0 ? '▲' : '▼'}{Math.abs(delta).toFixed(1)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ height: 42 }} className="px-0.5 pb-0.5">
-                    {!hasLoadedHistoryOnce ? (
-                      <div className="h-full flex items-center justify-center">
-                        <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
-                      </div>
-                    ) : points.length > 1 ? (
-                      // initialDimension을 안 주면 ResponsiveContainer가 ResizeObserver로 실제 크기를
-                      // 잴 때까지 아무것도 안 그리는데, 카드가 한꺼번에 12개 넘게 마운트되면 이 측정
-                      // 콜백들이 프레임마다 조금씩 흩어져서 카드가 하나씩 순차적으로 나타나는 것처럼
-                      // 보였음. 대략적인 크기를 미리 줘서 첫 페인트부터 바로 그려지게 함
-                      <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 140, height: 42 }}>
-                        <AreaChart data={points} margin={{ top: 2, right: 4, left: 4, bottom: 0 }}>
-                          <defs>
-                            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor={color} stopOpacity={0.5} />
-                              <stop offset="100%" stopColor={color} stopOpacity={0} />
-                            </linearGradient>
-                            {isDarkMode && (
-                              <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
-                                <feGaussianBlur stdDeviation="1.6" result="blur" />
-                                <feMerge>
-                                  <feMergeNode in="blur" />
-                                  <feMergeNode in="SourceGraphic" />
-                                </feMerge>
-                              </filter>
-                            )}
-                          </defs>
-                          <Area
-                            type="monotone"
-                            dataKey="value"
-                            stroke={color}
-                            strokeWidth={1.75}
-                            fill={`url(#${gradientId})`}
-                            dot={false}
-                            isAnimationActive={false}
-                            style={isDarkMode ? { filter: `url(#${glowId})` } : undefined}
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className={`h-full flex items-center justify-center text-[10px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-                        수집 중...
-                      </div>
-                    )}
-                  </div>
-                </div>
+                  eq={eq}
+                  basePoints={basePointsByEquip.get(eq.equipId) || EMPTY_POINTS}
+                  displayMetric={displayMetric}
+                  isDarkMode={isDarkMode}
+                  onSelectEquip={onSelectEquip}
+                  hasLoadedHistoryOnce={hasLoadedHistoryOnce}
+                  unit={unit}
+                />
               );
             })}
           </div>
@@ -269,17 +356,20 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
   );
 };
 
-// 이 컴포넌트는 온도/전력 값이 아니라 설비 목록(id/이름/상태)만 실제로 사용하는데,
-// equipments는 웹소켓 틱마다 새 배열로 갱신되어 매번 리렌더링(+무거운 차트 재계산)이 일어나던 것을
-// id/이름/상태가 실제로 바뀔 때만 리렌더링하도록 막아서 렉을 줄임
+// equipments는 웹소켓 틱마다 새 배열로 갱신되는데, 안 바뀐 설비는 객체 참조가 그대로라
+// id/이름/상태/현재 지표 값이 실제로 바뀐 경우에만 리렌더링함 (그래야 이 카드들의 숫자/그래프가
+// 폴링 주기가 아니라 메인 그리드와 같은 타이밍에 움직임 - 값 자체는 비교 대상에서 뺐던 예전 방식은
+// 카드가 그리드보다 한 박자씩 늦게 움직이는 문제가 있었음)
 const areEqual = (prev, next) => {
   if (prev.isDarkMode !== next.isDarkMode) return false;
   if (prev.metric !== next.metric) return false;
   if (prev.equipments.length !== next.equipments.length) return false;
+  const valueKey = next.metric === 'temperature' ? 'temperature' : 'power';
   for (let i = 0; i < prev.equipments.length; i++) {
     const a = prev.equipments[i];
     const b = next.equipments[i];
     if (a.equipId !== b.equipId || a.equipName !== b.equipName || a.status !== b.status || a.powerStatus !== b.powerStatus) return false;
+    if (a[valueKey] !== b[valueKey]) return false;
   }
   return true;
 };

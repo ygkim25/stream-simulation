@@ -31,6 +31,9 @@ export default function App() {
   const [isLogOpen, setIsLogOpen] = useState(false); 
 
   const [isDarkMode, setIsDarkMode] = useState(false);
+  // 헤더의 알람 on/off 토글 - 꺼져 있으면 위험 알람이 와도 브라우저 알림을 안 띄움
+  // (라우트 이동해도 유지돼야 해서 App에서 관리)
+  const [isAlarmOn, setIsAlarmOn] = useState(true);
 
   // 다크모드 클래스 토글
   useEffect(() => {
@@ -106,6 +109,8 @@ export default function App() {
           openMyPage={handleMyPageOpen}
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
+          isAlarmOn={isAlarmOn}
+          setIsAlarmOn={setIsAlarmOn}
         />
       )}
 
@@ -121,6 +126,8 @@ export default function App() {
           openLogs={handleLogOpen}
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
+          isAlarmOn={isAlarmOn}
+          setIsAlarmOn={setIsAlarmOn}
         />
       )}
 
@@ -132,6 +139,8 @@ export default function App() {
           openMyPage={handleMyPageOpen}
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
+          isAlarmOn={isAlarmOn}
+          setIsAlarmOn={setIsAlarmOn}
         />
       )}
 

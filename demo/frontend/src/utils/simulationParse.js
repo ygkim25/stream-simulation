@@ -66,60 +66,97 @@ export const computeCombinedStatus = (temperature, threshold, power, powerThresh
 
 export const isWarningStatus = (status) => status === '경고' || status === '위험';
 
+// XLSX 파싱 + 행 정규화(무거운 CPU 작업) 자체를 담당하는 순수 함수. 워커 안에서도, 워커를
+// 못 쓰는 환경의 메인 스레드 폴백에서도 이 함수 하나를 그대로 재사용함
+export const parseWorkbookBuffer = (arrayBuffer) => {
+  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  let missingTimeCount = 0;
+
+  const rows = rawRows.map((row, idx) => {
+    const rawId = pickField(row, ['ID', '설비ID', '설비 ID', 'equipId']) ?? '';
+    const equipId = String(rawId).replace(/^#/, '').trim();
+    const equipName = String(pickField(row, ['설비명', 'equipName']) ?? '').trim();
+    const location = String(pickField(row, ['위치', 'location']) ?? '').trim();
+    const temperature = pickNumberField(row, ['온도(℃)', '온도', 'temperature']);
+    const power = pickNumberField(row, ['전력', 'power']);
+    const threshold = pickNumberField(row, ['임계값(온도)', '임계값', '임계치', 'threshold']);
+    const powerThreshold = pickNumberField(row, ['전력임계값', '전력 임계값', '임계값(전력)', 'powerThreshold']);
+    const timeRaw = pickField(row, ['수신 시간', '수신시간', '최초수신시간', '시간', 'time', 'Time']);
+    let time = parseTimeValue(timeRaw);
+
+    if (!time) {
+      missingTimeCount += 1;
+      // 시간 정보가 없는 행은 업로드 순서 기준 2초 간격으로 임시 배정 (재생 흐름이 끊기지 않도록)
+      time = new Date(Date.now() + idx * 2000);
+    }
+
+    return {
+      equipId,
+      equipName,
+      location,
+      temperature,
+      power,
+      threshold,
+      powerThreshold,
+      status: computeCombinedStatus(temperature, threshold, power, powerThreshold),
+      // 온도/전력이 둘 다 있는 행은 status가 온도 기준으로만 판정되므로, 전력 임계값 초과를
+      // 독립적으로 감지(전력 알람 발생)하려면 전력만의 상태를 따로 들고 있어야 함
+      powerStatus: computeStatus(power, powerThreshold),
+      time,
+    };
+  }).filter(r => r.equipId);
+
+  rows.sort((a, b) => a.time.getTime() - b.time.getTime());
+
+  return { rows, missingTimeCount, totalCount: rawRows.length };
+};
+
 // 업로드한 File(.xlsx)을 읽어 { equipId, equipName, location, temperature, power, threshold,
 // powerThreshold, status, powerStatus, time } 배열로 정규화. 헤더 후보는 실시간 모니터링의
-// "엑셀 내보내기" 결과물(온도/전력 중 하나만 있거나 둘 다 있는 경우 모두)과 호환됨
+// "엑셀 내보내기" 결과물(온도/전력 중 하나만 있거나 둘 다 있는 경우 모두)과 호환됨.
+// 파일을 읽기만 하고, 무거운 파싱은 Web Worker(parseSimulationFileInWorker)에 맡기는 걸 권장 -
+// 이 함수는 워커를 쓸 수 없는 경우를 위한 메인 스레드 폴백으로 남겨둠
 export const parseSimulationFile = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const workbook = XLSX.read(e.target.result, { type: 'array', cellDates: true });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-
-        let missingTimeCount = 0;
-
-        const rows = rawRows.map((row, idx) => {
-          const rawId = pickField(row, ['ID', '설비ID', '설비 ID', 'equipId']) ?? '';
-          const equipId = String(rawId).replace(/^#/, '').trim();
-          const equipName = String(pickField(row, ['설비명', 'equipName']) ?? '').trim();
-          const location = String(pickField(row, ['위치', 'location']) ?? '').trim();
-          const temperature = pickNumberField(row, ['온도(℃)', '온도', 'temperature']);
-          const power = pickNumberField(row, ['전력', 'power']);
-          const threshold = pickNumberField(row, ['임계값(온도)', '임계값', '임계치', 'threshold']);
-          const powerThreshold = pickNumberField(row, ['전력임계값', '전력 임계값', '임계값(전력)', 'powerThreshold']);
-          const timeRaw = pickField(row, ['수신 시간', '수신시간', '최초수신시간', '시간', 'time', 'Time']);
-          let time = parseTimeValue(timeRaw);
-
-          if (!time) {
-            missingTimeCount += 1;
-            // 시간 정보가 없는 행은 업로드 순서 기준 2초 간격으로 임시 배정 (재생 흐름이 끊기지 않도록)
-            time = new Date(Date.now() + idx * 2000);
-          }
-
-          return {
-            equipId,
-            equipName,
-            location,
-            temperature,
-            power,
-            threshold,
-            powerThreshold,
-            status: computeCombinedStatus(temperature, threshold, power, powerThreshold),
-            // 온도/전력이 둘 다 있는 행은 status가 온도 기준으로만 판정되므로, 전력 임계값 초과를
-            // 독립적으로 감지(전력 알람 발생)하려면 전력만의 상태를 따로 들고 있어야 함
-            powerStatus: computeStatus(power, powerThreshold),
-            time,
-          };
-        }).filter(r => r.equipId);
-
-        rows.sort((a, b) => a.time.getTime() - b.time.getTime());
-
-        resolve({ rows, missingTimeCount, totalCount: rawRows.length });
+        resolve(parseWorkbookBuffer(e.target.result));
       } catch (err) {
         reject(err);
       }
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+// 일주일치 같은 대용량 엑셀은 XLSX.read/sheet_to_json + 행 변환이 전부 CPU 작업이라, 메인
+// 스레드에서 돌리면 그동안 로딩 스피너조차 못 그려질 정도로 화면이 완전히 멈춤. Web Worker에서
+// 파싱해서 메인 스레드(화면)는 계속 반응하게 함
+export const parseSimulationFileInWorker = (file) => {
+  return new Promise((resolve, reject) => {
+    if (typeof Worker === 'undefined') {
+      // 워커를 지원하지 않는 환경이면 메인 스레드에서라도 동작은 하도록 폴백
+      parseSimulationFile(file).then(resolve, reject);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const worker = new Worker(new URL('../workers/simulationFileWorker.js', import.meta.url), { type: 'module' });
+      worker.onmessage = (msg) => {
+        worker.terminate();
+        if (msg.data?.ok) resolve(msg.data.result);
+        else reject(new Error(msg.data?.error || '엑셀 파싱 실패'));
+      };
+      worker.onerror = (err) => {
+        worker.terminate();
+        reject(err);
+      };
+      worker.postMessage(e.target.result, [e.target.result]);
     };
     reader.onerror = () => reject(reader.error);
     reader.readAsArrayBuffer(file);

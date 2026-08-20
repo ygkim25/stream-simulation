@@ -4,7 +4,7 @@ import Header from '../components/Header';
 // "나중에 하기" 클릭 시 다시 안 뜨게 할 기간 (24시간)
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
-const MainScreen = ({ route, setRoute, user, openMyPage, isDarkMode, setIsDarkMode }) => {
+const MainScreen = ({ route, setRoute, user, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   // ★ 화면 진입 시 user 객체 내의 mustChangePassword 상태 체크
@@ -55,6 +55,8 @@ const MainScreen = ({ route, setRoute, user, openMyPage, isDarkMode, setIsDarkMo
         openMyPage={openMyPage}
         isDarkMode={isDarkMode}
         setIsDarkMode={setIsDarkMode}
+        isAlarmOn={isAlarmOn}
+        setIsAlarmOn={setIsAlarmOn}
       />
       
       <div className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-8 p-6 lg:p-20 max-w-[1920px] mx-auto w-full">
