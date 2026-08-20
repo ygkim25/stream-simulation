@@ -14,7 +14,7 @@ import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { useClickOutside } from '../utils/useClickOutside';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { formatKoreanDateTime } from '../utils/dateFormat';
-import { exportToXlsx } from '../utils/xlsxExport';
+import { exportToCsv } from '../utils/csvExport';
 
 const SPEED_OPTIONS = [1, 2, 4, 8];
 // 알람/로그 패널에 표시할 최대 개수 - 예전엔 재생 중 계속 이어붙이기만(unbounded) 해서, 전환
@@ -54,7 +54,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   const [isLoadingDetail, setIsLoadingDetail] = useState(false); // 선택한 시나리오 상세(로우) 조회 중
   const [isUploadingFile, setIsUploadingFile] = useState(false); // 엑셀 파일 파싱/업로드 중
   const [isSavingScenario, setIsSavingScenario] = useState(false); // 시나리오 저장 중
-  const [isExportingFile, setIsExportingFile] = useState(false); // 엑셀 내보내기 중
+  const [isExportingFile, setIsExportingFile] = useState(false); // CSV 내보내기 중
   const [selectedScenarioId, setSelectedScenarioId] = useState(null);
   const [rows, setRows] = useState([]); // 선택된 시나리오의 정규화된 원본 로우 (시간순 정렬)
 
@@ -936,10 +936,10 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     loadScenarios();
   };
 
-  // 현재 화면에 보이는 데이터(수정 중인 값 포함)를 엑셀 파일로 내보내기 (저장 여부와 무관).
-  // 시트/워크북 생성 + 바이너리 인코딩이 행이 많을 때 꽤 무거운데 지금까지 메인 스레드에서
-  // 그대로 돌려서 그동안 로딩 표시 하나 없이 화면이 멈췄음 - 업로드 파싱 때와 같은 이유로
-  // 워커에서 처리하고, 그동안 스피너를 보여줌
+  // 현재 화면에 보이는 데이터(수정 중인 값 포함)를 CSV 파일로 내보내기 (저장 여부와 무관).
+  // 행이 많을 때 텍스트 조립 자체가 꽤 무거운데 지금까지 메인 스레드에서 그대로 돌려서 그동안
+  // 로딩 표시 하나 없이 화면이 멈췄음 - 업로드 파싱 때와 같은 이유로 워커에서 처리하고,
+  // 그동안 스피너를 보여줌
   const handleExportScenario = () => {
     if (!selectedScenario) {
       showAlert('내보낼 시나리오를 먼저 선택하세요.');
@@ -959,21 +959,17 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       '전력임계값': r.powerThreshold,
       '상태': r.status,
     }));
-    const colWidths = [
-      { wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 15 }, { wch: 10 }
-    ];
-
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
     const timeStr = today.toTimeString().slice(0, 5).replace(':', '');
     const baseName = selectedScenario.fileName.replace(/\.(xlsx|xls)$/i, '');
-    const fileName = `${baseName}_수정_${dateStr}_${timeStr}.xlsx`;
+    const fileName = `${baseName}_수정_${dateStr}_${timeStr}.csv`;
 
     setIsExportingFile(true);
-    exportToXlsx(exportData, colWidths, fileName, '시뮬레이션')
+    exportToCsv(exportData, fileName)
       .catch(err => {
-        console.error('엑셀 내보내기 실패:', err);
-        showAlert('엑셀 파일을 만드는 중 오류가 발생했습니다.');
+        console.error('CSV 내보내기 실패:', err);
+        showAlert('CSV 파일을 만드는 중 오류가 발생했습니다.');
       })
       .finally(() => setIsExportingFile(false));
   };
@@ -1480,7 +1476,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
             )}
             {isExportingFile && (
               <div className={`absolute inset-0 z-30 flex items-center justify-center ${isDarkMode ? 'bg-[#12172A]/80' : 'bg-white/80'}`}>
-                <LoadingSpinner size="md" isDarkMode={isDarkMode} label="엑셀 파일을 만드는 중..." />
+                <LoadingSpinner size="md" isDarkMode={isDarkMode} label="CSV 파일을 만드는 중..." />
               </div>
             )}
             {isUploadingFile ? (

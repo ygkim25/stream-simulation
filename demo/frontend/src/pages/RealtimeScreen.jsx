@@ -17,7 +17,7 @@ import { formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
-import { exportToXlsx } from '../utils/xlsxExport';
+import { exportToCsv } from '../utils/csvExport';
 import { getTodayStartMs, fetchHistoryFromBackend, mergeHistoryRecords } from '../utils/historyApi';
 
 // 화면에 표시할 알람 최대 개수
@@ -237,10 +237,10 @@ const RealtimeScreen = ({
   });
   const [endTime, setEndTime] = useState(() => new Date());
   const [isRangeEditorOpen, setIsRangeEditorOpen] = useState(false);
-  const [isExporting, setIsExporting] = useState(false); // 엑셀 내보내기 중 (조회+파일 생성 전체)
+  const [isExporting, setIsExporting] = useState(false); // CSV 내보내기 중 (조회+파일 생성 전체)
 
   const [selectedPreset, setSelectedPreset] = useState('');
-  // 엑셀 내보내기 시 온도/전력을 각각 포함할지 (체크박스 - 최소 하나는 항상 선택돼 있어야 함)
+  // CSV 내보내기 시 온도/전력을 각각 포함할지 (체크박스 - 최소 하나는 항상 선택돼 있어야 함)
   const [exportIncludeTemp, setExportIncludeTemp] = useState(true);
   const [exportIncludePower, setExportIncludePower] = useState(true);
 
@@ -563,7 +563,7 @@ const RealtimeScreen = ({
     setSelectedPreset(''); // 수동으로 시간을 바꾸면 프리셋 선택 표시 해제
   };
 
-  // 엑셀 내보내기 (선택한 자유 시간 범위 데이터 추출)
+  // CSV 내보내기 (선택한 자유 시간 범위 데이터 추출)
   // 로컬 보관 기간(오늘 00:00 이후) 안쪽은 IndexedDB에서, 그보다 오래된 구간은 백엔드 히스토리에서 가져와 합침
   const handleExport = async () => {
     if (startTime >= endTime) {
@@ -594,30 +594,43 @@ const RealtimeScreen = ({
         };
       });
 
-      // 로컬(IndexedDB)엔 웹소켓이 연결되어 있던 동안만 쌓이므로, 탭이 새로고침되거나 연결이
-      // 끊겼다 붙은 공백만큼 오늘 데이터가 로컬엔 빠져있을 수 있음 (예: "최근 1시간"으로 뽑았는데
-      // 실제로는 최근 몇 분치만 나오는 문제). 백엔드 히스토리는 오늘/과거 구분 없이 그대로
-      // 조회되므로, 요청 구간 전체를 로컬과 백엔드 양쪽에서 동시에 받아 로컬 공백을 메움
-      console.time('[내보내기] 1+2. 로컬+백엔드 동시 조회');
-      const [localData, tempResult, elecResult] = await Promise.all([
-        getByDateRangeIndexedFromDB(startMs, endMs),
-        needsTemp ? fetchHistoryFromBackend('temp', startTime, endTime, headers).catch(e => ({ error: e }))
-          : Promise.resolve([]),
-        needsPower ? fetchHistoryFromBackend('elec', startTime, endTime, headers).catch(e => ({ error: e }))
-          : Promise.resolve([]),
-      ]);
-      console.timeEnd('[내보내기] 1+2. 로컬+백엔드 동시 조회');
+      console.time('[내보내기] 1. IndexedDB 조회');
+      const localData = await getByDateRangeIndexedFromDB(startMs, endMs);
+      console.timeEnd('[내보내기] 1. IndexedDB 조회');
       console.log(`[내보내기] IndexedDB 레코드 수: ${localData.length}`);
 
-      const backendData = [];
-      if (Array.isArray(tempResult)) backendData.push(...enrich(tempResult));
-      else if (needsTemp) console.error('온도 히스토리 조회 실패:', tempResult.error);
-      if (Array.isArray(elecResult)) backendData.push(...enrich(elecResult));
-      else if (needsPower) console.error('전력 히스토리 조회 실패:', elecResult.error);
-      if ((needsTemp && !Array.isArray(tempResult)) || (needsPower && !Array.isArray(elecResult))) {
-        showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
+      // 로컬(IndexedDB)엔 웹소켓이 연결되어 있던 동안만 쌓이므로, 탭이 새로고침되거나 연결이
+      // 끊겼다 붙은 공백만큼 요청 구간 앞부분이 로컬엔 빠져있을 수 있음 (예: "최근 1시간"으로
+      // 뽑았는데 실제로는 최근 몇 분치만 나오는 문제). 로컬에서 가장 오래된 레코드가 요청 시작
+      // 시각과 거의 맞닿아 있으면(=공백 없음) 무거운 백엔드 전체 조회를 건너뛰고, 앞쪽이 비어
+      // 있을 때만 그 빠진 구간만큼만 백엔드에서 채움 - "오늘 하루" 같은 큰 범위를 매번 통째로
+      // 다시 받지 않아도 됨
+      const GAP_TOLERANCE_MS = 2 * 60 * 1000; // 막 연결된 직후 등 2분 이내 오차는 정상으로 봄
+      const localOldestMs = localData.length
+        ? Math.min(...localData.map(r => r.receivedAtMs ?? (r.receivedAt ? new Date(r.receivedAt).getTime() : endMs)))
+        : null;
+      const hasStartGap = localOldestMs == null || localOldestMs - startMs > GAP_TOLERANCE_MS;
+      const backendEndMs = hasStartGap ? Math.min(endMs, localOldestMs ?? endMs) : null;
+
+      console.time('[내보내기] 2. 백엔드 히스토리 조회(공백분만)');
+      let backendData = [];
+      if (backendEndMs != null) {
+        const [tempResult, elecResult] = await Promise.all([
+          needsTemp ? fetchHistoryFromBackend('temp', startTime, new Date(backendEndMs), headers).catch(e => ({ error: e }))
+            : Promise.resolve([]),
+          needsPower ? fetchHistoryFromBackend('elec', startTime, new Date(backendEndMs), headers).catch(e => ({ error: e }))
+            : Promise.resolve([]),
+        ]);
+        if (Array.isArray(tempResult)) backendData.push(...enrich(tempResult));
+        else if (needsTemp) console.error('온도 히스토리 조회 실패:', tempResult.error);
+        if (Array.isArray(elecResult)) backendData.push(...enrich(elecResult));
+        else if (needsPower) console.error('전력 히스토리 조회 실패:', elecResult.error);
+        if ((needsTemp && !Array.isArray(tempResult)) || (needsPower && !Array.isArray(elecResult))) {
+          showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
+        }
       }
-      console.log(`[내보내기] 백엔드 레코드 수: ${backendData.length}`);
+      console.timeEnd('[내보내기] 2. 백엔드 히스토리 조회(공백분만)');
+      console.log(`[내보내기] 백엔드 레코드 수: ${backendData.length}${backendEndMs == null ? ' (공백 없음 - 스킵)' : ''}`);
 
       console.time('[내보내기] 3. 병합/가공 (byEquip)');
       // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함. 로컬/백엔드 구간이
@@ -680,27 +693,19 @@ const RealtimeScreen = ({
       console.timeEnd('[내보내기] 3. 병합/가공 (byEquip)');
       console.log(`[내보내기] 최종 행 수: ${exportData.length}`);
 
-      const baseCols = [{ wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 25 }];
-      const metricCols = [{ wch: 10 }, { wch: 12 }, { wch: 10 }];
-      const colWidths = [
-        ...baseCols,
-        ...(needsTemp ? metricCols : []),
-        ...(needsPower ? metricCols : []),
-      ];
-
       const metricLabel = needsTemp && needsPower ? '온도전력' : needsTemp ? '온도' : '전력';
       const today = new Date();
       const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
       const timeStr = today.toTimeString().slice(0, 5).replace(':', '');
-      const fileName = `설비모니터링_구간추출_${metricLabel}_${dateStr}_${timeStr}.xlsx`;
+      const fileName = `설비모니터링_구간추출_${metricLabel}_${dateStr}_${timeStr}.csv`;
 
-      // 시트/워크북 생성 + 바이너리 인코딩만 워커에서 처리 (화면이 안 멈추게)
-      console.time('[내보내기] 4. 워커 시트생성+인코딩+다운로드');
-      await exportToXlsx(exportData, colWidths, fileName, '시간범위_누적데이터');
-      console.timeEnd('[내보내기] 4. 워커 시트생성+인코딩+다운로드');
+      // CSV 생성만 워커에서 처리 (화면이 안 멈추게)
+      console.time('[내보내기] 4. 워커 CSV 생성+다운로드');
+      await exportToCsv(exportData, fileName);
+      console.timeEnd('[내보내기] 4. 워커 CSV 생성+다운로드');
     } catch (err) {
-      console.error('엑셀 내보내기 실패:', err);
-      showAlert('엑셀 파일 생성 실패');
+      console.error('내보내기 실패:', err);
+      showAlert('파일 생성 실패');
     } finally {
       setIsExporting(false);
       console.timeEnd(exportTimerLabel);
@@ -1231,7 +1236,7 @@ const RealtimeScreen = ({
                       }
                       setIsRangeEditorOpen(willOpen);
                     }}
-                    title="엑셀 내보내기"
+                    title="CSV 내보내기"
                     className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
                       isRangeEditorOpen
                         ? (isDarkMode ? 'bg-[#1E2A4A] border-[#22D3EE]/40 text-[#22D3EE]' : 'bg-green-100 border-green-300 text-green-700')
