@@ -67,3 +67,24 @@ export const fetchHistoryFromBackend = async (domain, fromDate, toDate, headers)
     receivedAt: row.recordedAt ? row.recordedAt.replace(' ', 'T') : null,
   }));
 };
+
+// 로컬(IndexedDB)과 백엔드(히스토리 API) 조회 결과를 합칠 때, 같은 순간의 같은 설비/지표가
+// 양쪽에 다 있을 수 있어서(웹소켓 수신 시 로컬에도 쓰고 백엔드에도 쌓이므로) 중복으로 겹치지
+// 않게 (설비ID + 지표종류 + 수신시각) 기준으로 걸러내며 합침
+export const mergeHistoryRecords = (localRecords, backendRecords) => {
+  const keyOf = (r) => {
+    const ms = r.receivedAtMs ?? (r.receivedAt ? new Date(r.receivedAt).getTime() : null);
+    const metric = r.temperature != null ? 't' : r.power != null ? 'p' : '?';
+    return `${r.equipId}|${metric}|${ms}`;
+  };
+  const seen = new Set(localRecords.map(keyOf));
+  const merged = [...localRecords];
+  backendRecords.forEach(r => {
+    const k = keyOf(r);
+    if (!seen.has(k)) {
+      seen.add(k);
+      merged.push(r);
+    }
+  });
+  return merged;
+};

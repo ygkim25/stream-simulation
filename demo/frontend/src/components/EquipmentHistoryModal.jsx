@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { getRecentByEquipIdFromDB, getNewByEquipIdFromDB } from '../utils/indexedDb';
 import { formatClockTime } from '../utils/simulationParse';
-import { getTodayStartMs, fetchHistoryFromBackend } from '../utils/historyApi';
+import { getTodayStartMs, fetchHistoryFromBackend, mergeHistoryRecords } from '../utils/historyApi';
 import LoadingSpinner from './LoadingSpinner';
 
 // 처음에 한 번에 미리 가져와 둘 최대 건수 (스크롤로 확대/축소할 때는 이 안에서 클라이언트에서만
@@ -66,31 +66,13 @@ const mapRecords = (recent) => recent
     power: item.power != null ? Number(Number(item.power).toFixed(1)) : null,
   }));
 
-// 로컬(IndexedDB)과 백엔드(오늘자 히스토리)를 합칠 때, 같은 순간의 같은 지표가 양쪽에 다
-// 있을 수 있어서(웹소켓 수신 시 로컬에도 쓰고 백엔드에도 쌓이므로) 중복으로 겹치지 않게
-// (지표종류 + 수신시각) 기준으로 걸러내며 합침
-const mergeHistoryRecords = (localRecords, backendRecords) => {
-  const keyOf = (r) => {
-    const ms = r.receivedAtMs ?? (r.receivedAt ? new Date(r.receivedAt).getTime() : null);
-    const metric = r.temperature != null ? 't' : r.power != null ? 'p' : '?';
-    return `${metric}|${ms}`;
-  };
-  const seen = new Set(localRecords.map(keyOf));
-  const merged = [...localRecords];
-  backendRecords.forEach(r => {
-    const k = keyOf(r);
-    if (!seen.has(k)) {
-      seen.add(k);
-      merged.push(r);
-    }
-  });
-  merged.sort((a, b) => {
-    const at = a.receivedAtMs ?? (a.receivedAt ? new Date(a.receivedAt).getTime() : 0);
-    const bt = b.receivedAtMs ?? (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
-    return at - bt;
-  });
-  return merged;
-};
+// mergeHistoryRecords(로컬/백엔드 중복 제거 병합)는 historyApi에서 공용으로 가져다 씀.
+// 이 화면은 항상 한 설비 기록만 다루므로, 합친 뒤 시간순 정렬만 별도로 해줌
+const sortByReceivedAt = (records) => [...records].sort((a, b) => {
+  const at = a.receivedAtMs ?? (a.receivedAt ? new Date(a.receivedAt).getTime() : 0);
+  const bt = b.receivedAtMs ?? (b.receivedAt ? new Date(b.receivedAt).getTime() : 0);
+  return at - bt;
+});
 
 // ==========================================
 // 휠 스크롤로 독립적으로 확대/축소되는 단일 추이 차트
@@ -250,7 +232,7 @@ const EquipmentHistoryModal = ({ equipId, equipName, threshold, powerThreshold, 
     try {
       const backendForEquip = await fetchBackendBackfillCached(equipId, token);
       if (backendForEquip.length === 0) return;
-      const merged = mergeHistoryRecords(localRawRef.current, backendForEquip);
+      const merged = sortByReceivedAt(mergeHistoryRecords(localRawRef.current, backendForEquip));
       localRawRef.current = merged;
       setRawData(mapRecords(merged));
     } catch (e) {

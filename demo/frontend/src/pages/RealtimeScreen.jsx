@@ -18,7 +18,7 @@ import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
 import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 import { exportToXlsx } from '../utils/xlsxExport';
-import { getTodayStartMs, fetchHistoryFromBackend } from '../utils/historyApi';
+import { getTodayStartMs, fetchHistoryFromBackend, mergeHistoryRecords } from '../utils/historyApi';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
@@ -577,60 +577,52 @@ const RealtimeScreen = ({
     try {
       const startMs = startTime.getTime();
       const endMs = endTime.getTime();
-      const cutoffMs = getTodayStartMs();
-
-      // 요청 구간 중 오늘 자정 이후와 겹치는 부분은 IndexedDB에서. receivedAtMs 인덱스로 구간만
-      // 바로 훑는 버전을 씀 - 저장소 전체를 스캔하는 이전 버전(getByDateRangeFromDB)이 몇 시간치를
-      // 뽑을 때 오래 걸리던 원인이었음
-      console.time('[내보내기] 1. IndexedDB 조회');
-      let localData = [];
-      if (endMs > cutoffMs) {
-        const localStartMs = Math.max(startMs, cutoffMs);
-        localData = await getByDateRangeIndexedFromDB(localStartMs, endMs);
-      }
-      console.timeEnd('[내보내기] 1. IndexedDB 조회');
-      console.log(`[내보내기] IndexedDB 레코드 수: ${localData.length}`);
-
-      // 24시간보다 오래된 부분은 백엔드 히스토리 CSV에서, 온도/전력 독립 조회로 한쪽이 실패해도
-      // 성공한 쪽은 그대로 포함시킴 (Promise.all이면 하나만 실패해도 둘 다 날아감)
       const needsTemp = exportIncludeTemp;
       const needsPower = exportIncludePower;
-      let backendData = [];
-      console.time('[내보내기] 2. 백엔드 히스토리 조회');
-      if (startMs < cutoffMs) {
-        const backendEndMs = Math.min(endMs, cutoffMs);
-        const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
-        const equipInfoById = new Map(equipmentsRef.current.map(eq => [String(eq.equipId), eq]));
-        // 히스토리 원본엔 설비명/위치/임계값이 없어서 현재 설비 목록으로 채워 넣음 (과거 임계값은
-        // 저장돼있지 않아 현재 값으로 대체, 참고용)
-        const enrich = (rows) => rows.map(r => {
-          const info = equipInfoById.get(String(r.equipId));
-          const fallbackThreshold = r.temperature != null ? info?.threshold : info?.powerThreshold;
-          return {
-            ...r,
-            equipName: info?.equipName ?? r.equipId,
-            location: info?.location ?? '-',
-            threshold: r.threshold ?? fallbackThreshold ?? null,
-          };
-        });
-        const [tempResult, elecResult] = await Promise.allSettled([
-          needsTemp ? fetchHistoryFromBackend('temp', startTime, new Date(backendEndMs), headers) : Promise.resolve([]),
-          needsPower ? fetchHistoryFromBackend('elec', startTime, new Date(backendEndMs), headers) : Promise.resolve([]),
-        ]);
-        if (tempResult.status === 'fulfilled') backendData.push(...enrich(tempResult.value));
-        else if (needsTemp) console.error('온도 히스토리 조회 실패:', tempResult.reason);
-        if (elecResult.status === 'fulfilled') backendData.push(...enrich(elecResult.value));
-        else if (needsPower) console.error('전력 히스토리 조회 실패:', elecResult.reason);
-        if ((needsTemp && tempResult.status === 'rejected') || (needsPower && elecResult.status === 'rejected')) {
-          showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
-        }
+      const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+      const equipInfoById = new Map(equipmentsRef.current.map(eq => [String(eq.equipId), eq]));
+      // 히스토리 원본엔 설비명/위치/임계값이 없어서 현재 설비 목록으로 채워 넣음 (과거 임계값은
+      // 저장돼있지 않아 현재 값으로 대체, 참고용)
+      const enrich = (rows) => rows.map(r => {
+        const info = equipInfoById.get(String(r.equipId));
+        const fallbackThreshold = r.temperature != null ? info?.threshold : info?.powerThreshold;
+        return {
+          ...r,
+          equipName: info?.equipName ?? r.equipId,
+          location: info?.location ?? '-',
+          threshold: r.threshold ?? fallbackThreshold ?? null,
+        };
+      });
+
+      // 로컬(IndexedDB)엔 웹소켓이 연결되어 있던 동안만 쌓이므로, 탭이 새로고침되거나 연결이
+      // 끊겼다 붙은 공백만큼 오늘 데이터가 로컬엔 빠져있을 수 있음 (예: "최근 1시간"으로 뽑았는데
+      // 실제로는 최근 몇 분치만 나오는 문제). 백엔드 히스토리는 오늘/과거 구분 없이 그대로
+      // 조회되므로, 요청 구간 전체를 로컬과 백엔드 양쪽에서 동시에 받아 로컬 공백을 메움
+      console.time('[내보내기] 1+2. 로컬+백엔드 동시 조회');
+      const [localData, tempResult, elecResult] = await Promise.all([
+        getByDateRangeIndexedFromDB(startMs, endMs),
+        needsTemp ? fetchHistoryFromBackend('temp', startTime, endTime, headers).catch(e => ({ error: e }))
+          : Promise.resolve([]),
+        needsPower ? fetchHistoryFromBackend('elec', startTime, endTime, headers).catch(e => ({ error: e }))
+          : Promise.resolve([]),
+      ]);
+      console.timeEnd('[내보내기] 1+2. 로컬+백엔드 동시 조회');
+      console.log(`[내보내기] IndexedDB 레코드 수: ${localData.length}`);
+
+      const backendData = [];
+      if (Array.isArray(tempResult)) backendData.push(...enrich(tempResult));
+      else if (needsTemp) console.error('온도 히스토리 조회 실패:', tempResult.error);
+      if (Array.isArray(elecResult)) backendData.push(...enrich(elecResult));
+      else if (needsPower) console.error('전력 히스토리 조회 실패:', elecResult.error);
+      if ((needsTemp && !Array.isArray(tempResult)) || (needsPower && !Array.isArray(elecResult))) {
+        showAlert('과거 데이터(서버 보관분) 중 일부 조회에 실패했습니다. 나머지 데이터로 내보냅니다.');
       }
-      console.timeEnd('[내보내기] 2. 백엔드 히스토리 조회');
       console.log(`[내보내기] 백엔드 레코드 수: ${backendData.length}`);
 
       console.time('[내보내기] 3. 병합/가공 (byEquip)');
-      // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함
-      const combinedRecords = [...localData, ...backendData]
+      // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함. 로컬/백엔드 구간이
+      // 겹치는 동안(오늘) 같은 레코드가 양쪽에 다 있을 수 있어 mergeHistoryRecords로 중복 제거
+      const combinedRecords = mergeHistoryRecords(localData, backendData)
         .filter(r => (r.temperature != null && needsTemp) || (r.power != null && needsPower))
         .sort((a, b) => {
           const at = a.receivedAt ? new Date(a.receivedAt).getTime() : 0;
