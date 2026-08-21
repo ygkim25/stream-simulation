@@ -85,10 +85,10 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
   // 실제로 있는 레코드만 걸러서 끊김 없는 배열로 만들어 사용
   const metricData = rawData.filter(item => item[dataKeyName] != null);
 
-  // 항상 MIN_VISIBLE(가장 좁은 폭)로 고정해두고 그 안에서 실제 데이터로 채움(slice는 배열
-  // 길이를 넘는 개수를 요청해도 있는 만큼만 반환하므로 문제없음) - 데이터가 캐시(적음) ->
-  // 실제 조회(많음)로 몇 번 갱신되는 동안 보이는 구간 폭 자체가 따라 늘어나며 "갑자기 확
-  // 넓어지는" 것처럼 보이는 걸 막음. 사용자가 휠로 직접 조정한 뒤에는 그 값을 그대로 유지함
+  // 폭을 MIN_VISIBLE(20)로 고정해두고 그 안에서 실제 데이터로 채움(slice는 배열 길이를 넘는
+  // 개수를 요청해도 있는 만큼만 반환하므로 문제없음) - 데이터가 캐시(적음) -> 실제 조회(많음)로
+  // 갱신되는 동안 자연히 그만큼 채워질 뿐, 폭 자체는 로딩 중이든 아니든 따로 움직이지 않음.
+  // 이후엔 휠로 직접 조정한 값만 그대로 유지함 (자동으로 늘리거나 줄이지 않음)
   const [visibleCount, setVisibleCount] = useState(MIN_VISIBLE);
   const wheelAreaRef = useRef(null);
 
@@ -145,17 +145,15 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
           <span className={`text-[13px] font-bold ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>{title}</span>
         </div>
         <span className={`text-[10px] font-mono flex items-center gap-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-          최근 {chartData.length}건
           {showBackfillHint && (
             <span
               title="더 많은 기록을 불러오는 중..."
               className="w-2.5 h-2.5 rounded-full border-2 border-current border-t-transparent animate-spin opacity-70"
             />
           )}
+          최근 {chartData.length}건
         </span>
       </div>
-      {/* chart-reveal(선이 그려지는 900ms 연출)을 빼서 데이터가 오자마자 바로 그려지게 함 -
-          이 연출 때문에 실제로 로딩이 끝났는데도 아직 로딩 중인 것처럼 느껴졌음 */}
       <div ref={wheelAreaRef} className="select-none" style={{ cursor: 'ns-resize' }}>
         {/* initialDimension 없이는 ResizeObserver로 실제 크기를 잴 때까지 빈 화면이라, 모달을
             열자마자 바로 그려지지 않고 한 박자 늦게 뜨는 것처럼 보였음 */}
@@ -187,6 +185,7 @@ const TrendChart = ({ rawData, title, dotClass, color, dataKeyName, threshold, t
                 fill={color}
                 stroke={isDarkMode ? '#12172A' : '#FFFFFF'}
                 strokeWidth={2}
+                isAnimationActive={false}
               />
             )}
           </AreaChart>
