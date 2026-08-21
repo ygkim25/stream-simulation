@@ -143,6 +143,7 @@ public class EquipmentTempStatusService {
     @Transactional
     public void updateAll(List<EquipmentTempStatusDto> updatedList) {
         List<String> newEquipIds = new ArrayList<>();
+        List<EquipmentTempStatus> changedEquipment = new ArrayList<>();
 
         for (EquipmentTempStatusDto dto : updatedList) {
             if (dto.getEquipId() == null || dto.getEquipId().isBlank()) {
@@ -162,6 +163,7 @@ public class EquipmentTempStatusService {
                 eq.setEquipId(dto.getEquipId());
             }
 
+            String oldStatus = eq.getStatus();
             boolean valueOrThresholdChanged = dto.getThreshold() != null || dto.getTemperature() != null;
 
             if (dto.getEquipName() != null)
@@ -176,8 +178,29 @@ public class EquipmentTempStatusService {
             // 신규 설비이거나, 기존 설비의 온도/임계값이 바뀐 경우 status/receivedAt을 즉시 재계산
             // (재계산하지 않으면 다음 자동 tick이 표시값을 바꿀 때까지 그리드에 stale 상태가 남음)
             if (isNew || valueOrThresholdChanged) {
-                eq.setStatus(determineStatus(eq.getTemperature(), eq.getThreshold()));
-                eq.setReceivedAt(LocalDateTime.now());
+                LocalDateTime now = LocalDateTime.now();
+                String newStatus = determineStatus(eq.getTemperature(), eq.getThreshold());
+                eq.setStatus(newStatus);
+                eq.setReceivedAt(now);
+
+                // 임계값 변경으로 상태가 "새로 진입"한 경우에도 tick()과 동일하게 alert/log/mail 반영
+                if (!newStatus.equals(oldStatus)) {
+                    boolean isWarningOrCritical = "경고".equals(newStatus) || "위험".equals(newStatus);
+
+                    if (isWarningOrCritical) {
+                        alertRepository.save(new EquipmentTempAlert(
+                                eq.getEquipId(), eq.getTemperature(), eq.getThreshold(), newStatus, now));
+                    }
+
+                    equipmentLogService.recordStatusChange(eq, newStatus, now);
+
+                    if ("위험".equals(newStatus)) {
+                        mailService.sendCriticalAlert(eq.getEquipId(), eq.getEquipName(), "온도",
+                                eq.getTemperature(), eq.getThreshold());
+                    }
+
+                    changedEquipment.add(eq);
+                }
             }
 
             if (isNew) {
@@ -191,6 +214,12 @@ public class EquipmentTempStatusService {
                 updatedList.stream()
                         .map(dto -> liveData.get(dto.getEquipId()))
                         .collect(Collectors.toList()));
+
+        if (!changedEquipment.isEmpty()) {
+            messagingTemplate.convertAndSend(
+                    "/topic/live/monitoring/temp",
+                    changedEquipment.stream().map(EquipmentTempStatusDto::new).collect(Collectors.toList()));
+        }
 
         // 신규 설비는 곧바로 독립 tick 루프에 합류
         newEquipIds.forEach(this::scheduleNext);
