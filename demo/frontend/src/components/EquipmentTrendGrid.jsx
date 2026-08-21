@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, memo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { getRecentByEquipIdFromDB } from '../utils/indexedDb';
 import { getStatusMeta } from '../utils/statusStyles';
@@ -33,6 +33,25 @@ const saveCachedHistory = (result) => {
   }
 };
 
+// 사용자가 직접 정한 카드 순서(설비ID 배열) - 백엔드 없이 이 브라우저에만 저장해두고,
+// 다음에 다시 열었을 때도 그대로 이어서 보이게 함
+const CARD_ORDER_KEY = 'equipmentTrendCardOrder';
+const loadCardOrder = () => {
+  try {
+    const arr = JSON.parse(localStorage.getItem(CARD_ORDER_KEY));
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+};
+const saveCardOrder = (order) => {
+  try {
+    localStorage.setItem(CARD_ORDER_KEY, JSON.stringify(order));
+  } catch {
+    // localStorage를 못 쓰는 환경이면 그냥 이번 세션 동안만(메모리) 순서가 유지됨
+  }
+};
+
 const STATUS_COLOR = {
   green: { dark: '#34D399', light: '#22C55E' },
   amber: { dark: '#FBBF24', light: '#F59E0B' },
@@ -42,7 +61,7 @@ const STATUS_COLOR = {
 // 카드 하나를 독립된 컴포넌트로 분리하고 그 설비 값이 실제로 바뀐 경우에만 다시 그리게 함.
 // (예전엔 부모 하나가 24개 카드를 통째로 map으로 그려서, 설비 1개만 값이 바뀌어도 24개
 // AreaChart가 전부 다시 그려지며 계속 버벅였음)
-const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit }) => {
+const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit, isReorderMode, isFirst, isLast, onMove }) => {
   // 큰 숫자/그래프 맨 끝 점은 IndexedDB 폴링 결과 대신 웹소켓으로 갓 들어온 실시간 값을
   // 바로 써서, 메인 그리드가 갱신되는 순간 이 카드도 같이 움직이게 함 (폴링 주기만큼
   // 뒤처져 "따로 논다"는 느낌이 들지 않도록)
@@ -79,9 +98,9 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
 
   return (
     <div
-      onClick={() => onSelectEquip?.(eq.equipId, displayMetric)}
-      title="클릭하면 자세히 보기"
-      className={`group relative rounded-xl border overflow-hidden transition-all duration-300 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${
+      onClick={isReorderMode ? undefined : () => onSelectEquip?.(eq.equipId, displayMetric)}
+      title={isReorderMode ? undefined : '클릭하면 자세히 보기'}
+      className={`group relative rounded-xl border overflow-hidden transition-all duration-300 ${isReorderMode ? '' : 'cursor-pointer hover:shadow-lg hover:-translate-y-0.5'} ${
         isDarkMode
           ? 'border-[#1E253D] hover:border-[#2A335A]'
           : 'border-gray-200 hover:border-gray-300 shadow-sm'
@@ -94,6 +113,36 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
     >
       {/* 상태 컬러 액센트 바 */}
       <div className="absolute top-0 left-0 right-0 h-[2.5px]" style={{ backgroundColor: color, opacity: 0.85 }} />
+
+      {/* 순서 변경 모드: 카드 본문 클릭(상세보기)은 막되, 오른쪽 위에 배경 없이 화살표만 살짝 얹어둠 */}
+      {isReorderMode && (
+        <div className="absolute top-1 right-1 z-20 flex items-center gap-0.5">
+          <button
+            type="button"
+            disabled={isFirst}
+            onClick={(e) => { e.stopPropagation(); onMove(eq.equipId, -1); }}
+            className={`text-[10px] font-bold leading-none transition-colors ${
+              isFirst
+                ? (isDarkMode ? 'text-[#3A4266] cursor-not-allowed' : 'text-gray-300 cursor-not-allowed')
+                : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC] cursor-pointer' : 'text-gray-400 hover:text-gray-800 cursor-pointer')
+            }`}
+          >
+            ◀
+          </button>
+          <button
+            type="button"
+            disabled={isLast}
+            onClick={(e) => { e.stopPropagation(); onMove(eq.equipId, 1); }}
+            className={`text-[10px] font-bold leading-none transition-colors ${
+              isLast
+                ? (isDarkMode ? 'text-[#3A4266] cursor-not-allowed' : 'text-gray-300 cursor-not-allowed')
+                : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC] cursor-pointer' : 'text-gray-400 hover:text-gray-800 cursor-pointer')
+            }`}
+          >
+            ▶
+          </button>
+        </div>
+      )}
 
       <div className="px-2.5 pt-2 pb-1.5">
         <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -170,6 +219,9 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
   if (prev.displayMetric !== next.displayMetric) return false;
   if (prev.hasLoadedHistoryOnce !== next.hasLoadedHistoryOnce) return false;
   if (prev.basePoints !== next.basePoints) return false;
+  if (prev.isReorderMode !== next.isReorderMode) return false;
+  if (prev.isFirst !== next.isFirst) return false;
+  if (prev.isLast !== next.isLast) return false;
   const valueKey = next.displayMetric === 'temperature' ? 'temperature' : 'power';
   const statusKey = next.displayMetric === 'temperature' ? 'status' : 'powerStatus';
   if (prev.eq[valueKey] !== next.eq[valueKey]) return false;
@@ -191,6 +243,10 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
   const [historyMap, setHistoryMap] = useState(() => loadCachedHistory() || {});
   // 첫 조회가 끝나기 전까지는 "데이터가 확실히 부족함"과 구분해서 로딩 표시를 해줌
   const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(() => loadCachedHistory() !== null);
+
+  // 카드 순서를 직접 바꾸는 모드 (설정 버튼으로 토글) + 사용자가 정한 순서(없으면 기본 정렬 사용)
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [customOrder, setCustomOrder] = useState(() => loadCardOrder());
 
   // 카드가 많으면(설비 수만큼 recharts 인스턴스가 동시에 다시 그려짐) 탭 전환 시 눈에 띄게 버벅이는데,
   // 그 렌더링이 끝날 때까지 그냥 화면이 멈춘 것처럼 보이는 문제가 있었음. metric이 바뀌면 일단
@@ -260,12 +316,45 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     return () => { cancelled = true; clearInterval(intervalId); };
   }, [hasEquipIds]);
 
-  const sortedEquipments = [...equipments].sort((a, b) => {
+  const defaultSortedEquipments = [...equipments].sort((a, b) => {
     const aNum = Number(a.equipId);
     const bNum = Number(b.equipId);
     if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
     return String(a.equipId).localeCompare(String(b.equipId));
   });
+  // 사용자가 순서를 정해둔 적이 있으면 그 순서를 우선 적용함. 아직 순서가 없던(=새로 추가된)
+  // 설비는 Infinity로 밀려서 sort가 안정 정렬이라 defaultSortedEquipments 순서 그대로 맨 뒤에 붙음
+  const sortedEquipments = useMemo(() => {
+    if (!customOrder || customOrder.length === 0) return defaultSortedEquipments;
+    const orderIndex = new Map(customOrder.map((id, i) => [id, i]));
+    return [...defaultSortedEquipments].sort((a, b) => {
+      const ai = orderIndex.has(a.equipId) ? orderIndex.get(a.equipId) : Infinity;
+      const bi = orderIndex.has(b.equipId) ? orderIndex.get(b.equipId) : Infinity;
+      return ai - bi;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipments, customOrder]);
+
+  // moveCard가 항상 최신 sortedEquipments를 보도록 ref로 미러링 (핸들러 자체는 useCallback으로
+  // 고정해서 EquipTrendCard의 memo가 매 렌더 새 함수 때문에 깨지지 않게 함)
+  const sortedEquipmentsRef = useRef(sortedEquipments);
+  useEffect(() => {
+    sortedEquipmentsRef.current = sortedEquipments;
+  }, [sortedEquipments]);
+
+  const handleMoveCard = useCallback((equipId, direction) => {
+    setCustomOrder(prev => {
+      const base = prev && prev.length > 0 ? prev : sortedEquipmentsRef.current.map(eq => eq.equipId);
+      const idx = base.indexOf(equipId);
+      if (idx === -1) return prev;
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= base.length) return prev;
+      const next = [...base];
+      [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
+      saveCardOrder(next);
+      return next;
+    });
+  }, []);
 
   // equipId -> basePoints. historyMap/displayMetric이 바뀔 때만(=폴링될 때만) 다시 계산하고,
   // 그 사이 설비 값이 실시간으로 바뀌어 부모가 리렌더링돼도 이전 배열 참조를 그대로 씀 - 그래야
@@ -295,7 +384,27 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
         <span className={`text-[15px] font-bold truncate ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
           설비별 {displayMetric === 'temperature' ? '온도' : '전력'} 추이
         </span>
+        <button
+          type="button"
+          onClick={() => setIsReorderMode(v => !v)}
+          title={isReorderMode ? '순서 변경 완료' : '카드 순서 변경'}
+          className={`ml-auto shrink-0 p-1.5 rounded-lg transition-colors ${
+            isReorderMode
+              ? (isDarkMode ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-green-100 text-green-700')
+              : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC] hover:bg-[#1A2036]' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100')
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </div>
+      {isReorderMode && (
+        <div className={`mb-2 -mt-1 text-[11px] shrink-0 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+          카드의 ▲▼ 버튼으로 순서를 바꿀 수 있어요. 정한 순서는 이 브라우저에 저장돼서 다음에 열어도 유지됩니다.
+        </div>
+      )}
 
       {sortedEquipments.length === 0 ? (
         <div className={`flex-1 min-h-0 flex items-center justify-center text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
@@ -309,7 +418,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
             </div>
           )}
           <div className="grid grid-cols-2 gap-2.5 pr-1 pb-1">
-            {sortedEquipments.map(eq => {
+            {sortedEquipments.map((eq, i) => {
               return (
                 <EquipTrendCard
                   key={eq.equipId}
@@ -320,6 +429,10 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
                   onSelectEquip={onSelectEquip}
                   hasLoadedHistoryOnce={hasLoadedHistoryOnce}
                   unit={unit}
+                  isReorderMode={isReorderMode}
+                  isFirst={i === 0}
+                  isLast={i === sortedEquipments.length - 1}
+                  onMove={handleMoveCard}
                 />
               );
             })}

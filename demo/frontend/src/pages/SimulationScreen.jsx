@@ -28,6 +28,14 @@ const MAX_SERIES_POINTS = 1000;
 // 데이터가 이만큼 이상 비어있으면(기본 1시간) 그 구간은 재생 시간에서 통째로 뺌
 const GAP_THRESHOLD_MS = 60 * 60 * 1000;
 
+// 알람 패널의 정상/경고/위험 기준 안내 - computeStatus(utils/simulationParse.js)의 실제 판정
+// 규칙과 반드시 같이 맞춰서 고쳐야 함 (임계값 이상=위험, 임계값의 90%~임계값 미만=경고)
+const SIMULATION_STATUS_INFO_LINES = [
+  { color: 'green', label: '정상', desc: '값이 임계값의 90% 미만인 상태' },
+  { color: 'amber', label: '경고', desc: '값이 임계값의 90% 이상, 아직 임계값 미만인 상태(근접)' },
+  { color: 'red', label: '위험', desc: '값이 임계값 이상인 상태(도달/초과)' },
+];
+
 // 값 수정 셀 (온도/전력/임계값 입력창) - 입력 중 부모 재계산에 값이 씹히지 않도록 로컬 상태로 관리
 const EditableCell = ({ initialValue, onChangeValue, className }) => {
   const [value, setValue] = useState(initialValue);
@@ -39,7 +47,7 @@ const EditableCell = ({ initialValue, onChangeValue, className }) => {
   return (
     <input
       type="number"
-      value={value}
+      value={value ?? ''}
       onChange={(e) => { setValue(e.target.value); onChangeValue(e.target.value); }}
       onClick={(e) => e.stopPropagation()}
       className={className}
@@ -401,6 +409,109 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, hasTemperatureData, hasPowerData]);
 
+  // timeMs에 적용될 수정값 조회: 정확히 그 시각의 수정 우선, 없으면 그 이전 "이후 전체 적용" 중 최신 값
+  const resolveEditedValue = (equipId, field, timeMs) => {
+    const fieldEdits = editedValues[equipId]?.[field];
+    if (!fieldEdits) return undefined;
+    const exact = fieldEdits[timeMs];
+    if (exact !== undefined) return exact.value;
+    let latestForward;
+    Object.keys(fieldEdits).forEach(t => {
+      const editTime = Number(t);
+      const edit = fieldEdits[t];
+      if (edit.forward && editTime <= timeMs && (!latestForward || editTime > latestForward.time)) {
+        latestForward = { time: editTime, value: edit.value };
+      }
+    });
+    return latestForward?.value;
+  };
+
+  // equipId별로 시간 오름차순 정렬된 배열로 미리 인덱싱 (rows 변경 시 한 번만 계산).
+  // 재생 중 250ms마다 도는 currentEquipRows가 이걸 이진 탐색으로 훑어서, 데이터가 아주 많아도
+  // (예: 일주일치 엑셀) 매 tick마다 전체를 다시 스캔하지 않게 함 - 안 그러면 재생 중 브라우저가 멈춤
+  const sortedRowsByEquip = useMemo(() => {
+    const map = new Map();
+    rows.forEach(r => {
+      if (!map.has(r.equipId)) map.set(r.equipId, []);
+      map.get(r.equipId).push(r);
+    });
+    map.forEach(list => list.sort((a, b) => a.time.getTime() - b.time.getTime()));
+    return map;
+  }, [rows]);
+
+  // 셀을 직접 수정하면(온도/전력/임계값) 그 설비의 전환 시점이 바뀔 수 있는데, 예전엔 수정하는
+  // 순간 바로 알람 카드를 하나 만들어 띄웠음 - 그러면 아직 재생이 그 시각에 도달하지 않았어도
+  // (심지어 미래 구간을 미리 훑어보며 수정만 해봐도) 알람이 즉시 떠서 "재생하며 겪는" 느낌이 아니었음.
+  // 대신 수정된 설비만(전체 rows를 다시 훑지 않음 - 타이핑 중에도 가벼움) 전환 이벤트를 다시 계산해서
+  // 아래 mergedTransitionEvents에 흘려보내고, 그 뒤로는 자동 감지 이벤트와 완전히 같은 경로
+  // (재생 위치가 그 시각을 지날 때)로만 알람에 반영되게 함
+  const editedTransitionEvents = useMemo(() => {
+    const editedEquipIds = Object.keys(editedValues);
+    if (editedEquipIds.length === 0) return [];
+    const events = [];
+    const pushEditedTransitions = (sorted, metric, valueField, thresholdField) => {
+      let prevStatus = null;
+      sorted.forEach(r => {
+        const rowTime = r.time.getTime();
+        const editedValue = resolveEditedValue(r.equipId, valueField, rowTime);
+        const editedThreshold = resolveEditedValue(r.equipId, thresholdField, rowTime);
+        const value = editedValue !== undefined ? editedValue : r[valueField];
+        const threshold = editedThreshold !== undefined ? editedThreshold : r[thresholdField];
+        const status = computeStatus(value, threshold);
+        if (status !== prevStatus) {
+          if (isWarningStatus(status)) {
+            events.push({
+              id: `edit-${metric}-${r.equipId}-${rowTime}`,
+              equipId: r.equipId,
+              equipName: r.equipName,
+              location: r.location,
+              elapsedMs: realToCompressed(rowTime),
+              kind: 'warning',
+              status,
+              metric,
+              value,
+              threshold,
+            });
+          } else if (prevStatus && isWarningStatus(prevStatus)) {
+            events.push({
+              id: `edit-log-${metric}-${r.equipId}-${rowTime}`,
+              equipId: r.equipId,
+              equipName: r.equipName,
+              elapsedMs: realToCompressed(rowTime),
+              kind: 'success',
+              metric,
+              value,
+              threshold,
+            });
+          }
+        }
+        prevStatus = status;
+      });
+    };
+    editedEquipIds.forEach(equipId => {
+      const sorted = sortedRowsByEquip.get(equipId);
+      if (!sorted) return;
+      const fields = editedValues[equipId];
+      if (fields.temperature || fields.threshold) {
+        pushEditedTransitions(sorted, 'temperature', 'temperature', 'threshold');
+      }
+      if (fields.power || fields.powerThreshold) {
+        pushEditedTransitions(sorted, 'power', 'power', 'powerThreshold');
+      }
+    });
+    events.sort((a, b) => a.elapsedMs - b.elapsedMs);
+    return events;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editedValues, sortedRowsByEquip]);
+
+  // 수정된 설비는 원본 전환 이벤트 대신 위에서 다시 계산한 편집본으로 교체해서 합침
+  const mergedTransitionEvents = useMemo(() => {
+    const editedEquipIds = new Set(Object.keys(editedValues));
+    if (editedEquipIds.size === 0) return transitionEvents;
+    const untouched = transitionEvents.filter(e => !editedEquipIds.has(e.equipId));
+    return [...untouched, ...editedTransitionEvents].sort((a, b) => a.elapsedMs - b.elapsedMs);
+  }, [transitionEvents, editedTransitionEvents, editedValues]);
+
   // 재생바 채움 비율 (%) - 커스텀 트랙 배경(그라데이션)으로 진행 표시를 직접 그릴 때 사용
   const seekFillPct = durationMs > 0 ? (Math.min(elapsedMs, durationMs) / durationMs) * 100 : 0;
 
@@ -427,38 +538,70 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     metric: e.metric,
   });
 
-  // transitionEvents는 elapsedMs 오름차순으로 정렬돼 있으므로, 매 틱(250ms)마다 전체를
+  // mergedTransitionEvents는 elapsedMs 오름차순으로 정렬돼 있으므로, 매 틱(250ms)마다 전체를
   // filter로 훑는 대신 이진 탐색으로 구간의 경계 인덱스만 찾아 slice함. 전환 이벤트가 많은
   // (일주일치 같은) 시나리오는 재생 내내 매 틱 O(n) 스캔 비용이 그대로 쌓여 갈수록 버벅였음
-  const upperBoundByElapsedMs = (value) => {
+  const upperBoundByElapsedMs = (events, value) => {
     let lo = 0;
-    let hi = transitionEvents.length;
+    let hi = events.length;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
-      if (transitionEvents[mid].elapsedMs <= value) lo = mid + 1; else hi = mid;
+      if (events[mid].elapsedMs <= value) lo = mid + 1; else hi = mid;
     }
     return lo;
   };
 
-  // 재생 위치(elapsedMs)가 바뀔 때마다 지금까지 발생한 전환 이벤트를 알람/로그에 반영
+  // 셀 수정으로 mergedTransitionEvents 자체가 바뀐 경우(재생 위치는 그대로) 감지용
+  const prevMergedEventsRef = useRef(mergedTransitionEvents);
+
+  // 실시간 모니터링과 같은 브라우저 데스크톱 알림을 시뮬레이션 재생 중에도 띄움 - 실시간 알림과
+  // 헷갈리지 않도록 제목 앞에 "[시뮬레이션]"을 붙여서 구분함
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+  const notifySimAlarms = (warningEvents) => {
+    const canNotify = isAlarmOn && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    if (!canNotify) return;
+    warningEvents.forEach(e => {
+      new Notification(`⚠ [시뮬레이션] ${e.equipName} ${e.status}`, {
+        body: `${e.metric === 'power' ? '전력' : '온도'} ${e.value} (기준 ${e.threshold}) - ${e.location || '-'}`,
+      });
+    });
+  };
+
+  // 재생 위치(elapsedMs)가 바뀌거나, 셀 수정으로 전환 이벤트 목록 자체가 바뀔 때마다 지금까지
+  // 발생한(=elapsedMs가 이미 지난) 전환 이벤트를 알람/로그에 반영. 셀 수정은 자주 있는 일이
+  // 아니라서(연속 타이핑 정도) 이 경로에서만 매번 처음부터 다시 계산해도 부담 없음 - 250ms마다
+  // 도는 일반 재생 틱은 여전히 위 이진 탐색 기반 증분 갱신(아래 else if)만 탐
   useEffect(() => {
     if (!rows.length) return;
     const prev = prevElapsedRef.current;
-    if (elapsedMs < prev) {
-      // 되감기(스크럽): 처음부터 현재 위치까지 다시 계산
-      const upto = transitionEvents.slice(0, upperBoundByElapsedMs(elapsedMs));
+    const eventsChanged = prevMergedEventsRef.current !== mergedTransitionEvents;
+    prevMergedEventsRef.current = mergedTransitionEvents;
+    if (elapsedMs < prev || eventsChanged) {
+      // 되감기(스크럽) 또는 수정으로 인한 재계산: 처음부터 현재 위치까지 다시 계산
+      const upto = mergedTransitionEvents.slice(0, upperBoundByElapsedMs(mergedTransitionEvents, elapsedMs));
       setSimAlarms(upto.filter(e => e.kind === 'warning').map(toAlarmCard).slice(-MAX_SIM_ALARMS));
       setSimLogs(upto.map(toLogCard).slice(-MAX_SIM_LOGS));
     } else if (elapsedMs > prev) {
-      const newly = transitionEvents.slice(upperBoundByElapsedMs(prev), upperBoundByElapsedMs(elapsedMs));
+      const newly = mergedTransitionEvents.slice(
+        upperBoundByElapsedMs(mergedTransitionEvents, prev),
+        upperBoundByElapsedMs(mergedTransitionEvents, elapsedMs),
+      );
       if (newly.length > 0) {
-        setSimAlarms(p => [...p, ...newly.filter(e => e.kind === 'warning').map(toAlarmCard)].slice(-MAX_SIM_ALARMS));
+        const newWarnings = newly.filter(e => e.kind === 'warning');
+        setSimAlarms(p => [...p, ...newWarnings.map(toAlarmCard)].slice(-MAX_SIM_ALARMS));
         setSimLogs(p => [...p, ...newly.map(toLogCard)].slice(-MAX_SIM_LOGS));
+        // 되감기/수정 재계산(위 분기)에서는 알리지 않음 - 스크럽하거나 셀을 편집할 때마다 밀린
+        // 알림이 한꺼번에 쏟아지는 걸 막고, 실제로 재생하며 자연스럽게 지나갈 때만 알림
+        notifySimAlarms(newWarnings);
       }
     }
     prevElapsedRef.current = elapsedMs;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elapsedMs, transitionEvents]);
+  }, [elapsedMs, mergedTransitionEvents]);
 
   // 재생 타이머 - durationMs/elapsedMs가 이미 빈 구간이 빠진 "압축된" 시간이라 여기서 따로
   // 건너뛸 필요 없이 그냥 일정하게 흘려보내면 됨
@@ -513,36 +656,6 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       setElapsedMs(pendingSeekRef.current);
     });
   };
-
-  // timeMs에 적용될 수정값 조회: 정확히 그 시각의 수정 우선, 없으면 그 이전 "이후 전체 적용" 중 최신 값
-  const resolveEditedValue = (equipId, field, timeMs) => {
-    const fieldEdits = editedValues[equipId]?.[field];
-    if (!fieldEdits) return undefined;
-    const exact = fieldEdits[timeMs];
-    if (exact !== undefined) return exact.value;
-    let latestForward;
-    Object.keys(fieldEdits).forEach(t => {
-      const editTime = Number(t);
-      const edit = fieldEdits[t];
-      if (edit.forward && editTime <= timeMs && (!latestForward || editTime > latestForward.time)) {
-        latestForward = { time: editTime, value: edit.value };
-      }
-    });
-    return latestForward?.value;
-  };
-
-  // equipId별로 시간 오름차순 정렬된 배열로 미리 인덱싱 (rows 변경 시 한 번만 계산).
-  // 재생 중 250ms마다 도는 currentEquipRows가 이걸 이진 탐색으로 훑어서, 데이터가 아주 많아도
-  // (예: 일주일치 엑셀) 매 tick마다 전체를 다시 스캔하지 않게 함 - 안 그러면 재생 중 브라우저가 멈춤
-  const sortedRowsByEquip = useMemo(() => {
-    const map = new Map();
-    rows.forEach(r => {
-      if (!map.has(r.equipId)) map.set(r.equipId, []);
-      map.get(r.equipId).push(r);
-    });
-    map.forEach(list => list.sort((a, b) => a.time.getTime() - b.time.getTime()));
-    return map;
-  }, [rows]);
 
   // 정렬된 배열에서 time <= cutoff인 가장 마지막(최신) 원소를 이진 탐색으로 찾음
   const findLatestAtOrBefore = (sortedList, cutoff) => {
@@ -764,59 +877,16 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     setEditedValues(prev => {
       const equipEdits = prev[equipId] || {};
       const fieldEdits = { ...(equipEdits[field] || {}) };
-      if (newValue === '') {
-        delete fieldEdits[anchorTime];
-      } else {
-        fieldEdits[anchorTime] = { value: newValue, forward: applyForward };
-      }
+      // 입력을 다 지우면(newValue === '') 수정 자체를 삭제했었는데, 그러면 이 시각의 값이 다시
+      // 원본(r.temperature 등)으로 계산돼 입력창이 지운 직후 원래 숫자로 되돌아가 버렸음(불편함의
+      // 원인). 삭제 대신 값 자체를 null로 등록해서 "비워진 상태"가 그대로 유지되게 함 - null은
+      // computeStatus 등에서 "값 없음"으로 취급돼 상태 판정에도 안전함
+      fieldEdits[anchorTime] = { value: newValue === '' ? null : newValue, forward: applyForward };
       return { ...prev, [equipId]: { ...equipEdits, [field]: fieldEdits } };
     });
-
-    // 온도/전력 수정을 독립적으로 판정 (온도만 상태를 좌우하면 전력 초과가 감지 안 되는 문제 방지)
-    const isTempField = field === 'temperature' || field === 'threshold';
-    const isPowerField = field === 'power' || field === 'powerThreshold';
-    if (!isTempField && !isPowerField) return;
-    if (newValue === '' || isNaN(newValue)) return;
-
-    const temperature = field === 'temperature' ? newValue : row.temperature;
-    const threshold = field === 'threshold' ? newValue : row.threshold;
-    const power = field === 'power' ? newValue : row.power;
-    const powerThreshold = field === 'powerThreshold' ? newValue : row.powerThreshold;
-
-    const metric = isTempField ? 'temperature' : 'power';
-    const newStatus = isTempField ? computeStatus(temperature, threshold) : computeStatus(power, powerThreshold);
-    const prevStatus = isTempField ? row.status : row.powerStatus;
-    const alarmValue = isTempField ? temperature : power;
-    const alarmThreshold = isTempField ? threshold : powerThreshold;
-
-    if (isWarningStatus(newStatus) && newStatus !== prevStatus) {
-      // 재생 중 자동으로 감지된 알람/로그는 시나리오 경과시간(mm:ss)으로 표시되는데, 수동 수정은
-      // 지금까지 실제 현재 시각(수정한 시점의 벽시계 시각)으로 표시되고 있어서 서로 형식이 달랐음.
-      // 수정한 행 자체의 시나리오 경과시간으로 통일함
-      const editedAt = new Date();
-      const timeLabel = formatMmSs(realToCompressed(row.time.getTime()));
-      const cardId = `manual-${metric}-${equipId}-${editedAt.getTime()}`;
-      setSimAlarms(p => [...p, {
-        id: cardId,
-        equipId,
-        equipName: row.equipName,
-        time: timeLabel,
-        value: alarmValue,
-        threshold: alarmThreshold,
-        location: row.location || '-',
-        metric,
-      }].slice(-MAX_SIM_ALARMS));
-      setSimLogs(p => [...p, {
-        id: `log-${cardId}`,
-        time: timeLabel,
-        type: 'warning',
-        equipName: row.equipName,
-        message: `${newStatus === '위험' ? '임계값 초과 감지' : '임계값 근접 감지'} (${newStatus}) [수동 수정 - ${formatClockTime(editedAt)} 편집]`,
-        value: alarmValue,
-        threshold: alarmThreshold,
-        metric,
-      }].slice(-MAX_SIM_LOGS));
-    }
+    // 수정 즉시 알람을 띄우지 않음 - editedTransitionEvents/mergedTransitionEvents가 이 수정을
+    // 반영한 전환 이벤트를 다시 계산해두면, 재생 위치가 실제로 그 시각을 지날 때(이미 지난
+    // 시각이면 지금 바로) 다른 자동 감지 알람과 똑같은 경로로 자연스럽게 표시됨
   };
 
   // 셀 수정 되돌리기 - 되돌리기 스택의 마지막 스냅샷으로 editedValues를 복원
@@ -1836,6 +1906,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
               isDarkMode={isDarkMode}
               showTemperatureTab={hasTemperatureData}
               showPowerTab={hasPowerData}
+              statusInfoLines={SIMULATION_STATUS_INFO_LINES}
             />
           </div>
         </div>

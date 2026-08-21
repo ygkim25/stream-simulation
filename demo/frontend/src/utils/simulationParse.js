@@ -51,11 +51,14 @@ const parseTimeValue = (raw) => {
   return null;
 };
 
-// 백엔드(EquipmentStatusService.determineStatus)와 동일한 임계값 판정 규칙
+// 임계값을 넘으면(초과/도달) 무조건 위험, 경고는 아직 안 넘었지만 근접한(임계값의 90% 이상) 구간에만 표시.
+// (기존엔 백엔드 판정 규칙을 그대로 따라 임계값을 넘어도 1.1배 미만이면 경고로만 떴었는데,
+// 시뮬레이션 모드에서는 그게 실제와 안 맞는다는 피드백으로 시뮬레이션 쪽만 이렇게 바꿈 - 실시간
+// 모드의 상태는 여전히 백엔드가 내려주는 값을 그대로 씀)
 export const computeStatus = (temperature, threshold) => {
   if (temperature == null || threshold == null || isNaN(temperature) || isNaN(threshold)) return '정상';
-  if (temperature >= threshold * 1.1) return '위험';
-  if (temperature >= threshold) return '경고';
+  if (temperature >= threshold) return '위험';
+  if (temperature >= threshold * 0.9) return '경고';
   return '정상';
 };
 
