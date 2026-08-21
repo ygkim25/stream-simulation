@@ -998,8 +998,10 @@ const RealtimeScreen = ({
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
 
-  // 설비별 "오늘 00:00부터 지금까지" 상태 흐름을 온도/전력 각각 색 구간으로 계산. 날짜 범위
-  // 선택기와 무관하게 항상 오늘 자정을 왼쪽 끝, "지금"을 오른쪽 끝으로 해서 주기적으로 다시 계산함
+  // 설비별 "데이터 수집 시작 시점부터 지금까지" 상태 흐름을 온도/전력 각각 색 구간으로 계산.
+  // 날짜 범위 선택기와 무관하게 항상 "지금"을 오른쪽 끝으로 해서 주기적으로 다시 계산함
+  // (왼쪽 끝은 전체 설비 중 가장 이른 수신 시각 - 자정을 그대로 쓰면 늦게 켰을 때 실제 구간이
+  // 얇게 몰려 보이므로, 아래 load()에서 매번 다시 계산함)
   const [equipTimelines, setEquipTimelines] = useState(() => loadCachedTimelines() || {});
   // 첫 조회가 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 표시를 해줌
   // (캐시된 값이 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작함)
@@ -1018,9 +1020,11 @@ const RealtimeScreen = ({
         // (한 레코드가 둘 다 갖지는 않음) 값이 있는 쪽 맵에만 넣어서 도메인별로 분리함
         const byEquipTemp = new Map();
         const byEquipPower = new Map();
+        let earliestMs = endMs;
         records.forEach(r => {
           if (!r.receivedAt) return;
           const t = new Date(r.receivedAt).getTime();
+          if (t < earliestMs) earliestMs = t;
           const point = { time: t, color: getStatusMeta(r.status).color };
           if (r.temperature != null) {
             if (!byEquipTemp.has(r.equipId)) byEquipTemp.set(r.equipId, []);
@@ -1032,8 +1036,15 @@ const RealtimeScreen = ({
           }
         });
 
-        const tempSegments = buildTimelineSegments(byEquipTemp, startMs, endMs);
-        const powerSegments = buildTimelineSegments(byEquipPower, startMs, endMs);
+        // 자정부터 실제로 수집이 시작되기 전까지는 어느 설비에도 데이터가 없는 죽은 구간이라,
+        // 그대로 자정을 왼쪽 끝으로 쓰면(특히 하루 중 늦게 켠 경우) 실제 상태 변화 구간이
+        // 막대 오른쪽 끝에 실처럼 얇게 몰려 보임 - 전체 설비 중 가장 이른 수신 시각을 공통
+        // 왼쪽 끝으로 써서(모든 행이 여전히 같은 축을 공유하므로 행 간 비교는 그대로 유지됨)
+        // 실제로 쌓인 구간이 막대 전체를 채우도록 함
+        const timelineStartMs = records.length ? earliestMs : startMs;
+
+        const tempSegments = buildTimelineSegments(byEquipTemp, timelineStartMs, endMs);
+        const powerSegments = buildTimelineSegments(byEquipPower, timelineStartMs, endMs);
         const equipIds = new Set([...Object.keys(tempSegments), ...Object.keys(powerSegments)]);
         const result = {};
         equipIds.forEach(equipId => {
