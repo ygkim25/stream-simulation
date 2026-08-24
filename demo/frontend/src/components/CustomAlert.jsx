@@ -1,9 +1,19 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 // ==========================================
 // 크롬 기본 alert() 대체용 커스텀 알림 팝업 (다크 / 라이트 모드 지원)
 // ==========================================
 const CustomAlert = ({ message, onClose, isDarkMode }) => {
+  // 엔터 키로도 확인 버튼을 누른 것과 동일하게 닫히게 함
+  useEffect(() => {
+    if (!message) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter') onClose?.();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [message, onClose]);
+
   if (!message) return null;
 
   return (

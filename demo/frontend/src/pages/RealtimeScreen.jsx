@@ -907,6 +907,11 @@ const RealtimeScreen = ({
 
       setNewRows([]);
       await fetchEquipments();
+      // 알람/로그는 웹소켓 tick에서 상태 전환이 감지될 때만(scheduleAlertsFetch) 새로 조회되는데,
+      // 임계값 저장은 REST PUT이라 그 경로를 타지 않음 - 그래서 그리드 색깔은 바로 바뀌어도
+      // 알람 패널은 다음 실제 수신 데이터가 들어올 때까지 계속 예전 상태로 남아있었음(버그 원인).
+      // 저장 직후 알람/로그도 같이 다시 조회해서 새 임계값 기준으로 바로 반영되게 함
+      await Promise.all([fetchAlerts(), fetchLogs()]);
 
       showAlert('저장되었습니다.');
       setTabMode('stream');
@@ -1373,7 +1378,11 @@ const RealtimeScreen = ({
                     {renderSortableHeader('equipId', 'ID', 'w-[9%]')}
                     {renderSortableHeader('equipName', '설비명', 'w-[18%]')}
                     {renderSortableHeader('location', '위치', 'w-[9%]')}
-                    {renderSortableHeader('receivedAt', '수신 시간', 'w-[16%]')}
+                    <th className={`w-[16%] px-3 border-b font-semibold text-center align-middle uppercase ${
+                      isDarkMode ? 'border-[#2A335A]' : 'border-gray-300'
+                    }`}>
+                      수신 시간
+                    </th>
                     {renderSortableHeader(metricTab, metricTab === 'temperature' ? '온도' : '전력', 'w-[11%]')}
                     {renderSortableHeader('threshold', metricTab === 'temperature' ? '임계값(온도)' : '임계값(전력)', 'w-[11%]')}
                     {renderSortableHeader('status', '상태', 'w-[14%]')}

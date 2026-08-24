@@ -9,7 +9,7 @@ import {
 // 올려놓는 방식 - 브라우저 네이티브 버튼이라 hover 커서/클릭이 백퍼센트 동작함.
 // chartRef(차트 전용, 우리가 그리는 버튼은 안 들어있음)를 관찰해서 버튼 자신의 재렌더링이
 // MutationObserver를 다시 트리거하는 무한루프를 피함. 좌표는 positionRef 기준으로 계산.
-const areRectsEqual = (a, b) => a.length === b.length && a.every((r, i) => r.left === b[i].left && r.top === b[i].top);
+const areRectsEqual = (a, b) => a.length === b.length && a.every((r, i) => r.left === b[i].left && r.top === b[i].top && r.elapsedMs === b[i].elapsedMs);
 
 // getBoundingClientRect()는 항상 화면에 실제로 렌더링된(= zoom 배율이 곱해진) 픽셀 값을 돌려주는데,
 // 그 값을 그대로 절대 위치 버튼의 left/top에 넣으면 CSS가 거기에 zoom을 한 번 더 곱해버려서
@@ -20,8 +20,19 @@ const getZoomFactor = () => {
   return Number.isFinite(z) && z > 0 ? z : 1;
 };
 
-const useWarningDotPositions = (positionRef, chartRef, refreshKey) => {
+const useWarningDotPositions = (positionRef, chartRef, warningPoints) => {
   const [rects, setRects] = useState([]);
+  // 매 렌더마다(커밋 전, 동기적으로) 최신 배열을 담아둠 - 이걸 useEffect로 넘기면 그 자체가
+  // 리액트 커밋 이후 한 박자 늦게(마이크로태스크로 먼저 도는 MutationObserver 콜백보다도 늦게)
+  // 실행되는 경우가 있어서, 아래 recompute()가 "방금 DOM에 반영된 최신 경고 지점 배열"이 아니라
+  // "그 전 렌더의" 배열을 참조하는 순간이 생김. 재생 중엔 창이 계속 밀리며 경고 지점이 앞에서
+  // 빠지고 뒤에서 새로 들어오길 반복하는데, 이 어긋난 순간에 recompute가 돌면 DOM에서 읽은 원
+  // 위치들과 실제 가리켜야 할 지점(elapsedMs)의 인덱스가 밀려서 버튼이 엉뚱한 위치/지점을
+  // 클릭 대상으로 잡거나 클릭이 씹히는 것처럼 보였음 -> 위치와 지점을 recompute 안에서 항상
+  // 같이(짝으로) 계산해서 반환하고, 그 짝을 만들 때 쓰는 배열도 매 렌더 최신 값으로 유지함
+  const warningPointsRef = useRef(warningPoints);
+  warningPointsRef.current = warningPoints;
+
   useEffect(() => {
     const chartEl = chartRef.current;
     const posEl = positionRef.current;
@@ -31,12 +42,17 @@ const useWarningDotPositions = (positionRef, chartRef, refreshKey) => {
       const posRect = posEl.getBoundingClientRect();
       // 원 위치 계산은 "경고 마커"에만 적용 (현재 위치를 나타내는 별도 점은 클릭 대상이 아님)
       const circles = chartEl.querySelectorAll('.warning-ref-dot circle.recharts-reference-dot-dot');
-      const next = Array.from(circles).map(c => {
+      const points = warningPointsRef.current;
+      const next = [];
+      circles.forEach((c, i) => {
+        const p = points[i];
+        if (!p) return;
         const r = c.getBoundingClientRect();
-        return {
+        next.push({
+          elapsedMs: p.elapsedMs,
           left: (r.left - posRect.left + r.width / 2) / zoom,
           top: (r.top - posRect.top + r.height / 2) / zoom,
-        };
+        });
       });
       setRects(prev => (areRectsEqual(prev, next) ? prev : next));
     };
@@ -57,8 +73,9 @@ const useWarningDotPositions = (positionRef, chartRef, refreshKey) => {
       mo.disconnect();
       ro.disconnect();
     };
+    // warningPoints 자체는 위에서 매 렌더 ref로 동기화하므로 여기 의존성엔 개수 변화만으로 충분함
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+  }, [warningPoints.length]);
   return rects;
 };
 
@@ -131,9 +148,12 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
   // 경고/위험이 새로 발생한 지점에만 원 마커를 표시함
   const warnColor = isDarkMode ? '#FBBF24' : '#D97706';
 
-  // 현재 재생 위치(=화면에 보이는 구간의 마지막 지점)를 굵은 점으로 표시
+  // 현재 재생 위치(=화면에 보이는 구간의 마지막 지점)를 굵은 점으로 표시. 아직 값이 하나도
+  // 없으면(재생 시작 전 등) 찍을 지점이 없으므로 아무것도 그리지 않음 - 그래도 차트 틀(축/격자)은
+  // 그대로 보여서 "빈 값이라도" 그래프 자체는 나와 있게 함
   const renderCurrentDot = (chartData, valueKey, color) => {
     const lastPoint = chartData[chartData.length - 1];
+    if (!lastPoint) return null;
     return (
       <ReferenceDot
         x={lastPoint.elapsedMs}
@@ -182,15 +202,15 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
   const powerTimeByElapsed = new Map(powerChartData.map(d => [d.elapsedMs, d.time]));
   const tempTickFormatter = (ms) => tempTimeByElapsed.get(ms) ?? '';
   const powerTickFormatter = (ms) => powerTimeByElapsed.get(ms) ?? '';
-  const tempDotRects = useWarningDotPositions(tempOuterRef, tempChartRef, `${tempChartData.length}-${tempWarningPoints.length}`);
-  const powerDotRects = useWarningDotPositions(powerOuterRef, powerChartRef, `${powerChartData.length}-${powerWarningPoints.length}`);
+  const tempDotRects = useWarningDotPositions(tempOuterRef, tempChartRef, tempWarningPoints);
+  const powerDotRects = useWarningDotPositions(powerOuterRef, powerChartRef, powerWarningPoints);
 
-  const renderClickTargets = (rects, warningPoints) => rects.map((r, i) => (
+  const renderClickTargets = (rects) => rects.map((r) => (
     <button
-      key={`hit-${i}`}
+      key={`hit-${r.elapsedMs}`}
       type="button"
       title="클릭하면 이 시점으로 재생 위치가 이동합니다"
-      onClick={() => onPointClick && warningPoints[i] && onPointClick(warningPoints[i].elapsedMs)}
+      onClick={() => onPointClick && onPointClick(r.elapsedMs)}
       style={{
         position: 'absolute',
         left: r.left - WARNING_HIT_SIZE / 2,
@@ -214,13 +234,9 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
     );
   }
 
-  if (data.length < 2) {
-    return (
-      <div className={`h-[150px] flex items-center justify-center text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-        재생하면 {equipName}의 추이가 실시간으로 그려집니다
-      </div>
-    );
-  }
+  // 예전엔 값이 2건 미만이면(재생 시작 직후 등) 그래프 대신 안내 문구만 보여줬는데, 설비를
+  // 고르자마자 축/격자만이라도 바로 보이는 게 나아서 데이터가 적어도(심지어 0건이어도) 차트
+  // 자체는 그대로 그림 - 실제 선/점은 위 renderCurrentDot 등에서 값이 있을 때만 그려짐
 
   return (
     <div className={`grid grid-cols-1 gap-4 ${showTemperature && showPower ? 'md:grid-cols-2' : ''}`}>
@@ -254,7 +270,7 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          {renderClickTargets(tempDotRects, tempWarningPoints)}
+          {renderClickTargets(tempDotRects)}
         </div>
       </div>
       )}
@@ -289,7 +305,7 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          {renderClickTargets(powerDotRects, powerWarningPoints)}
+          {renderClickTargets(powerDotRects)}
         </div>
       </div>
       )}

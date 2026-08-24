@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import CustomConfirm from './CustomConfirm';
+import { useClickOutside } from '../utils/useClickOutside';
+
+// 정상/경고/위험 판정 기준 설명 - 화면(실시간/시뮬레이션)마다 판정 규칙이 달라서 statusInfoLines로
+// 각 화면에서 실제 기준에 맞는 설명을 내려주고, 안 내려주면 이 기본값(실시간 기준)을 씀
+const DEFAULT_STATUS_INFO_LINES = [
+  { color: 'green', label: '정상', desc: '값이 임계값보다 5 이상 낮은 상태' },
+  { color: 'amber', label: '경고', desc: '값이 임계값보다 낮지만 그 차이가 5 미만인 상태(근접)' },
+  { color: 'red', label: '위험', desc: '값이 임계값 이상인 상태(도달/초과)' },
+];
 
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
@@ -10,7 +19,13 @@ const AlarmSidebar = ({
   // 외부(실시간 모니터링의 그리드 탭 등)에서 값을 내려주면 자체 토글 UI 없이 그 값을 그대로 따름
   // (그리드/설비별 온도추이/알람이 각자 따로 노는 토글이었는데, 그리드 탭 하나로 다같이 움직이도록 통일함)
   metricTab: controlledMetricTab,
+  statusInfoLines = DEFAULT_STATUS_INFO_LINES,
 }) => {
+  // "알람" 옆 정보 아이콘 - 누르면 정상/경고/위험 판정 기준을 보여주는 팝오버
+  const infoRef = useRef(null);
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  useClickOutside(infoRef, () => setIsInfoOpen(false), isInfoOpen);
+  const STATUS_DOT_CLASS = { green: 'bg-green-500', amber: 'bg-amber-500', red: 'bg-red-500' };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
@@ -69,13 +84,15 @@ const AlarmSidebar = ({
     }
   }, [filteredAlarms]);
 
-  // 온도/전력 탭을 전환하면 목록 DOM이 새로 마운트되면서(key={effectiveMetricTab}) 스크롤 위치가
-  // 0으로 초기화되는데, 위 effect의 "계속 맨 아래 붙어있기" 조건과 타이밍이 겹칠 수 있어
-  // 탭 전환 시에는 무조건 맨 아래(최신)로 이동하도록 별도로 확실히 처리함
+  // 온도/전력 탭 전환뿐 아니라 설비 필터(알람 클릭/필터 해제)가 걸리거나 풀릴 때도 목록 내용이
+  // 통째로 바뀌는데, 예전엔 이 경우엔 스크롤 위치를 안 건드려서 - 필터 걸기 전 스크롤 위치(예: 위쪽)가
+  // 그대로 남아있는 채 훨씬 짧아진 필터링 결과에 적용되며, 실제 알람 카드들이 화면 아래쪽으로
+  // 밀려 보이는 것처럼 느껴졌음(스크롤 가능 범위가 줄어든 만큼 브라우저가 위치를 보정하면서 생기는
+  // 현상). 탭 전환과 마찬가지로 무조건 맨 아래(최신)로 이동시켜 깔끔하게 리셋함
   useEffect(() => {
     scrollToBottom('auto');
     updateIsAtBottom(true);
-  }, [effectiveMetricTab]);
+  }, [effectiveMetricTab, selectedEquipName]);
 
   return (
     <div className={`w-full h-full rounded-xl flex flex-col overflow-hidden min-h-0 border transition-colors ${
@@ -186,7 +203,7 @@ const AlarmSidebar = ({
       {/* 알람 카드 리스트 영역 (오래된 순 → 최신순, 최신이 아래쪽) */}
       <div className="relative flex-1 min-h-0">
         <div
-          key={effectiveMetricTab}
+          key={`${effectiveMetricTab}-${selectedEquipName ?? 'all'}`}
           ref={listRef}
           onScroll={handleScroll}
           className={`alarm-slide-down h-full overflow-y-auto p-3 space-y-2 transition-colors ${
@@ -272,33 +289,66 @@ const AlarmSidebar = ({
       </div>
 
       {/* 설비 상태 요약 뱃지 영역 (정상/경고/위험 - 현재 설비 상태 기준) */}
-      <div className={`p-3 border-t flex justify-end gap-2 text-[11px] shrink-0 mt-auto transition-colors ${
+      <div className={`p-3 border-t flex items-center justify-between gap-2 text-[11px] shrink-0 mt-auto transition-colors ${
         isDarkMode ? 'bg-[#0F1526] border-[#1E253D]' : 'bg-gray-50 border-gray-200'
       }`}>
-        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
-          isDarkMode
-            ? 'bg-[#34D399]/10 text-[#34D399]'
-            : 'bg-green-50 text-green-700 border border-green-200'
-        }`}>
-          <span className="status-dot bg-green-500" />
-          정상 {counts.normal}
-        </span>
-        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
-          isDarkMode
-            ? 'bg-[#FBBF24]/10 text-[#FBBF24]'
-            : 'bg-amber-50 text-amber-700 border border-amber-200'
-        }`}>
-          <span className="status-dot bg-amber-500" />
-          경고 {counts.warning}
-        </span>
-        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
-          isDarkMode
-            ? 'bg-[#FB5D75]/10 text-[#FB5D75]'
-            : 'bg-red-50 text-red-600 border border-red-200'
-        }`}>
-          <span className="status-dot bg-red-500" />
-          위험 {counts.danger}
-        </span>
+        <div className="relative shrink-0" ref={infoRef}>
+          <button
+            type="button"
+            onClick={() => setIsInfoOpen(v => !v)}
+            title="정상/경고/위험 판정 기준"
+            className={`w-4 h-4 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC]' : 'text-gray-400 hover:text-gray-700'
+            }`}
+          >
+            <svg className="w-full h-full" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9" strokeWidth="1.75" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M12 11v5" />
+              <circle cx="12" cy="8" r="0.9" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+          {/* 아이콘이 패널 맨 아래에 있어서 팝오버를 아래로 열면 잘리므로 위쪽으로 열림 */}
+          {isInfoOpen && (
+            <div className={`absolute z-30 bottom-6 left-0 w-56 rounded-lg border p-3 text-[11px] shadow-lg space-y-1.5 ${
+              isDarkMode ? 'bg-[#12172A] border-[#232B45] text-[#B9C2DE]' : 'bg-white border-gray-200 text-gray-600'
+            }`}>
+              {statusInfoLines.map(line => (
+                <div key={line.label} className="flex items-start gap-1.5">
+                  <span className={`status-dot mt-1 shrink-0 ${STATUS_DOT_CLASS[line.color]}`} />
+                  <span>
+                    <b className={isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}>{line.label}</b> · {line.desc}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode
+              ? 'bg-[#34D399]/10 text-[#34D399]'
+              : 'bg-green-50 text-green-700 border border-green-200'
+          }`}>
+            <span className="status-dot bg-green-500" />
+            정상 {counts.normal}
+          </span>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode
+              ? 'bg-[#FBBF24]/10 text-[#FBBF24]'
+              : 'bg-amber-50 text-amber-700 border border-amber-200'
+          }`}>
+            <span className="status-dot bg-amber-500" />
+            경고 {counts.warning}
+          </span>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+            isDarkMode
+              ? 'bg-[#FB5D75]/10 text-[#FB5D75]'
+              : 'bg-red-50 text-red-600 border border-red-200'
+          }`}>
+            <span className="status-dot bg-red-500" />
+            위험 {counts.danger}
+          </span>
+        </div>
       </div>
 
       <CustomConfirm
