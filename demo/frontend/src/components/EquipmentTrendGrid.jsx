@@ -61,7 +61,7 @@ const STATUS_COLOR = {
 // 카드 하나를 독립된 컴포넌트로 분리하고 그 설비 값이 실제로 바뀐 경우에만 다시 그리게 함.
 // (예전엔 부모 하나가 24개 카드를 통째로 map으로 그려서, 설비 1개만 값이 바뀌어도 24개
 // AreaChart가 전부 다시 그려지며 계속 버벅였음)
-const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit, isReorderMode, isFirst, isLast, onMove }) => {
+const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit, isReorderMode, isDragging, isDragOver, onDragStart, onDragEnter, onDrop, onDragEnd }) => {
   // 큰 숫자/그래프 맨 끝 점은 IndexedDB 폴링 결과 대신 웹소켓으로 갓 들어온 실시간 값을
   // 바로 써서, 메인 그리드가 갱신되는 순간 이 카드도 같이 움직이게 함 (폴링 주기만큼
   // 뒤처져 "따로 논다"는 느낌이 들지 않도록)
@@ -98,12 +98,35 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
 
   return (
     <div
+      draggable={isReorderMode}
+      onDragStart={(e) => {
+        if (!isReorderMode) return;
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStart(eq.equipId);
+      }}
+      onDragEnter={(e) => {
+        if (!isReorderMode) return;
+        e.preventDefault();
+        onDragEnter(eq.equipId);
+      }}
+      onDragOver={(e) => {
+        if (!isReorderMode) return;
+        e.preventDefault(); // 이걸 안 하면 이 요소 위에서 onDrop 자체가 안 일어남
+      }}
+      onDrop={(e) => {
+        if (!isReorderMode) return;
+        e.preventDefault();
+        onDrop(eq.equipId);
+      }}
+      onDragEnd={() => { if (isReorderMode) onDragEnd(); }}
       onClick={isReorderMode ? undefined : () => onSelectEquip?.(eq.equipId, displayMetric)}
-      title={isReorderMode ? undefined : '클릭하면 자세히 보기'}
-      className={`group relative rounded-xl border overflow-hidden transition-all duration-300 ${isReorderMode ? '' : 'cursor-pointer hover:shadow-lg hover:-translate-y-0.5'} ${
-        isDarkMode
-          ? 'border-[#1E253D] hover:border-[#2A335A]'
-          : 'border-gray-200 hover:border-gray-300 shadow-sm'
+      title={isReorderMode ? '드래그해서 순서 변경' : '클릭하면 자세히 보기'}
+      className={`group relative rounded-xl border overflow-hidden transition-all duration-300 ${
+        isReorderMode ? 'cursor-move' : 'cursor-pointer hover:shadow-lg hover:-translate-y-0.5'
+      } ${isDragging ? 'opacity-40' : ''} ${
+        isDragOver
+          ? (isDarkMode ? 'border-[#22D3EE]' : 'border-green-500')
+          : (isDarkMode ? 'border-[#1E253D] hover:border-[#2A335A]' : 'border-gray-200 hover:border-gray-300 shadow-sm')
       }`}
       style={{
         background: isDarkMode
@@ -114,33 +137,14 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
       {/* 상태 컬러 액센트 바 */}
       <div className="absolute top-0 left-0 right-0 h-[2.5px]" style={{ backgroundColor: color, opacity: 0.85 }} />
 
-      {/* 순서 변경 모드: 카드 본문 클릭(상세보기)은 막되, 오른쪽 위에 배경 없이 화살표만 살짝 얹어둠 */}
+      {/* 순서 변경 모드: 드래그 가능하다는 걸 알려주는 그립 아이콘 (배경 없이 살짝 얹어둠) */}
       {isReorderMode && (
-        <div className="absolute top-1 right-1 z-20 flex items-center gap-0.5">
-          <button
-            type="button"
-            disabled={isFirst}
-            onClick={(e) => { e.stopPropagation(); onMove(eq.equipId, -1); }}
-            className={`text-[10px] font-bold leading-none transition-colors ${
-              isFirst
-                ? (isDarkMode ? 'text-[#3A4266] cursor-not-allowed' : 'text-gray-300 cursor-not-allowed')
-                : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC] cursor-pointer' : 'text-gray-400 hover:text-gray-800 cursor-pointer')
-            }`}
-          >
-            ◀
-          </button>
-          <button
-            type="button"
-            disabled={isLast}
-            onClick={(e) => { e.stopPropagation(); onMove(eq.equipId, 1); }}
-            className={`text-[10px] font-bold leading-none transition-colors ${
-              isLast
-                ? (isDarkMode ? 'text-[#3A4266] cursor-not-allowed' : 'text-gray-300 cursor-not-allowed')
-                : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC] cursor-pointer' : 'text-gray-400 hover:text-gray-800 cursor-pointer')
-            }`}
-          >
-            ▶
-          </button>
+        <div className={`absolute top-1 right-1 z-20 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-300'}`}>
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+            <circle cx="6" cy="5" r="1.3" /><circle cx="14" cy="5" r="1.3" />
+            <circle cx="6" cy="10" r="1.3" /><circle cx="14" cy="10" r="1.3" />
+            <circle cx="6" cy="15" r="1.3" /><circle cx="14" cy="15" r="1.3" />
+          </svg>
         </div>
       )}
 
@@ -220,8 +224,8 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
   if (prev.hasLoadedHistoryOnce !== next.hasLoadedHistoryOnce) return false;
   if (prev.basePoints !== next.basePoints) return false;
   if (prev.isReorderMode !== next.isReorderMode) return false;
-  if (prev.isFirst !== next.isFirst) return false;
-  if (prev.isLast !== next.isLast) return false;
+  if (prev.isDragging !== next.isDragging) return false;
+  if (prev.isDragOver !== next.isDragOver) return false;
   const valueKey = next.displayMetric === 'temperature' ? 'temperature' : 'power';
   const statusKey = next.displayMetric === 'temperature' ? 'status' : 'powerStatus';
   if (prev.eq[valueKey] !== next.eq[valueKey]) return false;
@@ -342,18 +346,46 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     sortedEquipmentsRef.current = sortedEquipments;
   }, [sortedEquipments]);
 
-  const handleMoveCard = useCallback((equipId, direction) => {
-    setCustomOrder(prev => {
-      const base = prev && prev.length > 0 ? prev : sortedEquipmentsRef.current.map(eq => eq.equipId);
-      const idx = base.indexOf(equipId);
-      if (idx === -1) return prev;
-      const targetIdx = idx + direction;
-      if (targetIdx < 0 || targetIdx >= base.length) return prev;
-      const next = [...base];
-      [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
-      saveCardOrder(next);
-      return next;
-    });
+  // 드래그로 순서 변경 - draggedIdRef는 항상 최신 드래그 대상을 들고 있어야 해서(핸들러 자체는
+  // memo 깨짐 방지를 위해 참조가 고정돼야 함) state와 별도로 ref로도 미러링해둠
+  const draggedIdRef = useRef(null);
+  const [draggedId, setDraggedId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+
+  const handleDragStart = useCallback((equipId) => {
+    draggedIdRef.current = equipId;
+    setDraggedId(equipId);
+  }, []);
+
+  const handleDragEnter = useCallback((equipId) => {
+    if (draggedIdRef.current && draggedIdRef.current !== equipId) setDragOverId(equipId);
+  }, []);
+
+  // 드롭한 카드가 있던 자리에 드래그하던 카드를 끼워넣음 (사이 카드들은 자연스럽게 한 칸씩 밀림)
+  const handleDrop = useCallback((targetEquipId) => {
+    const sourceId = draggedIdRef.current;
+    if (sourceId && sourceId !== targetEquipId) {
+      setCustomOrder(prev => {
+        const base = prev && prev.length > 0 ? prev : sortedEquipmentsRef.current.map(eq => eq.equipId);
+        const fromIdx = base.indexOf(sourceId);
+        const toIdx = base.indexOf(targetEquipId);
+        if (fromIdx === -1 || toIdx === -1) return prev;
+        const next = [...base];
+        next.splice(fromIdx, 1);
+        next.splice(toIdx, 0, sourceId);
+        saveCardOrder(next);
+        return next;
+      });
+    }
+    draggedIdRef.current = null;
+    setDraggedId(null);
+    setDragOverId(null);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    draggedIdRef.current = null;
+    setDraggedId(null);
+    setDragOverId(null);
   }, []);
 
   // equipId -> basePoints. historyMap/displayMetric이 바뀔 때만(=폴링될 때만) 다시 계산하고,
@@ -400,12 +432,6 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
           </svg>
         </button>
       </div>
-      {isReorderMode && (
-        <div className={`mb-2 -mt-1 text-[11px] shrink-0 ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-          카드의 ▲▼ 버튼으로 순서를 바꿀 수 있어요. 정한 순서는 이 브라우저에 저장돼서 다음에 열어도 유지됩니다.
-        </div>
-      )}
-
       {sortedEquipments.length === 0 ? (
         <div className={`flex-1 min-h-0 flex items-center justify-center text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
           데이터 없음
@@ -418,7 +444,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
             </div>
           )}
           <div className="grid grid-cols-2 gap-2.5 pr-1 pb-1">
-            {sortedEquipments.map((eq, i) => {
+            {sortedEquipments.map((eq) => {
               return (
                 <EquipTrendCard
                   key={eq.equipId}
@@ -430,9 +456,12 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
                   hasLoadedHistoryOnce={hasLoadedHistoryOnce}
                   unit={unit}
                   isReorderMode={isReorderMode}
-                  isFirst={i === 0}
-                  isLast={i === sortedEquipments.length - 1}
-                  onMove={handleMoveCard}
+                  isDragging={eq.equipId === draggedId}
+                  isDragOver={eq.equipId === dragOverId}
+                  onDragStart={handleDragStart}
+                  onDragEnter={handleDragEnter}
+                  onDrop={handleDrop}
+                  onDragEnd={handleDragEnd}
                 />
               );
             })}

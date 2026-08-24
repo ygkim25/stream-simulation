@@ -5,9 +5,9 @@ import { useClickOutside } from '../utils/useClickOutside';
 // 정상/경고/위험 판정 기준 설명 - 화면(실시간/시뮬레이션)마다 판정 규칙이 달라서 statusInfoLines로
 // 각 화면에서 실제 기준에 맞는 설명을 내려주고, 안 내려주면 이 기본값(실시간 기준)을 씀
 const DEFAULT_STATUS_INFO_LINES = [
-  { color: 'green', label: '정상', desc: '값이 임계값보다 낮은 상태' },
-  { color: 'amber', label: '경고', desc: '값이 임계값 이상, 임계값의 110% 미만인 상태' },
-  { color: 'red', label: '위험', desc: '값이 임계값의 110% 이상인 상태' },
+  { color: 'green', label: '정상', desc: '값이 임계값보다 5 이상 낮은 상태' },
+  { color: 'amber', label: '경고', desc: '값이 임계값보다 낮지만 그 차이가 5 미만인 상태(근접)' },
+  { color: 'red', label: '위험', desc: '값이 임계값 이상인 상태(도달/초과)' },
 ];
 
 // ==========================================
@@ -84,13 +84,15 @@ const AlarmSidebar = ({
     }
   }, [filteredAlarms]);
 
-  // 온도/전력 탭을 전환하면 목록 DOM이 새로 마운트되면서(key={effectiveMetricTab}) 스크롤 위치가
-  // 0으로 초기화되는데, 위 effect의 "계속 맨 아래 붙어있기" 조건과 타이밍이 겹칠 수 있어
-  // 탭 전환 시에는 무조건 맨 아래(최신)로 이동하도록 별도로 확실히 처리함
+  // 온도/전력 탭 전환뿐 아니라 설비 필터(알람 클릭/필터 해제)가 걸리거나 풀릴 때도 목록 내용이
+  // 통째로 바뀌는데, 예전엔 이 경우엔 스크롤 위치를 안 건드려서 - 필터 걸기 전 스크롤 위치(예: 위쪽)가
+  // 그대로 남아있는 채 훨씬 짧아진 필터링 결과에 적용되며, 실제 알람 카드들이 화면 아래쪽으로
+  // 밀려 보이는 것처럼 느껴졌음(스크롤 가능 범위가 줄어든 만큼 브라우저가 위치를 보정하면서 생기는
+  // 현상). 탭 전환과 마찬가지로 무조건 맨 아래(최신)로 이동시켜 깔끔하게 리셋함
   useEffect(() => {
     scrollToBottom('auto');
     updateIsAtBottom(true);
-  }, [effectiveMetricTab]);
+  }, [effectiveMetricTab, selectedEquipName]);
 
   return (
     <div className={`w-full h-full rounded-xl flex flex-col overflow-hidden min-h-0 border transition-colors ${
@@ -201,7 +203,7 @@ const AlarmSidebar = ({
       {/* 알람 카드 리스트 영역 (오래된 순 → 최신순, 최신이 아래쪽) */}
       <div className="relative flex-1 min-h-0">
         <div
-          key={effectiveMetricTab}
+          key={`${effectiveMetricTab}-${selectedEquipName ?? 'all'}`}
           ref={listRef}
           onScroll={handleScroll}
           className={`alarm-slide-down h-full overflow-y-auto p-3 space-y-2 transition-colors ${
