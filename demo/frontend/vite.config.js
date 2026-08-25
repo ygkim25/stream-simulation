@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       global: 'globalThis',
     },
     server: {
-      host: true,
+      host: env.VITE_DEV_HOST || '10.23.128.46',
       port: Number(env.VITE_DEV_PORT) || 5173,
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true },
