@@ -19,6 +19,7 @@ import { compareByEquipId, STATUS_SORT_ORDER } from '../utils/sortHelpers';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 import { exportToCsv } from '../utils/csvExport';
 import { getTodayStartMs, fetchHistoryFromBackend, mergeHistoryRecords } from '../utils/historyApi';
+import { EMPTY_EQUIP_ROW, mergeTempDto, mergeElecDto, mergeEquipmentLists } from '../utils/equipmentMerge';
 
 // 화면에 표시할 알람 최대 개수
 const MAX_ALARMS = 100;
@@ -94,42 +95,6 @@ const STATUS_FILTER_ACTIVE_CLASS = {
   normal: { dark: 'bg-[#34D399]/15 border-[#34D399]/40 text-[#34D399]', light: 'bg-green-50 border-green-300 text-green-700' },
   warning: { dark: 'bg-amber-400/15 border-amber-400/40 text-amber-400', light: 'bg-amber-50 border-amber-300 text-amber-600' },
   danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
-};
-
-// 백엔드가 온도/전력을 완전히 별개 도메인(threshold/status 필드명이 겹침)으로 내려주므로,
-// 한 행으로 합칠 때 전력 쪽은 powerThreshold/powerStatus로 이름을 바꿔서 온도 값과 안 섞이게 함
-const EMPTY_EQUIP_ROW = { temperature: null, threshold: null, status: null, power: null, powerThreshold: null, powerStatus: null };
-const mergeTempDto = (row, dto) => ({
-  ...row,
-  equipId: dto.equipId,
-  equipName: dto.equipName,
-  location: dto.location,
-  receivedAt: dto.receivedAt,
-  temperature: dto.temperature,
-  threshold: dto.threshold,
-  status: dto.status,
-});
-const mergeElecDto = (row, dto) => ({
-  ...row,
-  equipId: dto.equipId,
-  equipName: dto.equipName,
-  location: dto.location,
-  receivedAt: dto.receivedAt,
-  power: dto.power,
-  powerThreshold: dto.threshold,
-  powerStatus: dto.status,
-});
-// 같은 equipId의 온도/전력 응답 목록을 한 행씩으로 합쳐서 반환 (초기 목록 조회 시 사용)
-const mergeEquipmentLists = (tempList, elecList) => {
-  const byId = new Map();
-  tempList.forEach(dto => {
-    byId.set(dto.equipId, mergeTempDto({ ...EMPTY_EQUIP_ROW }, dto));
-  });
-  elecList.forEach(dto => {
-    const existing = byId.get(dto.equipId) || { ...EMPTY_EQUIP_ROW };
-    byId.set(dto.equipId, mergeElecDto(existing, dto));
-  });
-  return [...byId.values()];
 };
 
 // 온도/전력 API를 Promise.all로 묶으면 하나만 실패해도 둘 다 날아가고 느린 쪽 때문에 빠른 쪽도

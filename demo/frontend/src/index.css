@@ -133,6 +133,15 @@ button:focus-visible {
   outline: none;
 }
 
+/* 버튼마다 일일이 cursor-pointer를 안 넣어도 전부 마우스 오버 시 손가락 커서로 보이도록 공통 적용
+   (비활성 버튼은 그대로 not-allowed로 구분) */
+button:not(:disabled) {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
 /* ------------------------------------------
  * 실시간/시뮬레이션 화면 표(grid)들에서 공통으로 반복되던 조합을 클래스로 뺌 (여러 페이지에서
  * 같이 씀). 너비/높이·다크모드 테두리색·상태별 글자색처럼 칸마다 달라지는 부분만 className에서

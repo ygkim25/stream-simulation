@@ -7,6 +7,7 @@ import { API_BASE_URL } from '../utils/apiConfig';
 const NAV_ITEMS = [
   { value: 'realtime', label: '실시간 모니터링' },
   { value: 'simulation', label: '시뮬레이션' },
+  { value: 'plantmap', label: '설비 배치도' },
 ];
 
 const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
