@@ -4,6 +4,7 @@ import LoginScreen from './pages/LoginScreen';
 import MainScreen from './pages/MainScreen';
 import RealtimeScreen from './pages/RealtimeScreen';
 import SimulationScreen from './pages/SimulationScreen';
+import PlantMapScreen from './pages/PlantMapScreen';
 import MyPageModal from './components/MyPageModal'; 
 import FullLogModal from './components/FullLogModal';
 import { API_BASE_URL } from './utils/apiConfig';
@@ -146,6 +147,19 @@ export default function App() {
 
       {route === 'simulation' && (
         <SimulationScreen
+          user={user}
+          route={route}
+          setRoute={setRoute}
+          openMyPage={handleMyPageOpen}
+          isDarkMode={isDarkMode}
+          setIsDarkMode={setIsDarkMode}
+          isAlarmOn={isAlarmOn}
+          setIsAlarmOn={setIsAlarmOn}
+        />
+      )}
+
+      {route === 'plantmap' && (
+        <PlantMapScreen
           user={user}
           route={route}
           setRoute={setRoute}

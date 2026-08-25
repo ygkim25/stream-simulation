@@ -114,6 +114,32 @@ const MainScreen = ({ route, setRoute, user, openMyPage, isDarkMode, setIsDarkMo
           </p>
         </div>
 
+        {/* 설비 배치도 카드 */}
+        <div
+          onClick={() => setRoute('plantmap')}
+          className={`w-full max-w-[450px] h-[480px] rounded-2xl transition-all duration-300 cursor-pointer border flex flex-col items-center justify-center p-8 group relative overflow-hidden ${
+            isDarkMode
+              ? 'bg-[#12172A] border-[#1E253D] hover:border-amber-400/50 hover:bg-[#161D35] hover:shadow-[0_0_30px_rgba(251,191,36,0.1)]'
+              : 'bg-white border-gray-200 hover:border-gray-300 hover:shadow-xl hover:-translate-y-1'
+          }`}
+        >
+          <div className={`w-28 h-28 rounded-full flex items-center justify-center mb-8 transition-all duration-300 ${
+            isDarkMode
+              ? 'bg-[#0D1224] text-amber-400 border border-[#232B45] group-hover:bg-amber-400 group-hover:text-[#0A0E1A] group-hover:shadow-[0_0_20px_rgba(251,191,36,0.4)]'
+              : 'bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white'
+          }`}>
+            <svg className="w-14 h-14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+          </div>
+          <h2 className={`text-3xl font-bold mb-4 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>
+            설비 배치도
+          </h2>
+          <p className={`text-center leading-relaxed text-sm ${isDarkMode ? 'text-[#9FACC9]' : 'text-gray-500'}`}>
+            도면 위에 설비를 배치해서 위치별 상태(정상/경고/위험)를 한눈에 확인합니다.
+          </p>
+        </div>
+
       </div>
 
       {/* 비밀번호 변경 권장 안내 모달 */}
