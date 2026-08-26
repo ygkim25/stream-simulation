@@ -478,19 +478,19 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
             isDarkMode ? 'bg-[#34D399]/10 text-[#34D399]' : 'bg-green-50 text-green-700 border border-green-200'
           }`}>
             <span className="status-dot bg-green-500" />
-            정상 {statusCounts.normal}
+            정상 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{statusCounts.normal}</span>
           </span>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
             isDarkMode ? 'bg-[#FBBF24]/10 text-[#FBBF24]' : 'bg-amber-50 text-amber-700 border border-amber-200'
           }`}>
             <span className="status-dot bg-amber-500" />
-            경고 {statusCounts.warning}
+            경고 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{statusCounts.warning}</span>
           </span>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
             isDarkMode ? 'bg-[#FB5D75]/10 text-[#FB5D75]' : 'bg-red-50 text-red-600 border border-red-200'
           }`}>
             <span className="status-dot bg-red-500" />
-            위험 {statusCounts.danger}
+            위험 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{statusCounts.danger}</span>
           </span>
         </div>
       )}
