@@ -1,14 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import CustomConfirm from './CustomConfirm';
 import { useClickOutside } from '../utils/useClickOutside';
-
-// 정상/경고/위험 판정 기준 설명 - 화면(실시간/시뮬레이션)마다 판정 규칙이 달라서 statusInfoLines로
-// 각 화면에서 실제 기준에 맞는 설명을 내려주고, 안 내려주면 이 기본값(실시간 기준)을 씀
-const DEFAULT_STATUS_INFO_LINES = [
-  { color: 'green', label: '정상', desc: '값이 임계값보다 5 이상 낮은 상태' },
-  { color: 'amber', label: '경고', desc: '값이 임계값보다 낮지만 그 차이가 5 미만인 상태(근접)' },
-  { color: 'red', label: '위험', desc: '값이 임계값 이상인 상태(도달/초과)' },
-];
+import { STATUS_DOT_CLASS, DEFAULT_STATUS_INFO_LINES } from '../utils/statusStyles';
 
 // ==========================================
 // 우측 알람 패널 컴포넌트 (다크 / 라이트 모드 지원)
@@ -19,13 +12,14 @@ const AlarmSidebar = ({
   // 외부(실시간 모니터링의 그리드 탭 등)에서 값을 내려주면 자체 토글 UI 없이 그 값을 그대로 따름
   // (그리드/설비별 온도추이/알람이 각자 따로 노는 토글이었는데, 그리드 탭 하나로 다같이 움직이도록 통일함)
   metricTab: controlledMetricTab,
+  // 정상/경고/위험 판정 기준 설명 - 화면(실시간/시뮬레이션)마다 판정 규칙이 달라서 이 prop으로
+  // 각 화면에서 실제 기준에 맞는 설명을 내려주고, 안 내려주면 기본값(실시간 기준)을 씀
   statusInfoLines = DEFAULT_STATUS_INFO_LINES,
 }) => {
   // "알람" 옆 정보 아이콘 - 누르면 정상/경고/위험 판정 기준을 보여주는 팝오버
   const infoRef = useRef(null);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   useClickOutside(infoRef, () => setIsInfoOpen(false), isInfoOpen);
-  const STATUS_DOT_CLASS = { green: 'bg-green-500', amber: 'bg-amber-500', red: 'bg-red-500' };
   const listRef = useRef(null);
   const hasScrolledInitially = useRef(false);
 
@@ -330,7 +324,7 @@ const AlarmSidebar = ({
               : 'bg-green-50 text-green-700 border border-green-200'
           }`}>
             <span className="status-dot bg-green-500" />
-            정상 {counts.normal}
+            정상 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.normal}</span>
           </span>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
             isDarkMode
@@ -338,7 +332,7 @@ const AlarmSidebar = ({
               : 'bg-amber-50 text-amber-700 border border-amber-200'
           }`}>
             <span className="status-dot bg-amber-500" />
-            경고 {counts.warning}
+            경고 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.warning}</span>
           </span>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
             isDarkMode
@@ -346,7 +340,7 @@ const AlarmSidebar = ({
               : 'bg-red-50 text-red-600 border border-red-200'
           }`}>
             <span className="status-dot bg-red-500" />
-            위험 {counts.danger}
+            위험 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.danger}</span>
           </span>
         </div>
       </div>
