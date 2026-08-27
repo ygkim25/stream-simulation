@@ -202,3 +202,31 @@ button:disabled {
   height: 0.375rem;
   border-radius: 9999px;
 }
+
+/* ------------------------------------------
+ * 리포트 화면에서 숫자가 바뀔 때, 바뀐 그 숫자(또는 막대)만 스르륵 부드럽게 나타나는 효과
+ * (매번 값이 갱신될 때 "방금 바뀌었다"는 게 눈에 보이도록 - 튀어오르는 느낌은 없게)
+ * ------------------------------------------ */
+@keyframes report-pop {
+  0% { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+.report-pop {
+  animation: report-pop 1100ms ease-out;
+}
+
+/* 리포트 TOP5 그래프 - 값이 바뀐 막대만 왼쪽을 기준으로 스무스하게 다시 채워지고(한 번),
+ * 색은 눈에 잘 띄도록 원래 색<->강조색을 세 번 반짝임 */
+@keyframes report-bar-grow-scale {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+@keyframes report-bar-flash {
+  0%, 100% { fill: #FB5D75; }
+  50% { fill: #FBBF24; }
+}
+.report-bar-grow {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: report-bar-grow-scale 1100ms ease-out, report-bar-flash 1200ms ease-in-out 4;
+}

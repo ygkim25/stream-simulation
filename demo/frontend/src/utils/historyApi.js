@@ -17,35 +17,44 @@ const formatLocalDateTime = (date) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 };
 
-// 백엔드 히스토리 내보내기 응답(CSV, 쌍따옴표로 콤마/줄바꿈 포함 필드를 감싸는 표준 형식)을 파싱함
+// 쌍따옴표로 콤마/줄바꿈을 감싼 필드가 있을 때만 쓰는 정석 CSV 파서 (문자 하나씩 순회해서 느림)
+const parseCsvLineQuoted = (line) => {
+  const values = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else {
+        cur += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      values.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  values.push(cur);
+  return values;
+};
+
+// 백엔드 히스토리 내보내기 응답(CSV)을 파싱함. equipId/온도·전력/상태/시각 필드는 콤마나 쌍따옴표를
+// 포함할 일이 없으므로 대부분은 훨씬 빠른 split(',')로 처리하고, 혹시라도 쌍따옴표가 섞인 줄만
+// 정석 파서로 처리함 (최근 3일/7일처럼 행이 많을 때 파싱 시간이 눈에 띄게 줄어듦)
 const parseCsv = (text) => {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.length > 0);
   if (lines.length === 0) return [];
   const headers = lines[0].split(',');
+  const headerCount = headers.length;
   return lines.slice(1).map(line => {
-    const values = [];
-    let cur = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
-        } else {
-          cur += c;
-        }
-      } else if (c === '"') {
-        inQuotes = true;
-      } else if (c === ',') {
-        values.push(cur);
-        cur = '';
-      } else {
-        cur += c;
-      }
-    }
-    values.push(cur);
+    const values = line.indexOf('"') === -1 ? line.split(',') : parseCsvLineQuoted(line);
     const row = {};
-    headers.forEach((h, i) => { row[h] = values[i]; });
+    for (let i = 0; i < headerCount; i++) row[headers[i]] = values[i];
     return row;
   });
 };

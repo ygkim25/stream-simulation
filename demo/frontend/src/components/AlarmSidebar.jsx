@@ -138,10 +138,10 @@ const AlarmSidebar = ({
               </div>
             )}
 
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0 ${
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0 border ${
               isDarkMode
-                ? 'bg-[#FB5D75]/15 text-[#FB5D75]'
-                : 'bg-red-100 text-red-600 border border-red-200'
+                ? 'bg-[#FB5D75]/15 text-[#FB5D75] border-transparent'
+                : 'bg-red-100 text-red-600 border-red-200'
             }`}>
               {filteredAlarms.length}
             </span>
@@ -318,26 +318,26 @@ const AlarmSidebar = ({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold border ${
             isDarkMode
-              ? 'bg-[#34D399]/10 text-[#34D399]'
-              : 'bg-green-50 text-green-700 border border-green-200'
+              ? 'bg-[#34D399]/10 text-[#34D399] border-transparent'
+              : 'bg-green-50 text-green-700 border-green-200'
           }`}>
             <span className="status-dot bg-green-500" />
             정상 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.normal}</span>
           </span>
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold border ${
             isDarkMode
-              ? 'bg-[#FBBF24]/10 text-[#FBBF24]'
-              : 'bg-amber-50 text-amber-700 border border-amber-200'
+              ? 'bg-[#FBBF24]/10 text-[#FBBF24] border-transparent'
+              : 'bg-amber-50 text-amber-700 border-amber-200'
           }`}>
             <span className="status-dot bg-amber-500" />
             경고 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.warning}</span>
           </span>
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold ${
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold border ${
             isDarkMode
-              ? 'bg-[#FB5D75]/10 text-[#FB5D75]'
-              : 'bg-red-50 text-red-600 border border-red-200'
+              ? 'bg-[#FB5D75]/10 text-[#FB5D75] border-transparent'
+              : 'bg-red-50 text-red-600 border-red-200'
           }`}>
             <span className="status-dot bg-red-500" />
             위험 <span className="inline-block min-w-[1.6em] text-right tabular-nums">{counts.danger}</span>

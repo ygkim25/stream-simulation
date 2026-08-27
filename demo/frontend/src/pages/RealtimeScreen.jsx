@@ -47,6 +47,24 @@ const saveCachedTimelines = (result) => {
   }
 };
 
+// 즐겨찾기(핀 고정)한 설비 ID 목록 - 이 브라우저에만 저장 (설비 배치도의 카드 순서 저장과 동일한 패턴)
+const FAVORITES_KEY = 'realtimeFavoriteEquipIds';
+const loadFavoriteIds = () => {
+  try {
+    const arr = JSON.parse(localStorage.getItem(FAVORITES_KEY));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+};
+const saveFavoriteIds = (ids) => {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids));
+  } catch {
+    // localStorage를 못 쓰는 환경이면 이번 세션 동안만(메모리) 유지됨
+  }
+};
+
 // 설비 하나에 대해 [{time, color}] 목록을, 시간순 색 구간(전체 흐름 바에 그대로 넘길 수 있는 형태)으로 변환
 const buildTimelineSegments = (byEquip, startMs, endMs) => {
   const result = {};
@@ -148,6 +166,15 @@ const RealtimeScreen = ({
   // ID / 설비명 검색어
   const [equipSearch, setEquipSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'normal' | 'warning' | 'danger'
+  // 즐겨찾기(핀 고정)한 설비 - 정렬 결과와 무관하게 항상 목록 맨 위로 올림
+  const [favoriteIds, setFavoriteIds] = useState(() => loadFavoriteIds());
+  const toggleFavorite = (equipId) => {
+    setFavoriteIds(prev => {
+      const next = prev.includes(equipId) ? prev.filter(id => id !== equipId) : [...prev, equipId];
+      saveFavoriteIds(next);
+      return next;
+    });
+  };
 
   // 표 헤더 클릭 정렬 (null이면 ID 오름차순 기본 정렬)
   const [sortColumn, setSortColumn] = useState(null);
@@ -956,8 +983,16 @@ const RealtimeScreen = ({
       const targetLabel = STATUS_FILTER_LABELS[statusFilter];
       list = list.filter(eq => getStatusMeta(metricTab === 'temperature' ? eq.status : eq.powerStatus).label === targetLabel);
     }
+    if (favoriteIds.length > 0) {
+      // 지금 정렬/필터된 순서는 그대로 두고 즐겨찾기만 맨 위로 올림
+      // (각 그룹 내부의 상대 순서는 filter가 원래 순서를 유지하므로 그대로 보존됨)
+      const favSet = new Set(favoriteIds);
+      const favs = list.filter(eq => favSet.has(eq.equipId));
+      const rest = list.filter(eq => !favSet.has(eq.equipId));
+      list = [...favs, ...rest];
+    }
     return list;
-  }, [sortedEquipments, equipSearch, statusFilter, metricTab]);
+  }, [sortedEquipments, equipSearch, statusFilter, metricTab, favoriteIds]);
 
   // 현재 설비 상태 기준 정상/경고/위험 개수 (알람 패널 요약 뱃지용, 온도/전력 탭에 따라 다르게 집계)
   const statusCounts = equipments.reduce((acc, eq) => {
@@ -1471,8 +1506,24 @@ const RealtimeScreen = ({
                                     : (isDarkMode ? 'hover:bg-[#0F1526] border-l-transparent' : 'hover:bg-gray-50 border-l-transparent')
                         }`}
                       >
-                        <td className={`px-3 py-0 h-[52px] font-mono text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                          #{String(eq.equipId).padStart(3, '0')}
+                        <td className={`px-1 py-0 h-[52px] font-mono text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); toggleFavorite(eq.equipId); }}
+                              title={favoriteIds.includes(eq.equipId) ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+                              className={`shrink-0 transition-colors cursor-pointer ${
+                                favoriteIds.includes(eq.equipId)
+                                  ? 'text-amber-400 hover:text-amber-500'
+                                  : (isDarkMode ? 'text-[#2A335A] hover:text-[#5C6584]' : 'text-gray-200 hover:text-gray-400')
+                              }`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill={favoriteIds.includes(eq.equipId) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.75">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.98 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+                              </svg>
+                            </button>
+                            <span>#{String(eq.equipId).padStart(3, '0')}</span>
+                          </div>
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
                           <div className="flex items-center justify-center h-full">
