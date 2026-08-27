@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { value: 'realtime', label: '실시간 모니터링' },
   { value: 'simulation', label: '시뮬레이션' },
   { value: 'plantmap', label: '설비 배치도' },
+  { value: 'report', label: '설비 통계' },
 ];
 
 const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
@@ -34,12 +35,12 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, 
     }
   };
   return (
-    <header className={`h-[64px] border-b flex items-center justify-between px-6 shrink-0 transition-colors ${
-      isDarkMode 
-        ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]' 
+    <header className={`h-[64px] border-b grid grid-cols-[1fr_auto_1fr] items-center px-6 shrink-0 transition-colors ${
+      isDarkMode
+        ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC]'
         : 'bg-white border-gray-200 text-gray-800 shadow-sm'
     }`}>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 justify-self-start">
         <h1
           className="flex items-center gap-2.5 cursor-pointer group"
           onClick={() => setRoute('main')}
@@ -56,27 +57,28 @@ const Header = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, 
             WeCT
           </span>
         </h1>
-        {/* 헤더에서 바로 모드 전환 (메인 화면 안 거치고 실시간/시뮬레이션 바로 이동).
-            헤더 전체 높이만큼 늘려서, 활성 탭의 밑줄이 헤더 하단 테두리에 딱 붙게 함 */}
-        <nav className="hidden md:flex items-stretch gap-6 self-stretch ml-4">
-          {NAV_ITEMS.map(item => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setRoute(item.value)}
-              className={`flex items-center text-[13px] font-bold tracking-wide border-b-2 transition-all outline-none cursor-pointer hover:scale-110 ${
-                route === item.value
-                  ? (isDarkMode ? 'text-[#22D3EE] border-[#22D3EE]' : 'text-green-700 border-green-700')
-                  : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border-transparent' : 'text-gray-500 hover:text-gray-800 border-transparent')
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
       </div>
 
-      <div className="flex items-center gap-3">
+      {/* 헤더에서 바로 모드 전환 (메인 화면 안 거치고 실시간/시뮬레이션 바로 이동).
+          헤더 전체 높이만큼 늘려서, 활성 탭의 밑줄이 헤더 하단 테두리에 딱 붙게 함 */}
+      <nav className="hidden md:flex items-stretch gap-8 self-stretch justify-self-center">
+        {NAV_ITEMS.map(item => (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => setRoute(item.value)}
+            className={`flex items-center px-4 text-[13px] font-bold tracking-wide border-b-2 transition-all outline-none cursor-pointer hover:scale-110 ${
+              route === item.value
+                ? (isDarkMode ? 'text-[#22D3EE] border-[#22D3EE]' : 'text-green-700 border-green-700')
+                : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border-transparent' : 'text-gray-500 hover:text-gray-800 border-transparent')
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="flex items-center gap-3 justify-self-end">
         {/* 다크 / 라이트 모드 토글 버튼 */}
         <button
           onClick={() => setIsDarkMode(!isDarkMode)}
