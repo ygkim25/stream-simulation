@@ -32,6 +32,7 @@ public class CriticalAlertMailService {
                                    double value, double threshold) {
         List<Login> admins = loginRepository.findByRoleIgnoreCaseAndAlarmEnableIgnoreCase("admin", "on");
         if (admins.isEmpty()) {
+            //메일 전송 실패 콘솔 로그 제거
             return;
         }
 
