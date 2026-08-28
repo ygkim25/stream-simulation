@@ -893,9 +893,31 @@ const RealtimeScreen = ({
     const payload = [...existingPayload, ...newRowsPayload];
     const updateUrl = `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
 
+    // 설비명/위치는 온도·전력 두 테이블에 각각 따로 저장돼있어서, 지금 탭 쪽만 저장하면 반대
+    // 테이블엔 옛날 값이 그대로 남아 서로 어긋남. 그래서 반대 도메인에도 데이터가 있는 설비는
+    // equipName/location만(임계값/측정값은 안 건드림 - 백엔드가 null인 필드는 그냥 넘어가므로
+    // 안전함) 반대쪽 update API로도 같이 보내서 두 테이블을 동기화함. 반대 도메인에 아직 데이터가
+    // 없는 설비(방금 만든 신규 행 포함)는 "신규 설비" 취급돼 필수값 에러가 나므로 보내지 않음
+    const otherExistingPayload = Object.entries(editedFields)
+      .filter(([equipId]) => {
+        const eq = equipments.find(e => e.equipId === equipId);
+        return eq && (isTemp
+          ? (eq.power != null || eq.powerThreshold != null || eq.powerStatus != null)
+          : (eq.temperature != null || eq.threshold != null || eq.status != null));
+      })
+      .map(([equipId, fields]) => ({
+        equipId,
+        equipName: fields.equipName,
+        location: fields.location,
+      }));
+    const otherUpdateUrl = `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'elec' : 'temp'}/update`;
+
     try {
       const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
       await axios.put(updateUrl, payload, { headers });
+      if (otherExistingPayload.length > 0) {
+        await axios.put(otherUpdateUrl, otherExistingPayload, { headers });
+      }
 
       setNewRows([]);
       await fetchEquipments();

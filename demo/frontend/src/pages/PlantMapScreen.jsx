@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
-import CustomAlert from '../components/CustomAlert';
 import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentCompareModal from '../components/EquipmentCompareModal';
@@ -12,17 +11,14 @@ import { EMPTY_EQUIP_ROW, mergeTempDto, mergeElecDto, mergeEquipmentLists } from
 import { saveToDB } from '../utils/indexedDb';
 import { useClickOutside } from '../utils/useClickOutside';
 
-// 배치도 이미지/좌표는 백엔드 없이 이 브라우저에만 저장함 (카드 순서 저장과 동일한 패턴) -
+// 배치도 이미지는 회사 건물 도면(고정 SVG)을 그대로 씀 - 업로드 기능은 없앰.
+// 설비 좌표/구역은 백엔드 없이 이 브라우저에만 저장함 (카드 순서 저장과 동일한 패턴) -
 // 다른 기기/사용자와는 공유되지 않지만, 여러 사용자가 같은 배치도를 봐야 하는 시점이 오면 그때
 // 백엔드 테이블로 옮기면 됨
-const IMAGE_KEY = 'plantMapImage';
+const FLOORPLAN_IMAGE_URL = '/test-floorplan.svg';
 const POSITIONS_KEY = 'plantMapPositions';
 const ZONES_KEY = 'plantMapZones';
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // localStorage 용량 보호용 상한
 
-const loadStoredImage = () => {
-  try { return localStorage.getItem(IMAGE_KEY) || null; } catch { return null; }
-};
 const loadStoredPositions = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(POSITIONS_KEY));
@@ -58,17 +54,15 @@ const ZONE_BORDER_CLASS = {
 
 const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const [equipments, setEquipments] = useState([]);
-  const [image, setImage] = useState(() => loadStoredImage());
+  const image = FLOORPLAN_IMAGE_URL;
   const [positions, setPositions] = useState(() => loadStoredPositions());
   const [isEditMode, setIsEditMode] = useState(false);
   const [metricTab, setMetricTab] = useState('temperature');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
-  const [alertMessage, setAlertMessage] = useState('');
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
   // 배치되지 않은 설비 트레이 - 도면 이미지 위 오버레이라 열고 닫아도 도면 크기엔 영향 없음
   const [isTrayOpen, setIsTrayOpen] = useState(true);
-  const [isFileDragOver, setIsFileDragOver] = useState(false);
   // "설비 배치도" 옆 정보 아이콘 - 누르면 정상/경고/위험 판정 기준을 보여주는 팝오버
   // (AlarmSidebar와 동일한 UX, 같은 utils/statusStyles.js 기본값을 그대로 씀)
   const infoRef = useRef(null);
@@ -119,33 +113,9 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   useClickOutside(zonePopoverRef, () => setOpenZoneId(null), openZoneId !== null);
 
   const mapRef = useRef(null);
-  const fileInputRef = useRef(null);
-  // dragenter/dragleave는 자식 요소 경계를 넘나들 때도 계속 발생해서, 단순 불리언으로만
-  // 관리하면 자식 위를 지날 때마다 하이라이트가 깜빡임 - 진입/이탈 횟수를 세서 0일 때만 끔
-  const dragCounterRef = useRef(0);
-
-  // OS 파일 탐색기에서 끌어온 파일 드래그인지 판별 (설비 칩 드래그는 dataTransfer에 파일이 없음)
-  const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
-
-  const handleDragEnterZone = (e) => {
-    if (!isEditMode || !isFileDrag(e)) return;
-    e.preventDefault();
-    dragCounterRef.current += 1;
-    setIsFileDragOver(true);
-  };
-  const handleDragLeaveZone = () => {
-    if (dragCounterRef.current === 0) return;
-    dragCounterRef.current -= 1;
-    if (dragCounterRef.current === 0) setIsFileDragOver(false);
-  };
-  const resetFileDragState = () => {
-    dragCounterRef.current = 0;
-    setIsFileDragOver(false);
-  };
 
   // 도면 컨테이너 크기를 실시간으로 추적 (편집모드 토글로 툴바/트레이가 붙었다 떨어지거나
-  // 창 크기가 바뀔 때마다 다시 계산되어야 함) - mapRef는 이미지가 있을 때만 마운트되므로 image를
-  // deps에 넣어 이미지가 새로 생길 때 다시 관찰을 붙임
+  // 창 크기가 바뀔 때마다 다시 계산되어야 함)
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return undefined;
@@ -157,7 +127,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [image]);
+  }, []);
 
   // object-contain 규칙대로 "컨테이너 중 실제 이미지가 차지하는 영역"을 비율(0~1)로 계산.
   // 절대 px가 아니라 비율만 다루는 이유: 컨테이너 실제 px 크기는 ResizeObserver(레이아웃 단계)로,
@@ -544,56 +514,6 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     };
   }, [user?.token]);
 
-  const handleImageButtonClick = () => fileInputRef.current?.click();
-
-  // 파일 선택창(input)과 드래그&드롭(onDrop) 둘 다 여기로 모아서 처리
-  const processImageFile = (file) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setAlertMessage('이미지 파일만 업로드할 수 있습니다.');
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setAlertMessage('이미지 용량이 너무 큽니다. 3MB 이하 이미지를 사용해주세요.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result;
-      try {
-        localStorage.setItem(IMAGE_KEY, dataUrl);
-        setImage(dataUrl);
-      } catch {
-        setAlertMessage('이미지를 저장하지 못했습니다. 더 작은 이미지를 사용해주세요.');
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    processImageFile(file);
-  };
-
-  // 도면 영역에 파일을 드롭했을 때(탐색기에서 끌어온 이미지) - 설비 배치는 포인터 이벤트
-  // (handleEquipPointerDown + 위 useEffect)로 별도 처리하므로 여기선 이미지 교체만 다룸
-  const handleDropOnMap = (e) => {
-    e.preventDefault();
-    resetFileDragState();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processImageFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleDropOnEmptyState = (e) => {
-    e.preventDefault();
-    resetFileDragState();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processImageFile(e.dataTransfer.files[0]);
-    }
-  };
-
   const handleResetPositions = () => {
     setIsResetConfirmOpen(false);
     setPositions({});
@@ -601,8 +521,22 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     setMultiSelectedIds([]);
   };
 
-  // 아직 배치 안 된 설비들만 도면 위 아무 데나(10~90% 범위 - 가장자리에 딱 붙어 라벨이
-  // 잘리지 않도록) 한 번에 뿌림. 이미 배치된 것들은 건드리지 않음
+  // 구역 안 아무 지점이나 하나 뽑음 (라벨이 구역 밖으로 안 튀어나오게 구역 크기의 15% 안쪽만 씀.
+  // 구역이 너무 작아서 안쪽 여백만으로도 자리가 안 나오면 그냥 구역 정중앙에 둠)
+  const randomPointInZone = (zone) => {
+    const insetX = zone.widthPct * 0.15;
+    const insetY = zone.heightPct * 0.15;
+    const spanX = Math.max(zone.widthPct - insetX * 2, 0);
+    const spanY = Math.max(zone.heightPct - insetY * 2, 0);
+    return {
+      xPct: zone.xPct + insetX + Math.random() * spanX,
+      yPct: zone.yPct + insetY + Math.random() * spanY,
+    };
+  };
+
+  // 아직 배치 안 된 설비들을 한 번에 뿌림 - DB의 위치(location) 값과 이름이 같은 구역이 있으면
+  // 그 구역 안에 자동으로 배치하고(구역 이름을 실제 위치명과 똑같이 지어뒀다는 전제 - 예: "A동"),
+  // 매칭되는 구역이 없는 설비만 도면 아무 데나(10~90% 범위) 흩뿌림. 이미 배치된 것들은 안 건드림
   const handleRandomPlace = () => {
     const placed = new Set(Object.keys(positions));
     const toPlace = equipments.filter(eq => !placed.has(eq.equipId));
@@ -610,8 +544,28 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     setPositions(prev => {
       const next = { ...prev };
       toPlace.forEach(eq => {
-        next[eq.equipId] = { xPct: 10 + Math.random() * 80, yPct: 10 + Math.random() * 80 };
+        const matchedZone = zones.find(z => z.name === eq.location);
+        next[eq.equipId] = matchedZone
+          ? randomPointInZone(matchedZone)
+          : { xPct: 10 + Math.random() * 80, yPct: 10 + Math.random() * 80 };
       });
+      savePositions(next);
+      return next;
+    });
+  };
+
+  // 배치 안 된 설비 중 location이 이 구역 이름과 같은 것만 골라서 이 구역 안에만 뿌림
+  // (특정 구역 하나만 수동으로 다시 채우고 싶을 때 씀)
+  const getUnplacedEquipmentsForZone = (zone) => {
+    const placed = new Set(Object.keys(positions));
+    return equipments.filter(eq => !placed.has(eq.equipId) && eq.location === zone.name);
+  };
+  const handleRandomPlaceInZone = (zone) => {
+    const toPlace = getUnplacedEquipmentsForZone(zone);
+    if (toPlace.length === 0) return;
+    setPositions(prev => {
+      const next = { ...prev };
+      toPlace.forEach(eq => { next[eq.equipId] = randomPointInZone(zone); });
       savePositions(next);
       return next;
     });
@@ -666,8 +620,17 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     handleEquipPointerDown(equipId, 'marker')(e);
   };
 
+  // 배치된 설비 목록은 "저장해둔 위치" 기준으로 만듦(equipments 기준으로 필터링하지 않음) -
+  // equipments는 REST/웹소켓 응답이 들어오는 대로 채워지는 목록이라, 새로고침 직후처럼 아직
+  // 그 설비의 실시간 데이터가 한 번도 안 온 시점엔 목록에 없을 수 있음. equipments 기준으로
+  // 필터링하면 이 경우 위치는 그대로인데 마커만 잠깐(또는 계속) 안 보이는 것처럼 됨 - 그래서
+  // 실시간 데이터가 아직 없는 설비도 일단 기본값(정상 취급)으로 마커를 그리고, 데이터가 도착하면
+  // 자연스럽게 실제 상태로 바뀌게 함
   const placedIds = new Set(Object.keys(positions));
-  const placedEquipments = equipments.filter(eq => placedIds.has(eq.equipId));
+  const equipmentById = new Map(equipments.map(eq => [eq.equipId, eq]));
+  const placedEquipments = Object.keys(positions).map(id => (
+    equipmentById.get(id) || { ...EMPTY_EQUIP_ROW, equipId: id, equipName: id }
+  ));
   const unplacedEquipments = equipments.filter(eq => !placedIds.has(eq.equipId));
 
   const selectedEquip = equipments.find(eq => eq.equipId === selectedEquipId);
@@ -688,7 +651,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
       />
 
       <div className="flex-1 min-h-0 p-4 lg:p-6 flex flex-col gap-3">
-        {/* 상단 툴바: 온도/전력 토글 + 배치 편집 모드 + 이미지 업로드 */}
+        {/* 상단 툴바: 온도/전력 토글 + 배치 편집 모드 */}
         <div className="flex items-center gap-3 flex-wrap shrink-0">
           <div className={`flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
             isDarkMode ? 'bg-[#0D1224] border-[#232B45]' : 'bg-gray-100 border-gray-200'
@@ -764,23 +727,11 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
           <div className="ml-auto flex items-center gap-2">
             {isEditMode && (
               <>
-                <button
-                  type="button"
-                  onClick={handleImageButtonClick}
-                  title="도면 위에 이미지 파일을 끌어다 놓아도 교체됩니다"
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
-                    isDarkMode
-                      ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]'
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  배치도 이미지 업로드
-                </button>
                 {unplacedEquipments.length > 0 && (
                   <button
                     type="button"
                     onClick={handleRandomPlace}
-                    title="배치되지 않은 설비들을 도면 위 아무 곳에나 한 번에 뿌립니다"
+                    title="배치되지 않은 설비들을 위치(location)와 이름이 같은 구역이 있으면 그 구역 안에, 없으면 도면 아무 곳에나 한 번에 뿌립니다"
                     className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
                       isDarkMode
                         ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]'
@@ -818,7 +769,6 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                 )}
               </>
             )}
-            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
 
             <button
               type="button"
@@ -919,46 +869,9 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
             </div>
           )}
 
-          {!image ? (
-            <div
-              onDragEnter={handleDragEnterZone}
-              onDragLeave={handleDragLeaveZone}
-              onDragOver={(e) => { if (isEditMode) e.preventDefault(); }}
-              onDrop={isEditMode ? handleDropOnEmptyState : undefined}
-              className={`h-full flex flex-col items-center justify-center gap-3 text-sm border-2 border-dashed rounded-lg m-1 transition-colors ${
-                isFileDragOver
-                  ? (isDarkMode ? 'border-[#22D3EE] bg-[#22D3EE]/5' : 'border-green-500 bg-green-50')
-                  : 'border-transparent'
-              } ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}
-            >
-              <span>배치도 이미지가 아직 없습니다.</span>
-              {isEditMode ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleImageButtonClick}
-                    className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors ${
-                      isDarkMode ? 'bg-[#1A2036] hover:bg-[#232B45] text-[#B9C2DE]' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                    }`}
-                  >
-                    이미지 업로드
-                  </button>
-                  <span className="text-[11px]">
-                    {isFileDragOver ? '여기에 놓으세요' : '또는 이미지 파일을 이 영역으로 끌어다 놓으세요'}
-                  </span>
-                </>
-              ) : (
-                <span>편집 모드에서 업로드할 수 있습니다.</span>
-              )}
-            </div>
-          ) : (
-            <div
-              ref={mapRef}
-              onDragEnter={handleDragEnterZone}
-              onDragLeave={handleDragLeaveZone}
-              onDragOver={(e) => { if (isEditMode) e.preventDefault(); }}
-              onDrop={isEditMode ? handleDropOnMap : undefined}
-              onPointerDown={(e) => {
+          <div
+            ref={mapRef}
+            onPointerDown={(e) => {
                 // 마커/구역은 각자 pointerDown에서 stopPropagation 하므로, 여기까지 그대로
                 // 올라온다는 건 아무것도 없는 배경(이미지)을 눌렀다는 뜻 - 다중 선택 해제.
                 // 별도의 "선택 해제" 버튼을 없앤 대신 이 방식으로 항상(편집/보기 모드 모두) 해제되게 함.
@@ -978,15 +891,6 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                 onLoad={(e) => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
                 className="w-full h-full object-contain select-none pointer-events-none"
               />
-              {isFileDragOver && (
-                <div className={`absolute inset-0 z-10 flex items-center justify-center pointer-events-none border-2 border-dashed ${
-                  isDarkMode ? 'border-[#22D3EE] bg-[#0A0E1A]/70' : 'border-green-500 bg-white/70'
-                }`}>
-                  <span className={`text-sm font-semibold ${isDarkMode ? 'text-[#22D3EE]' : 'text-green-700'}`}>
-                    여기에 놓으면 배치도 이미지가 교체됩니다
-                  </span>
-                </div>
-              )}
               {/* 구역(zone) - 마커보다 먼저 그려서(DOM 순서상 아래) 마커가 항상 위에서 클릭됨 */}
               {(() => {
                 const { offsetXRatio, offsetYRatio, widthRatio, heightRatio } = getImageBoxRatio();
@@ -1090,6 +994,21 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                       )}
                       {isEditMode && (
                         <>
+                          {getUnplacedEquipmentsForZone(zone).length > 0 && (
+                            <button
+                              type="button"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={(e) => { e.stopPropagation(); handleRandomPlaceInZone(zone); }}
+                              title={`위치가 "${zone.name}"인 배치되지 않은 설비들을 이 구역 안에 랜덤 배치`}
+                              className={`absolute top-1 right-5 w-4 h-4 rounded-full flex items-center justify-center ${
+                                isDarkMode ? 'bg-[#1A2036] text-[#9FACC9] hover:text-white' : 'bg-white text-gray-500 hover:text-green-600 border border-gray-300'
+                              }`}
+                            >
+                              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4h4l12 16h-4L4 4zm16 0h-4l-3.2 4.267M4 20h4l3.2-4.267" />
+                              </svg>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onPointerDown={(e) => e.stopPropagation()}
@@ -1193,12 +1112,10 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                 return markers;
               })()}
             </div>
-          )}
 
         </div>
       </div>
 
-      <CustomAlert message={alertMessage} onClose={() => setAlertMessage('')} isDarkMode={isDarkMode} />
       <CustomConfirm
         message={isResetConfirmOpen ? '배치된 설비 마커를 모두 지우시겠습니까?' : ''}
         onConfirm={handleResetPositions}
@@ -1245,19 +1162,19 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                   <li>마커 드래그 → 재배치 / 클릭만 → 선택 (Delete로 배치 해제)</li>
                   <li>Ctrl+클릭 → 다중 선택 → 그중 하나를 드래그하면 다같이 이동, Shift+클릭하면 가로줄 정렬</li>
                   <li>빈 배경 클릭 → 선택 해제</li>
-                  <li>랜덤 배치 / 배치 초기화 / 이미지 업로드(또는 드래그로 교체)</li>
+                  <li>랜덤 배치(위치=구역 이름이 같으면 그 구역 안에, 아니면 도면 아무 곳) / 배치 초기화</li>
                 </ul>
               </div>
               <div>
                 <h3 className={`text-[13px] font-bold mb-1.5 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>구역</h3>
                 <ul className="list-disc pl-4 space-y-1">
                   <li>"구역 추가"로 생성 → 몸통 드래그로 이동, 모서리 드래그로 크기 조절</li>
-                  <li>이름 더블클릭으로 변경, × 로 삭제</li>
+                  <li>이름 더블클릭으로 변경, 셔플 아이콘으로 이 구역 안에 랜덤 배치, × 로 삭제</li>
                   <li>테두리색 = 안에 있는 설비 중 제일 안 좋은 상태, 아래 숫자 = 정상·경고·위험 개수</li>
                 </ul>
               </div>
               <p className={`text-[11px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-                배치도 이미지·설비 위치·구역은 이 브라우저에만 저장됩니다.
+                설비 위치·구역은 이 브라우저에만 저장됩니다.
               </p>
             </div>
           </div>
