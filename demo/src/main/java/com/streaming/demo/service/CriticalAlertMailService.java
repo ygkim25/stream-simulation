@@ -32,7 +32,6 @@ public class CriticalAlertMailService {
                                    double value, double threshold) {
         List<Login> admins = loginRepository.findByRoleIgnoreCaseAndAlarmEnableIgnoreCase("admin", "on");
         if (admins.isEmpty()) {
-            log.warn("위험 알림 메일 발송 스킵: 메일 알림이 켜진 admin 계정이 없음. equipId={}", equipId);
             return;
         }
 
