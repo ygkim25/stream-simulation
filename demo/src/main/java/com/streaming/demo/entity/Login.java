@@ -35,6 +35,12 @@ public class Login {
     @Column(name = "alarm_enable", length = 10, columnDefinition = "varchar(10) default 'on'")
     private String alarmEnable = "on";
 
+    @Column(name = "must_change_password", nullable = false, columnDefinition = "boolean default false")
+    private boolean mustChangePassword = false;
+
+    @Column(name = "temp_password_issued_at")
+    private LocalDateTime tempPasswordIssuedAt;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -68,6 +74,12 @@ public class Login {
 
     public String getAlarmEnable() { return alarmEnable; }
     public void setAlarmEnable(String alarmEnable) { this.alarmEnable = alarmEnable; }
+
+    public boolean isMustChangePassword() { return mustChangePassword; }
+    public void setMustChangePassword(boolean mustChangePassword) { this.mustChangePassword = mustChangePassword; }
+
+    public LocalDateTime getTempPasswordIssuedAt() { return tempPasswordIssuedAt; }
+    public void setTempPasswordIssuedAt(LocalDateTime tempPasswordIssuedAt) { this.tempPasswordIssuedAt = tempPasswordIssuedAt; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
