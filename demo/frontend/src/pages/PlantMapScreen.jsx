@@ -11,10 +11,7 @@ import { EMPTY_EQUIP_ROW, mergeTempDto, mergeElecDto, mergeEquipmentLists } from
 import { saveToDB } from '../utils/indexedDb';
 import { useClickOutside } from '../utils/useClickOutside';
 
-// 배치도 이미지는 회사 건물 도면(고정 SVG)을 그대로 씀 - 업로드 기능은 없앰.
-// 설비 좌표/구역은 백엔드 없이 이 브라우저에만 저장함 (카드 순서 저장과 동일한 패턴) -
-// 다른 기기/사용자와는 공유되지 않지만, 여러 사용자가 같은 배치도를 봐야 하는 시점이 오면 그때
-// 백엔드 테이블로 옮기면 됨
+// 배치도 이미지는 고정 SVG. 설비 좌표/구역은 브라우저 localStorage에만 저장
 const FLOORPLAN_IMAGE_URL = '/test-floorplan.svg';
 const POSITIONS_KEY = 'plantMapPositions';
 const ZONES_KEY = 'plantMapZones';
@@ -26,13 +23,10 @@ const loadStoredPositions = () => {
   } catch { return {}; }
 };
 const savePositions = (positions) => {
-  try { localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions)); } catch {
-    // localStorage를 못 쓰는 환경이면 이번 세션 동안만(메모리) 위치가 유지됨
-  }
+  try { localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions)); } catch { /* 세션 메모리로만 유지 */ }
 };
 
-// 구역(zone) - 도면 위에 그려두는 이름 붙은 사각형. 설비 좌표와 동일하게 "이미지 기준 %"로
-// 저장해서(xPct/yPct/widthPct/heightPct) zoom·리사이즈에 안전하게 씀
+// 구역(zone) - 도면 위 이름 붙은 사각형. 좌표는 이미지 기준 %로 저장(xPct/yPct/widthPct/heightPct)
 const loadStoredZones = () => {
   try {
     const parsed = JSON.parse(localStorage.getItem(ZONES_KEY));
@@ -40,9 +34,7 @@ const loadStoredZones = () => {
   } catch { return []; }
 };
 const saveZones = (zones) => {
-  try { localStorage.setItem(ZONES_KEY, JSON.stringify(zones)); } catch {
-    // localStorage를 못 쓰는 환경이면 이번 세션 동안만(메모리) 구역이 유지됨
-  }
+  try { localStorage.setItem(ZONES_KEY, JSON.stringify(zones)); } catch { /* 세션 메모리로만 유지 */ }
 };
 // 구역 안 설비 중 제일 안 좋은 상태로 구역 색을 정함 (위험 > 경고 > 정상)
 const STATUS_COLOR_PRIORITY = { red: 2, amber: 1, green: 0 };
@@ -63,8 +55,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   const [isCompareOpen, setIsCompareOpen] = useState(false);
   // 배치되지 않은 설비 트레이 - 도면 이미지 위 오버레이라 열고 닫아도 도면 크기엔 영향 없음
   const [isTrayOpen, setIsTrayOpen] = useState(true);
-  // "설비 배치도" 옆 정보 아이콘 - 누르면 정상/경고/위험 판정 기준을 보여주는 팝오버
-  // (AlarmSidebar와 동일한 UX, 같은 utils/statusStyles.js 기본값을 그대로 씀)
+  // 정상/경고/위험 판정 기준 팝오버
   const infoRef = useRef(null);
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   useClickOutside(infoRef, () => setIsInfoOpen(false), isInfoOpen);
@@ -72,30 +63,18 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   // 정렬용 다중 선택 - 순서 있는 배열로 들고 있어서 맨 처음 선택한 설비를 기준선으로 씀
   const [multiSelectedIds, setMultiSelectedIds] = useState([]);
-  // 좌표(%)는 도면 "이미지가 실제로 그려지는 영역" 기준인데, object-contain은 컨테이너와 이미지의
-  // 가로세로 비율이 다르면 여백(레터박스)이 생겨서 컨테이너 크기 % 그대로 쓰면 편집모드 진입 시
-  // 툴바/트레이가 붙었다 떨어지며 컨테이너 비율이 바뀔 때마다 마커가 이미지 위에서 밀려 보였음.
-  // 그래서 컨테이너 실제 크기 + 이미지 원본 비율을 같이 들고 있다가, 실제 이미지가 그려지는
-  // 사각형(오프셋 포함)을 직접 계산해서 그 기준으로 좌표를 넣고 뺌
+  // 좌표(%)는 object-contain 레터박스를 뺀 "실제 이미지 영역" 기준
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [naturalSize, setNaturalSize] = useState(null);
-  // 설비 배치(칩 -> 도면, 또는 이미 배치된 마커 재배치)는 HTML5 draggable 대신 포인터 이벤트로 직접
-  // 구현함 - draggable은 브라우저가 그려주는 고스트 이미지 위치가 실제 커서와 어긋나기 쉽고,
-  // 드롭 전까지 정확히 어디에 놓일지 실시간으로 안 보여서 "어긋나게 배치된다"는 문제가 있었음.
-  // 포인터 이벤트로 직접 좌표를 계산하면 커서를 그대로 따라다니는 미리보기를 보여줄 수 있음
+  // 설비 배치는 HTML5 draggable 대신 포인터 이벤트로 직접 구현 (정교한 커서 추적 미리보기 위함)
   const [dragEquipId, setDragEquipId] = useState(null);
-  // 렌더링 중엔 ref(mapRef.current)를 못 읽으므로(react-hooks/refs 규칙), 좌표 변환은 항상
-  // 이벤트 핸들러 안에서 미리 끝내고 그 결과(%)만 상태로 들고 있다가 렌더링에 씀
   const [dragPreviewPct, setDragPreviewPct] = useState(null); // {xPct, yPct} | null (도면 밖이면 null)
   const dragEquipIdRef = useRef(null);
-  // 마커를 눌렀는지(origin='marker') 미배치 칩을 눌렀는지(origin='chip') + 누른 시작 지점.
-  // 손을 뗄 때 시작 지점과 거의 안 움직였으면(=드래그가 아니라 그냥 클릭) "이동"이 아니라
-  // "선택"으로 취급해서 Delete로 배치 해제할 수 있게 함 (칩은 애초에 위치가 없어 선택 대상 아님)
+  // 클릭인지 드래그인지는 시작 지점 대비 이동 거리로 판단 (거의 안 움직였으면 클릭=선택)
   const dragOriginRef = useRef('chip');
   const pointerDownPosRef = useRef({ x: 0, y: 0 });
   const CLICK_MOVE_THRESHOLD = 4;
-  // 다중 선택된 것 중 하나를 그냥(수식키 없이) 누르면 선택된 것들을 통째로 같이 옮김 - 서로
-  // 간의 상대 위치(간격)는 그대로 유지한 채 델타(이동량)만 전부에 똑같이 적용
+  // 다중 선택된 것을 함께 드래그하는 그룹 이동 (상대 간격 유지, 델타만 적용)
   const [isGroupDragging, setIsGroupDragging] = useState(false);
   const [groupDragPreview, setGroupDragPreview] = useState(null); // { [equipId]: {xPct, yPct} } | null
   const groupDragRef = useRef(null); // { startPct, startPositions } - 이벤트 핸들러 전용, 렌더링에선 안 씀
@@ -114,8 +93,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
 
   const mapRef = useRef(null);
 
-  // 도면 컨테이너 크기를 실시간으로 추적 (편집모드 토글로 툴바/트레이가 붙었다 떨어지거나
-  // 창 크기가 바뀔 때마다 다시 계산되어야 함)
+  // 도면 컨테이너 크기 실시간 추적 (레이아웃/창 크기 변화 대응)
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return undefined;
@@ -129,13 +107,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     return () => observer.disconnect();
   }, []);
 
-  // object-contain 규칙대로 "컨테이너 중 실제 이미지가 차지하는 영역"을 비율(0~1)로 계산.
-  // 절대 px가 아니라 비율만 다루는 이유: 컨테이너 실제 px 크기는 ResizeObserver(레이아웃 단계)로,
-  // 클릭 좌표는 clientX/Y+getBoundingClientRect(화면 단계)로 서로 다른 경로로 얻는데, 이 프로젝트가
-  // index.css에서 html { zoom: 1.1 }을 쓰고 있어서 두 경로가 서로 다른 배율로 값을 줄 수 있음.
-  // 절대 px끼리 섞어서 계산하면(예전 방식) 원점에서 멀수록 오차가 커지는 어긋남이 생겼는데,
-  // 컨테이너 자신의 가로세로 "비율"(cw/ch)만 쓰면 그 배율 차이가 분자/분모에서 그대로 상쇄돼
-  // zoom과 무관하게 항상 정확함
+  // object-contain 규칙대로 "실제 이미지가 차지하는 영역"을 비율(0~1)로 계산 (zoom 배율 무관하게 정확하도록 px 대신 비율만 사용)
   const getImageBoxRatio = () => {
     const { width: cw, height: ch } = containerSize;
     if (!cw || !ch || !naturalSize?.width || !naturalSize?.height) {
@@ -154,10 +126,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     return { offsetXRatio: (1 - widthRatio) / 2, offsetYRatio: (1 - heightRatio) / 2, widthRatio, heightRatio };
   };
 
-  // getBoundingClientRect() 하나에서만 rect.left/width를 같이 뽑아써서(=같은 배율끼리만 나눗셈)
-  // "컨테이너 안에서의 비율"부터 구한 뒤, 그 비율을 다시 "이미지 영역 안에서의 비율"로 환산함.
-  // 0~100으로 자르지 않은 원본값을 반환 - 그룹 드래그 중 델타(이동량) 계산은 커서가 잠깐 도면
-  // 경계를 살짝 벗어나도 끊기면 안 되므로, 클램프는 각 용도(배치 확정/그룹 이동 적용)에서 따로 함
+  // 0~100으로 자르지 않은 원본 좌표 반환 (클램프는 쓰는 쪽에서 각자 처리)
   const clientPointToImagePctUnclamped = (clientX, clientY) => {
     if (!mapRef.current) return null;
     const rect = mapRef.current.getBoundingClientRect();
@@ -171,8 +140,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     return { xPct, yPct };
   };
 
-  // 도면 컨테이너 자체 밖으로 나가면 배치 취소 판단이 필요한 단일 배치/재배치용 - 컨테이너
-  // 경계 밖이면 null, 안이면 0~100으로 클램프해서 반환
+  // 컨테이너 경계 밖이면 null, 안이면 0~100으로 클램프 (단일 배치/재배치용)
   const clientPointToImagePct = (clientX, clientY) => {
     if (!mapRef.current) return null;
     const rect = mapRef.current.getBoundingClientRect();
@@ -193,8 +161,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     setDragPreviewPct(clientPointToImagePct(e.clientX, e.clientY));
   };
 
-  // 드래그 도중(누른 뒤에) ctrl/cmd를 눌러도, 미리 누르고 클릭한 것과 똑같이 취급되도록
-  // - 이동은 취소(원래 위치 유지)하고, 지금 누르고 있던 설비를 다중 선택 목록에 추가함
+  // 드래그 중 ctrl/cmd를 누르면 이동 취소하고 다중 선택에 추가
   const cancelDragIntoSelection = () => {
     const equipId = dragEquipIdRef.current;
     dragEquipIdRef.current = null;
@@ -228,8 +195,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
       setDragPreviewPct(null);
       if (!equipId) return;
 
-      // 거의 안 움직이고 뗐으면(=드래그가 아니라 그냥 클릭) 위치는 그대로 두고 그 마커 하나만
-      // 선택함 - 이 상태에서 Delete를 누르면 배치가 해제되도록(아래 keydown 리스너) 함
+      // 거의 안 움직였으면 클릭으로 보고 선택만 함
       const movedDist = Math.hypot(e.clientX - startPos.x, e.clientY - startPos.y);
       if (movedDist < CLICK_MOVE_THRESHOLD && origin === 'marker') {
         setMultiSelectedIds([equipId]);
@@ -253,8 +219,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragEquipId]);
 
-  // 다중 선택된 설비들을 통째로 옮기는 그룹 드래그 - 시작 시점 각자의 위치를 스냅샷해두고,
-  // 그 이후로는 "시작점 대비 커서가 얼마나 움직였는지(델타)"만 계산해서 전부에 똑같이 더함
+  // 그룹 드래그 - 시작 위치 스냅샷 + 델타만 계산해서 전부에 적용
   useEffect(() => {
     if (!isGroupDragging) return undefined;
     const handleMove = (e) => {
@@ -304,8 +269,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isGroupDragging]);
 
-  // 구역 이동/크기조절 시작 지점 대비 델타를 계산해서 시작 시점 스냅샷에 더함 (마커 그룹
-  // 드래그와 동일 패턴). 이동은 구역이 도면 밖으로 안 나가게, 크기조절은 최소 5%는 유지되게 클램프
+  // 구역 이동/크기조절 - 이동은 도면 밖으로 안 나가게, 크기는 최소 5% 유지
   const applyZoneDrag = (drag, curPct) => {
     const dx = curPct.xPct - drag.startPct.xPct;
     const dy = curPct.yPct - drag.startPct.yPct;
@@ -426,8 +390,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     return { counts, worst };
   };
 
-  // 마커를 클릭(드래그 없이)해서 선택해두고 Delete/Backspace를 누르면 배치를 해제해서
-  // "배치되지 않은 설비" 트레이로 돌려보냄
+  // 선택된 마커를 Delete/Backspace로 배치 해제
   useEffect(() => {
     if (!isEditMode || multiSelectedIds.length === 0) return undefined;
     const handleKeyDown = (e) => {
@@ -448,8 +411,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isEditMode, multiSelectedIds]);
 
-  // 설비 목록 초기 조회(REST) + 실시간 상태 갱신(WebSocket) - RealtimeScreen.jsx와 동일한 패턴이지만
-  // 이 화면은 마커 색만 필요해서 알람/로그 재조회, IndexedDB 저장 같은 부가 로직은 뺀 축소판
+  // 설비 목록 초기 조회(REST) + 실시간 갱신(WebSocket) - RealtimeScreen.jsx의 축소판
   useEffect(() => {
     let isMounted = true;
     const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
@@ -494,8 +456,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               });
               return updated;
             });
-            // 마커 클릭 시 뜨는 EquipmentHistoryModal이 IndexedDB(liveData)에서 추이를 읽어오므로,
-            // RealtimeScreen과 동일하게 여기서도 저장해둬야 이 화면만 열었을 때도 데이터가 보임
+            // EquipmentHistoryModal이 IndexedDB에서 추이를 읽으므로 여기서도 저장
             await saveToDB(list);
           } catch (e) {
             console.error('웹소켓 데이터 파싱 에러:', e);
@@ -521,8 +482,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     setMultiSelectedIds([]);
   };
 
-  // 구역 안 아무 지점이나 하나 뽑음 (라벨이 구역 밖으로 안 튀어나오게 구역 크기의 15% 안쪽만 씀.
-  // 구역이 너무 작아서 안쪽 여백만으로도 자리가 안 나오면 그냥 구역 정중앙에 둠)
+  // 구역 안 아무 지점 (라벨 잘림 방지로 구역 크기의 15% 안쪽만 사용)
   const randomPointInZone = (zone) => {
     const insetX = zone.widthPct * 0.15;
     const insetY = zone.heightPct * 0.15;
@@ -534,9 +494,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     };
   };
 
-  // 아직 배치 안 된 설비들을 한 번에 뿌림 - DB의 위치(location) 값과 이름이 같은 구역이 있으면
-  // 그 구역 안에 자동으로 배치하고(구역 이름을 실제 위치명과 똑같이 지어뒀다는 전제 - 예: "A동"),
-  // 매칭되는 구역이 없는 설비만 도면 아무 데나(10~90% 범위) 흩뿌림. 이미 배치된 것들은 안 건드림
+  // 미배치 설비 일괄 배치 - location과 이름이 같은 구역이 있으면 그 안에, 없으면 도면 아무 데나
   const handleRandomPlace = () => {
     const placed = new Set(Object.keys(positions));
     const toPlace = equipments.filter(eq => !placed.has(eq.equipId));
@@ -554,8 +512,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     });
   };
 
-  // 배치 안 된 설비 중 location이 이 구역 이름과 같은 것만 골라서 이 구역 안에만 뿌림
-  // (특정 구역 하나만 수동으로 다시 채우고 싶을 때 씀)
+  // 특정 구역 하나만 수동으로 채우기 (location이 일치하는 미배치 설비만)
   const getUnplacedEquipmentsForZone = (zone) => {
     const placed = new Set(Object.keys(positions));
     return equipments.filter(eq => !placed.has(eq.equipId) && eq.location === zone.name);
@@ -585,8 +542,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     });
   };
 
-  // Ctrl(맥은 Cmd)+클릭: 다중 선택 목록에 넣고 뺌 - 비교 보기(설비 여러 개 겹쳐보기)에 쓰이므로
-  // 편집 모드가 아니어도(보기 모드에서도) 항상 동작함. 정렬/그룹 이동/재배치는 편집 모드 전용
+  // Ctrl/Cmd+클릭: 다중 선택 토글 (보기/편집 모드 모두 동작, 나머지는 편집 모드 전용)
   const handleMarkerPointerDown = (equipId) => (e) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -602,8 +558,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
       setMultiSelectedIds(prev => (prev.includes(equipId) ? prev : [...prev, equipId]));
       return;
     }
-    // 일반 클릭(수식키 없음)인데 지금 다중 선택돼 있는 것 중 하나를 눌렀다면 선택된 것들을
-    // 통째로 같이 옮김(그룹 드래그). 선택 안 된 걸 누르면 기존처럼 그 하나만 드래그하고 선택 해제
+    // 다중 선택된 것 중 하나를 일반 클릭하면 그룹 드래그
     if (multiSelectedIds.length > 1 && multiSelectedIds.includes(equipId)) {
       e.preventDefault();
       const startPct = clientPointToImagePctUnclamped(e.clientX, e.clientY);
@@ -615,17 +570,11 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
       setIsGroupDragging(true);
       return;
     }
-    // 그냥 클릭/드래그 - 실제로 드래그했는지 그냥 클릭했는지는 손을 뗄 때(handleUp) 이동 거리로
-    // 판단함 (그냥 클릭이면 선택, 드래그면 이동 후 선택 해제 - 위 handleUp 참고)
+    // 클릭/드래그 구분은 handleUp에서 이동 거리로 판단
     handleEquipPointerDown(equipId, 'marker')(e);
   };
 
-  // 배치된 설비 목록은 "저장해둔 위치" 기준으로 만듦(equipments 기준으로 필터링하지 않음) -
-  // equipments는 REST/웹소켓 응답이 들어오는 대로 채워지는 목록이라, 새로고침 직후처럼 아직
-  // 그 설비의 실시간 데이터가 한 번도 안 온 시점엔 목록에 없을 수 있음. equipments 기준으로
-  // 필터링하면 이 경우 위치는 그대로인데 마커만 잠깐(또는 계속) 안 보이는 것처럼 됨 - 그래서
-  // 실시간 데이터가 아직 없는 설비도 일단 기본값(정상 취급)으로 마커를 그리고, 데이터가 도착하면
-  // 자연스럽게 실제 상태로 바뀌게 함
+  // 배치 목록은 저장된 위치 기준으로 만듦 - 실시간 데이터가 아직 없어도 기본값으로 마커부터 그림
   const placedIds = new Set(Object.keys(positions));
   const equipmentById = new Map(equipments.map(eq => [eq.equipId, eq]));
   const placedEquipments = Object.keys(positions).map(id => (
@@ -650,7 +599,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
         setIsAlarmOn={setIsAlarmOn}
       />
 
-      <div className="flex-1 min-h-0 p-4 lg:p-6 flex flex-col gap-3">
+      <div className="flex-1 min-h-0 p-4 lg:p-6 flex flex-col gap-3 screen-enter">
         {/* 상단 툴바: 온도/전력 토글 + 배치 편집 모드 */}
         <div className="flex items-center gap-3 flex-wrap shrink-0">
           <div className={`flex items-center p-0.5 rounded-full border shrink-0 transition-colors ${
@@ -801,8 +750,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               .map(id => equipments.find(eq => eq.equipId === id)?.equipName)
               .filter(Boolean);
             const nameLabel = names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} 외 ${names.length - 3}개`;
-            // 도면 이미지 위에 뜨는 오버레이라 다크모드에서도 라이트 모드와 같은 색으로 고정
-            // (앱 테마보다 "이미지 위에 뜨는 라벨"로서 항상 같은 톤이 낫다고 판단)
+            // 이미지 위 오버레이라 다크모드에서도 라이트 모드 색으로 고정
             return (
               <div className="absolute z-20 top-2 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-lg px-3 py-2 backdrop-blur-sm bg-gray-400/20">
                 <div className="flex flex-col gap-0.5">
@@ -872,12 +820,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
           <div
             ref={mapRef}
             onPointerDown={(e) => {
-                // 마커/구역은 각자 pointerDown에서 stopPropagation 하므로, 여기까지 그대로
-                // 올라온다는 건 아무것도 없는 배경(이미지)을 눌렀다는 뜻 - 다중 선택 해제.
-                // 별도의 "선택 해제" 버튼을 없앤 대신 이 방식으로 항상(편집/보기 모드 모두) 해제되게 함.
-                // click이 아니라 pointerDown에서 처리해야, 드래그를 마친 지점(배경)에서
-                // 뒤늦게 뜨는 합성 click 이벤트 때문에 방금 끝낸 그룹 이동의 선택이
-                // 곧바로 풀려버리는 걸 막을 수 있음
+                // 배경(빈 이미지 영역) 클릭 시 다중 선택 해제 - pointerDown에서 처리(click은 그룹 이동 직후 선택이 바로 풀림)
                 if (e.target === e.currentTarget) setMultiSelectedIds([]);
               }}
               className={`relative w-full h-full transition-shadow ${
@@ -1039,9 +982,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               })()}
 
               {(() => {
-                // % 좌표 -> "컨테이너 기준 %"로 환산해서 style에 그대로 CSS %로 씀(px로 직접
-                // 계산하지 않음). CSS %는 브라우저가 실제 렌더링 시점의 진짜 크기를 기준으로
-                // 알아서 계산해주므로, zoom이 몇 %든 JS가 px를 잘못 계산할 여지 자체가 없어짐
+                // px 대신 CSS %로 그려서 zoom 배율과 무관하게 정확함
                 const { offsetXRatio, offsetYRatio, widthRatio, heightRatio } = getImageBoxRatio();
                 const toContainerPct = (pos) => ({
                   leftPct: (offsetXRatio + (pos.xPct / 100) * widthRatio) * 100,
@@ -1055,9 +996,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                   const meta = getStatusMeta(statusValue);
                   const { leftPct, topPct } = toContainerPct(pos);
                   const isSelected = multiSelectedIds.includes(eq.equipId);
-                  // 라벨이 점 아래에 붙는데, 점이 도면 아래쪽 가장자리 가까이 있으면 라벨이
-                  // 컨테이너 밖(overflow-hidden에 잘리는 영역)으로 넘어가서 반토막나 보였음 -
-                  // 그 경우엔 라벨을 점 위로 뒤집어서 그림
+                  // 점이 하단 가장자리 가까이 있으면 라벨을 위로 뒤집어서 잘림 방지
                   const labelAbove = topPct > 85;
                   return (
                     <div
@@ -1087,8 +1026,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                   );
                 });
 
-                // 드래그 중 실시간 미리보기도 같은 방식(CSS %)으로 그려서 실제 배치 위치와 항상
-                // 픽셀 단위로 정확히 일치하게 함
+                // 드래그 미리보기도 같은 CSS % 방식으로 그려서 실제 위치와 정확히 일치
                 if (dragEquipId && dragPreviewPct) {
                   const dragEquip = equipments.find(eq => eq.equipId === dragEquipId);
                   const statusValue = metricTab === 'temperature' ? dragEquip?.status : dragEquip?.powerStatus;

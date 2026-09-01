@@ -26,9 +26,7 @@ const MAX_ALARMS = 100;
 const MAX_LOGS = 500;
 const PRUNE_INTERVAL_MS = 30 * 60 * 1000; // 30분마다 한 번씩만 정리(자주 할 필요 없음)
 
-// "전체 흐름"이 새로고침 직후 빈 상태로 안 보이게, 마지막 계산 결과를 동기적으로 읽을 수 있는
-// localStorage에 캐싱함 (IndexedDB 조회는 비동기라 첫 페인트 전엔 못 끝남). v2: 캐시 형태를
-// {equipId: {temperature, power}}로 바꾸며 키도 같이 바꿈 (안 바꾸면 예전 캐시가 안 읽혀 텅 비어 보임)
+// "전체 흐름" 새로고침 직후 빈 화면 방지용 캐시
 const TIMELINE_CACHE_KEY = 'realtimeTimelineCacheV2';
 
 const loadCachedTimelines = () => {
@@ -42,9 +40,7 @@ const loadCachedTimelines = () => {
 const saveCachedTimelines = (result) => {
   try {
     localStorage.setItem(TIMELINE_CACHE_KEY, JSON.stringify(result));
-  } catch {
-    // localStorage를 못 쓰는 환경(프라이빗 모드 등)이면 캐싱 없이 그냥 조회 결과만 사용
-  }
+  } catch { /* 캐시 없이 진행 */ }
 };
 
 // 즐겨찾기(핀 고정)한 설비 ID 목록 - 이 브라우저에만 저장 (설비 배치도의 카드 순서 저장과 동일한 패턴)
@@ -60,9 +56,7 @@ const loadFavoriteIds = () => {
 const saveFavoriteIds = (ids) => {
   try {
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids));
-  } catch {
-    // localStorage를 못 쓰는 환경이면 이번 세션 동안만(메모리) 유지됨
-  }
+  } catch { /* 캐시 없이 진행 */ }
 };
 
 // 설비 하나에 대해 [{time, color}] 목록을, 시간순 색 구간(전체 흐름 바에 그대로 넘길 수 있는 형태)으로 변환
@@ -72,8 +66,7 @@ const buildTimelineSegments = (byEquip, startMs, endMs) => {
     const sorted = [...list].sort((a, b) => a.time - b.time);
     const segments = [];
     sorted.forEach((point, idx) => {
-      // 첫 구간은 실제 데이터 시작 시각이 아니라 창의 맨 처음(startMs)부터 채워서, 설비마다
-      // 데이터 보유량이 달라도 막대 전체 길이가 항상 똑같이(100%) 보이게 함
+      // 첫 구간은 startMs부터 채워서 막대 길이를 항상 100%로 맞춤
       const segStart = idx === 0 ? startMs : point.time;
       const segEnd = idx < sorted.length - 1 ? sorted[idx + 1].time : endMs;
       const widthPct = ((segEnd - segStart) / (endMs - startMs)) * 100;
@@ -115,9 +108,7 @@ const STATUS_FILTER_ACTIVE_CLASS = {
   danger: { dark: 'bg-[#FB5D75]/15 border-[#FB5D75]/40 text-[#FB5D75]', light: 'bg-red-50 border-red-300 text-red-600' },
 };
 
-// 온도/전력 API를 Promise.all로 묶으면 하나만 실패해도 둘 다 날아가고 느린 쪽 때문에 빠른 쪽도
-// 늦게 뜸 - 각 요청을 독립 처리해 먼저 온 쪽부터 바로 반영. "둘 다 끝난 뒤"가 필요한 호출부를 위해
-// 두 요청이 모두 끝나는 Promise도 반환함
+// 온도/전력 요청을 독립 처리해 먼저 온 쪽부터 바로 반영
 const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
   let tempData;
   let elecData;
@@ -137,9 +128,6 @@ const fetchBothDomains = (tempUrl, elecUrl, headers, onUpdate) => {
   return Promise.all([tempPromise, elecPromise]);
 };
 
-// ==========================================
-// 실시간 모니터링 화면 컴포넌트
-// ==========================================
 const RealtimeScreen = ({
   user,
   route,
@@ -211,8 +199,7 @@ const RealtimeScreen = ({
   };
 
   const [equipments, setEquipments] = useState([]);
-  // 온도/전력 둘 다 최초 로딩이 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 문구를 계속 보여줌
-  // (먼저 온 쪽만 반영하면 반쪽 데이터가 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로 추가함)
+  // 온도/전력 둘 다 로딩 끝나기 전까지 로딩 문구 유지
   const [hasLoadedEquipmentsOnce, setHasLoadedEquipmentsOnce] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -239,8 +226,7 @@ const RealtimeScreen = ({
   const stompClientRef = useRef(null);
   const gridScrollRef = useRef(null);
 
-  // 알림 매핑용 최신 설비명/위치 ref. useEffect 미러링은 웹소켓 연타 시 한 렌더 뒤처져 상태
-  // 전환 오탐지가 생길 수 있어, 웹소켓 핸들러에서 직접 동기적으로 갱신함
+  // 웹소켓 핸들러에서 직접 동기 갱신하는 최신 설비 목록 ref
   const equipmentsRef = useRef([]);
 
   // 짧은 시간에 상태 전환이 연달아 발생해도 noti-warn/logs 조회는 한 번으로 묶어서 보내기 위한 디바운스
@@ -304,10 +290,7 @@ const RealtimeScreen = ({
     setAlarms(prev => prev.filter(a => a.id !== id));
   };
 
-  // 위험 알람 브라우저 알림 - id 기반으로 "이미 본 것"을 추적하는 방식은 켜고 끄는 타이밍과
-  // 얽히면서 계속 문제가 반복됐음(꺼도 계속 오거나, 다시 켜면 밀린 게 쏟아지거나). 그 대신 훨씬
-  // 단순하고 확실한 기준을 씀: 알람을 "켠 시각" 이후에 실제로 발생한(recordedAt) 것만 알려주고,
-  // 그 전부터 쌓여있던 건 절대 알림 대상이 아님 - 켤 때마다 밀린 게 쏟아질 일 자체가 없음
+  // 위험 알람 브라우저 알림 - "켠 시각" 이후 발생한 것만 알림
   const notifiedAlarmIdsRef = useRef(new Set());
   const isAlarmOnRef = useRef(isAlarmOn);
   const alarmEnabledAtMsRef = useRef(isAlarmOn ? new Date().getTime() : null);
@@ -334,16 +317,14 @@ const RealtimeScreen = ({
     });
   };
 
-  // receivedAtMs 인덱스 도입 이전 기록들을 백그라운드에서 채워 넣음 (앱을 막지 않도록 fire-and-forget,
-  // 이미 끝났으면 내부적으로 바로 스킵됨)
+  // receivedAtMs 인덱스 백필 (백그라운드, fire-and-forget)
   useEffect(() => {
     backfillReceivedAtMsIfNeeded().catch(err => {
       console.error('receivedAtMs 백필 실패:', err);
     });
   }, []);
 
-  // 브라우저 로컬 기록(IndexedDB) 정리 - 오래된 데이터를 계속 지워서 저장소가 무한정 커지는 것을
-  // 막음 (안 지우면 시간이 지날수록 조회들이 갈수록 느려짐). 마운트 시 한 번 + 30분마다 반복
+  // IndexedDB 오래된 기록 정리 (마운트 시 1회 + 30분마다)
   useEffect(() => {
     const prune = () => {
       pruneOldRecordsFromDB(getTodayStartMs()).catch(err => {
@@ -405,8 +386,7 @@ const RealtimeScreen = ({
                 const mergeDto = domain === 'temp' ? mergeTempDto : mergeElecDto;
                 const statusField = domain === 'temp' ? 'status' : 'powerStatus';
 
-                // 실시간 스트림에서 상태 전환(정상↔경고/위험)이 감지되면 noti-warn/logs를 재조회함
-                // (짧은 시간에 여러 건이 몰려도 scheduleAlertsFetch가 한 번으로 묶어서 요청함)
+                // 상태 전환 감지 시 noti-warn/logs 재조회 예약
                 let hasTransition = false;
                 const updated = [...equipmentsRef.current];
                 newDataList.forEach(dto => {
@@ -480,8 +460,7 @@ const RealtimeScreen = ({
     };
   }, [user?.token]); // user 객체 대신 user?.token을 전달하여 불필요한 재연결 및 중복 구독 차단
 
-  // 알림 전체 지우기 (백엔드 noti-warn 이력도 온도/전력 둘 다 초기화해야 재조회 시 다시 나타나지 않음)
-  // 지금 보고 있는 지표(온도/전력)의 알람만 지움 - 다른 지표 알람은 그대로 둠
+  // 알림 전체 지우기 - 현재 지표(온도/전력)의 알람만 지움
   const handleClearAlarms = async (metric = metricTab) => {
     const isTemp = metric === 'temperature';
     try {
@@ -573,8 +552,7 @@ const RealtimeScreen = ({
       const needsPower = exportIncludePower;
       const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
       const equipInfoById = new Map(equipmentsRef.current.map(eq => [String(eq.equipId), eq]));
-      // 히스토리 원본엔 설비명/위치/임계값이 없어서 현재 설비 목록으로 채워 넣음 (과거 임계값은
-      // 저장돼있지 않아 현재 값으로 대체, 참고용)
+      // 히스토리 원본엔 설비명/위치/임계값이 없어서 현재 설비 목록으로 채워 넣음
       const enrich = (rows) => rows.map(r => {
         const info = equipInfoById.get(String(r.equipId));
         const fallbackThreshold = r.temperature != null ? info?.threshold : info?.powerThreshold;
@@ -591,13 +569,8 @@ const RealtimeScreen = ({
       console.timeEnd('[내보내기] 1. IndexedDB 조회');
       console.log(`[내보내기] IndexedDB 레코드 수: ${localData.length}`);
 
-      // 로컬(IndexedDB)엔 웹소켓이 연결되어 있던 동안만 쌓이므로, 탭이 새로고침되거나 연결이
-      // 끊겼다 붙은 공백만큼 요청 구간 앞부분이 로컬엔 빠져있을 수 있음 (예: "최근 1시간"으로
-      // 뽑았는데 실제로는 최근 몇 분치만 나오는 문제). 로컬에서 가장 오래된 레코드가 요청 시작
-      // 시각과 거의 맞닿아 있으면(=공백 없음) 무거운 백엔드 전체 조회를 건너뛰고, 앞쪽이 비어
-      // 있을 때만 그 빠진 구간만큼만 백엔드에서 채움 - "오늘 하루" 같은 큰 범위를 매번 통째로
-      // 다시 받지 않아도 됨
-      const GAP_TOLERANCE_MS = 2 * 60 * 1000; // 막 연결된 직후 등 2분 이내 오차는 정상으로 봄
+      // 로컬(IndexedDB)엔 연결 공백만큼 빠진 구간이 있을 수 있어, 그 공백분만 백엔드에서 채움
+      const GAP_TOLERANCE_MS = 2 * 60 * 1000;
       const localOldestMs = localData.length
         ? Math.min(...localData.map(r => r.receivedAtMs ?? (r.receivedAt ? new Date(r.receivedAt).getTime() : endMs)))
         : null;
@@ -625,8 +598,7 @@ const RealtimeScreen = ({
       console.log(`[내보내기] 백엔드 레코드 수: ${backendData.length}${backendEndMs == null ? ' (공백 없음 - 스킵)' : ''}`);
 
       console.time('[내보내기] 3. 병합/가공 (byEquip)');
-      // 체크 해제한 지표가 있으면 로컬 데이터에서도 그 지표 기록은 제외함. 로컬/백엔드 구간이
-      // 겹치는 동안(오늘) 같은 레코드가 양쪽에 다 있을 수 있어 mergeHistoryRecords로 중복 제거
+      // 로컬/백엔드 중복은 mergeHistoryRecords로 제거
       const combinedRecords = mergeHistoryRecords(localData, backendData)
         .filter(r => (r.temperature != null && needsTemp) || (r.power != null && needsPower))
         .sort((a, b) => {
@@ -642,11 +614,7 @@ const RealtimeScreen = ({
         return;
       }
 
-      // 온도/전력이 독립적으로 기록돼 한 행에 한쪽 값만 있는 경우가 많음 - equipId별 시간순으로
-      // 훑으며 값이 없는 쪽은 마지막 알려진 값을 이어붙여 한 행에 같이 보이도록 합침.
-      // (워커로 옮겨서 combinedRecords 자체를 postMessage로 보내봤는데, 레코드가 많으면 구조화
-      // 복제(structured clone) 비용이 계산 절감분보다 커서 오히려 더 느려짐 - 다시 메인 스레드로.
-      // 워커는 이미 다 조립된 rows만 받아서 시트 생성 + 인코딩만 담당하는 게 더 빠름)
+      // equipId별 시간순으로 훑으며 값 없는 지표는 마지막 알려진 값을 이어붙임
       const byEquip = new Map();
       combinedRecords.forEach(r => {
         if (!byEquip.has(r.equipId)) byEquip.set(r.equipId, []);
@@ -714,9 +682,7 @@ const RealtimeScreen = ({
     }));
   };
 
-  // 설비 그리드만 최신 데이터로 다시 불러오기 (전체 새로고침 없이) - 온도/전력 API를 둘 다 불러서 합침.
-  // 먼저 온 쪽을 바로 반영하면 아직 안 온 쪽 값이 빈 반쪽 상태(혹은 테이블에 남아있던 예전 값)가
-  // 잠깐 보였다가 갱신되는 게 거슬린다는 피드백으로, 둘 다 끝난 뒤 한 번에만 반영하도록 함
+  // 설비 그리드 재조회 - 온도/전력 둘 다 끝난 뒤 한 번에만 반영
   const fetchEquipments = () => {
     const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
     let latestTemp = [];
@@ -779,8 +745,7 @@ const RealtimeScreen = ({
       `${API_BASE_URL}/api/live/monitoring/elec/logs`,
       headers,
       (tempData, elecData) => {
-        // 로그 응답에 id가 따로 없어서(equipId/threshold/type/value/message/createdAt만 옴),
-        // equipId+createdAt+도메인 조합으로 직접 고유 키를 만듦 (알림/alarm 쪽과 동일한 방식)
+        // 로그 응답엔 id가 없어서 equipId+createdAt+도메인으로 고유 키 생성
         const mapped = [
           ...tempData.map(item => ({ ...item, __domain: 'temp' })),
           ...elecData.map(item => ({ ...item, __domain: 'elec' })),
@@ -893,11 +858,7 @@ const RealtimeScreen = ({
     const payload = [...existingPayload, ...newRowsPayload];
     const updateUrl = `${API_BASE_URL}/api/live/monitoring/${isTemp ? 'temp' : 'elec'}/update`;
 
-    // 설비명/위치는 온도·전력 두 테이블에 각각 따로 저장돼있어서, 지금 탭 쪽만 저장하면 반대
-    // 테이블엔 옛날 값이 그대로 남아 서로 어긋남. 그래서 반대 도메인에도 데이터가 있는 설비는
-    // equipName/location만(임계값/측정값은 안 건드림 - 백엔드가 null인 필드는 그냥 넘어가므로
-    // 안전함) 반대쪽 update API로도 같이 보내서 두 테이블을 동기화함. 반대 도메인에 아직 데이터가
-    // 없는 설비(방금 만든 신규 행 포함)는 "신규 설비" 취급돼 필수값 에러가 나므로 보내지 않음
+    // 설비명/위치는 온도·전력 테이블에 각각 저장돼있어서 반대쪽도 같이 동기화함
     const otherExistingPayload = Object.entries(editedFields)
       .filter(([equipId]) => {
         const eq = equipments.find(e => e.equipId === equipId);
@@ -921,10 +882,7 @@ const RealtimeScreen = ({
 
       setNewRows([]);
       await fetchEquipments();
-      // 알람/로그는 웹소켓 tick에서 상태 전환이 감지될 때만(scheduleAlertsFetch) 새로 조회되는데,
-      // 임계값 저장은 REST PUT이라 그 경로를 타지 않음 - 그래서 그리드 색깔은 바로 바뀌어도
-      // 알람 패널은 다음 실제 수신 데이터가 들어올 때까지 계속 예전 상태로 남아있었음(버그 원인).
-      // 저장 직후 알람/로그도 같이 다시 조회해서 새 임계값 기준으로 바로 반영되게 함
+      // REST 저장은 웹소켓 경로를 안 타므로 알람/로그도 직접 재조회
       await Promise.all([fetchAlerts(), fetchLogs()]);
 
       showAlert('저장되었습니다.');
@@ -944,8 +902,7 @@ const RealtimeScreen = ({
     ? alarms.filter(alarm => alarm.equipName === selectedEquipName)
     : alarms;
 
-  // 헤더 클릭으로 정렬 컬럼을 고르지 않았으면 ID 오름차순이 기본값 (equipments가 웹소켓
-  // 틱마다 갱신되므로, 정렬 기준이 안 바뀌었으면 다시 정렬하지 않도록 메모)
+  // 정렬 컬럼 미선택 시 ID 오름차순이 기본값
   const sortedEquipments = useMemo(() => {
     const list = [...equipments];
     if (!sortColumn) {
@@ -1006,8 +963,7 @@ const RealtimeScreen = ({
       list = list.filter(eq => getStatusMeta(metricTab === 'temperature' ? eq.status : eq.powerStatus).label === targetLabel);
     }
     if (favoriteIds.length > 0) {
-      // 지금 정렬/필터된 순서는 그대로 두고 즐겨찾기만 맨 위로 올림
-      // (각 그룹 내부의 상대 순서는 filter가 원래 순서를 유지하므로 그대로 보존됨)
+      // 정렬/필터 순서는 유지한 채 즐겨찾기만 맨 위로
       const favSet = new Set(favoriteIds);
       const favs = list.filter(eq => favSet.has(eq.equipId));
       const rest = list.filter(eq => !favSet.has(eq.equipId));
@@ -1025,13 +981,8 @@ const RealtimeScreen = ({
     return acc;
   }, { normal: 0, warning: 0, danger: 0 });
 
-  // 설비별 "데이터 수집 시작 시점부터 지금까지" 상태 흐름을 온도/전력 각각 색 구간으로 계산.
-  // 날짜 범위 선택기와 무관하게 항상 "지금"을 오른쪽 끝으로 해서 주기적으로 다시 계산함
-  // (왼쪽 끝은 전체 설비 중 가장 이른 수신 시각 - 자정을 그대로 쓰면 늦게 켰을 때 실제 구간이
-  // 얇게 몰려 보이므로, 아래 load()에서 매번 다시 계산함)
+  // 설비별 "오늘 하루" 상태 흐름을 온도/전력 색 구간으로 계산 (오른쪽 끝은 항상 지금)
   const [equipTimelines, setEquipTimelines] = useState(() => loadCachedTimelines() || {});
-  // 첫 조회가 끝나기 전까지는 "확실히 비어있음"과 구분해서 로딩 표시를 해줌
-  // (캐시된 값이 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작함)
   const [hasLoadedTimelinesOnce, setHasLoadedTimelinesOnce] = useState(() => loadCachedTimelines() !== null);
   useEffect(() => {
     let cancelled = false;
@@ -1039,12 +990,10 @@ const RealtimeScreen = ({
       const endMs = Date.now();
       const startMs = getTodayStartMs();
       try {
-        // IndexedDB가 딱 "오늘 00:00 이후"만 보관하므로 시작점이 항상 일치해서, 로컬 조회만으로 충분함
         const records = await getByDateRangeIndexedFromDB(startMs, endMs);
         if (cancelled) return;
 
-        // 온도 도메인 기록엔 temperature가, 전력 도메인 기록엔 power가 들어있으므로
-        // (한 레코드가 둘 다 갖지는 않음) 값이 있는 쪽 맵에만 넣어서 도메인별로 분리함
+        // 값이 있는 도메인(temperature/power) 쪽 맵에만 넣어서 분리
         const byEquipTemp = new Map();
         const byEquipPower = new Map();
         let earliestMs = endMs;
@@ -1063,11 +1012,7 @@ const RealtimeScreen = ({
           }
         });
 
-        // 자정부터 실제로 수집이 시작되기 전까지는 어느 설비에도 데이터가 없는 죽은 구간이라,
-        // 그대로 자정을 왼쪽 끝으로 쓰면(특히 하루 중 늦게 켠 경우) 실제 상태 변화 구간이
-        // 막대 오른쪽 끝에 실처럼 얇게 몰려 보임 - 전체 설비 중 가장 이른 수신 시각을 공통
-        // 왼쪽 끝으로 써서(모든 행이 여전히 같은 축을 공유하므로 행 간 비교는 그대로 유지됨)
-        // 실제로 쌓인 구간이 막대 전체를 채우도록 함
+        // 왼쪽 끝을 자정 대신 가장 이른 수신 시각으로 잡아 죽은 구간을 없앰
         const timelineStartMs = records.length ? earliestMs : startMs;
 
         const tempSegments = buildTimelineSegments(byEquipTemp, timelineStartMs, endMs);
@@ -1529,7 +1474,7 @@ const RealtimeScreen = ({
                         }`}
                       >
                         <td className={`px-1 py-0 h-[52px] font-mono text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-400'}`}>
-                          <div className="flex items-center justify-center gap-1">
+                          <div className="flex items-center justify-center gap-1 h-full">
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); toggleFavorite(eq.equipId); }}
@@ -1599,16 +1544,20 @@ const RealtimeScreen = ({
                           </div>
                         </td>
                         <td className={`px-3 py-0 h-[52px] font-mono text-[13px] text-center truncate align-middle ${isDarkMode ? 'text-[#7D87A8]' : 'text-gray-500'}`}>
-                          {eq.receivedAt ? formatClockTime(new Date(eq.receivedAt)) : '-'}
+                          <div className="flex items-center justify-center h-full">
+                            {eq.receivedAt ? formatClockTime(new Date(eq.receivedAt)) : '-'}
+                          </div>
                         </td>
                         <td className={`px-3 py-0 h-[52px] text-center align-middle`}>
-                          <span className={`text-sm font-mono font-bold tabular-nums ${
-                            status == null ? (isDarkMode ? 'text-[#5C6584]' : 'text-gray-400') : statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
-                          }`}>
-                            {value != null ? (
-                              <>{Number(value).toFixed(1)}{isTemp && <span className="text-xs">℃</span>}</>
-                            ) : '–'}
-                          </span>
+                          <div className="flex items-center justify-center h-full">
+                            <span className={`text-sm font-mono font-bold tabular-nums leading-none ${
+                              status == null ? (isDarkMode ? 'text-[#5C6584]' : 'text-gray-400') : statusMeta.color === 'green' ? (isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800') : statusStyle.text
+                            }`}>
+                              {value != null ? (
+                                <>{Number(value).toFixed(1)}{isTemp && <span className="text-xs">℃</span>}</>
+                              ) : '–'}
+                            </span>
+                          </div>
                         </td>
                         <td className={`px-3 py-0 h-[52px] align-middle`}>
                           <div className="flex items-center justify-center h-full">
@@ -1630,14 +1579,16 @@ const RealtimeScreen = ({
                           </div>
                         </td>
                         <td className="px-3 py-0 h-[52px] text-center align-middle">
-                          {status == null ? (
-                            <span className={`text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>–</span>
-                          ) : (
-                            <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
-                              <span className={`status-dot ${statusStyle.dot}`} />
-                              {statusMeta.label}
-                            </span>
-                          )}
+                          <div className="flex items-center justify-center h-full">
+                            {status == null ? (
+                              <span className={`text-xs ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>–</span>
+                            ) : (
+                              <span className={`inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap ${statusStyle.text}`}>
+                                <span className={`status-dot ${statusStyle.dot}`} />
+                                {statusMeta.label}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-0 h-[52px] align-middle">
                           <EquipTimelineBar segments={equipTimelines[eq.equipId]?.[metricTab]} isDarkMode={isDarkMode} loading={!hasLoadedTimelinesOnce} />

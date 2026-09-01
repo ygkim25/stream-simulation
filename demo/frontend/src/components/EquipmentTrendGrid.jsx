@@ -8,15 +8,10 @@ import LoadingSpinner from './LoadingSpinner';
 const MAX_POINTS = 40;
 // 아직 기록이 없는 설비의 기본값 - 매번 새 [] 리터럴을 주면 카드 memo가 매번 "달라졌다"고 오판함
 const EMPTY_POINTS = [];
-// IndexedDB 재조회 주기 - 큰 숫자/그래프 끝점은 이제 웹소켓 실시간 값으로 바로 그려지므로
-// (그리드와 같이 움직임) 이 폴링은 "과거 추이 선"만 채우면 됨. 예전엔 이걸 1초로 당겨놨었는데,
-// 그러면 설비마다 매초 IndexedDB를 동시 조회하게 돼서 다른 화면(카드 클릭 시 뜨는 큰 그래프
-// 등)의 조회가 순서를 기다리느라 오히려 다 같이 느려짐 - 다시 여유있게 늘림
+// IndexedDB 재조회 주기 - 과거 추이 선만 채우면 되므로 여유있게 잡음
 const REFRESH_MS = 4000;
 
-// 새로고침 직후 빈 카드가 잠깐 보였다가 채워지지 않도록, 마지막 조회 결과를 로컬에 캐싱해둠
-// (IndexedDB 조회는 비동기라 첫 페인트 전엔 못 끝나지만, localStorage는 동기라 초기값으로 바로 씀 -
-// "전체 흐름"에 쓰던 것과 동일한 패턴)
+// 새로고침 직후 빈 카드 방지용 캐시 (localStorage는 동기라 초기값으로 바로 씀)
 const HISTORY_CACHE_KEY = 'equipmentTrendHistoryCache';
 const loadCachedHistory = () => {
   try {
@@ -28,13 +23,10 @@ const loadCachedHistory = () => {
 const saveCachedHistory = (result) => {
   try {
     localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(result));
-  } catch {
-    // localStorage를 못 쓰는 환경(프라이빗 모드 등)이면 캐싱 없이 그냥 조회 결과만 사용
-  }
+  } catch { /* 캐시 없이 진행 */ }
 };
 
-// 사용자가 직접 정한 카드 순서(설비ID 배열) - 백엔드 없이 이 브라우저에만 저장해두고,
-// 다음에 다시 열었을 때도 그대로 이어서 보이게 함
+// 사용자가 정한 카드 순서 (브라우저에만 저장)
 const CARD_ORDER_KEY = 'equipmentTrendCardOrder';
 const loadCardOrder = () => {
   try {
@@ -47,9 +39,7 @@ const loadCardOrder = () => {
 const saveCardOrder = (order) => {
   try {
     localStorage.setItem(CARD_ORDER_KEY, JSON.stringify(order));
-  } catch {
-    // localStorage를 못 쓰는 환경이면 그냥 이번 세션 동안만(메모리) 순서가 유지됨
-  }
+  } catch { /* 세션 메모리로만 유지 */ }
 };
 
 const STATUS_COLOR = {
@@ -58,26 +48,15 @@ const STATUS_COLOR = {
   red: { dark: '#FB5D75', light: '#EF4444' },
 };
 
-// 카드 하나를 독립된 컴포넌트로 분리하고 그 설비 값이 실제로 바뀐 경우에만 다시 그리게 함.
-// (예전엔 부모 하나가 24개 카드를 통째로 map으로 그려서, 설비 1개만 값이 바뀌어도 24개
-// AreaChart가 전부 다시 그려지며 계속 버벅였음)
+// 카드를 독립 컴포넌트로 분리해 값이 바뀐 카드만 리렌더링
 const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSelectEquip, hasLoadedHistoryOnce, unit, isReorderMode, isDragging, isDragOver, onDragStart, onDragEnter, onDrop, onDragEnd }) => {
-  // 큰 숫자/그래프 맨 끝 점은 IndexedDB 폴링 결과 대신 웹소켓으로 갓 들어온 실시간 값을
-  // 바로 써서, 메인 그리드가 갱신되는 순간 이 카드도 같이 움직이게 함 (폴링 주기만큼
-  // 뒤처져 "따로 논다"는 느낌이 들지 않도록)
+  // 끝 점은 IndexedDB 폴링 대신 웹소켓 실시간 값을 바로 써서 메인 그리드와 같이 움직임
   const liveValue = displayMetric === 'temperature' ? eq.temperature : eq.power;
   const points = liveValue != null ? [...basePoints, { value: liveValue }] : basePoints;
   const latest = points.length > 0 ? points[points.length - 1].value : null;
 
-  // ▲▼ 델타는 폴링으로 채워진 basePoints의 마지막 값이 아니라, 이 카드가 실제로 마지막
-  // 렌더링됐던 시점(=직전 실시간 틱)의 값과 비교함. basePoints 기준으로 비교하면 폴링
-  // 주기(1초)와 실제 틱 타이밍이 어긋나서 몇 틱 전 값과 비교돼 화살표가 튀어 보였음.
-  // 큰 숫자가 소수 첫째 자리까지만 보이므로, 그 반올림된 값 기준으로 비교해야 "숫자는 그대로인데
-  // 화살표만 뜬다"는 위화감 없이 실제로 화면에 보이는 변화와 화살표가 항상 같이 움직임
+  // ▲▼ 델타는 화면에 보이는 반올림 값(직전 렌더 시점) 기준으로 계산
   const roundedLatest = latest != null ? Number(Number(latest).toFixed(1)) : null;
-  // 새로고침 직후엔 아직 실시간 틱이 한 번도 안 왔으니, 첫 비교 기준값을 캐시된 과거
-  // 데이터(basePoints)의 마지막 값으로 미리 채워둠 - 그래야 카드마다 실시간 틱이 들어오는
-  // 타이밍이 제각각이라 화살표가 하나씩 따로 뜨지 않고, 새로고침 시 다같이 한번에 뜸
   const [prevLive, setPrevLive] = useState(() => (
     basePoints.length > 0 ? basePoints[basePoints.length - 1].value : null
   ));
@@ -85,8 +64,7 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
   useEffect(() => {
     if (roundedLatest != null) setPrevLive(roundedLatest);
   }, [roundedLatest]);
-  // 값이 안 바뀐 틱에는 방향이 0으로 리셋되어 화살표가 깜빡였다 사라졌다 했음 - 새로 방향이
-  // 생길 때만 갱신하고, 그 사이엔 마지막으로 감지된 방향을 계속 띄워둠
+  // 새로 방향이 생길 때만 갱신 (0으로 리셋되어 깜빡이는 것 방지)
   const [delta, setDelta] = useState(null);
   useEffect(() => {
     if (rawDelta) setDelta(rawDelta);
@@ -177,10 +155,7 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
             <LoadingSpinner size="sm" isDarkMode={isDarkMode} />
           </div>
         ) : points.length > 1 ? (
-          // initialDimension을 안 주면 ResponsiveContainer가 ResizeObserver로 실제 크기를
-          // 잴 때까지 아무것도 안 그리는데, 카드가 한꺼번에 12개 넘게 마운트되면 이 측정
-          // 콜백들이 프레임마다 조금씩 흩어져서 카드가 하나씩 순차적으로 나타나는 것처럼
-          // 보였음. 대략적인 크기를 미리 줘서 첫 페인트부터 바로 그려지게 함
+          // initialDimension으로 크기 측정 전에도 바로 그려지게 함 (카드 순차 등장 방지)
           <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 140, height: 42 }}>
             <AreaChart data={points} margin={{ top: 2, right: 4, left: 4, bottom: 0 }}>
               <defs>
@@ -235,26 +210,18 @@ const EquipTrendCard = memo(({ eq, basePoints, displayMetric, isDarkMode, onSele
 });
 
 // ==========================================
-// 설비별 미니 추이 카드 그리드
-// 설비마다 최근 흐름을 라인 형태로 보여줘서 "시간에 따른 변화"가 한눈에 보이게 함
-// (그리드 우측 상단, IndexedDB에 누적된 실시간 데이터 사용, 백엔드 미사용)
+// 설비별 미니 추이 카드 그리드 - IndexedDB 누적 데이터로 최근 흐름을 라인으로 보여줌
 // ==========================================
-// metric('temperature' | 'power')은 실시간 모니터링 그리드 상단 탭과 공유되는 값이라 부모에서 내려받음
-// (예전엔 이 컴포넌트가 자체 토글을 따로 갖고 있었는데, 그리드/알람 탭이랑 따로 놀아서 헷갈린다는
-// 피드백으로 그리드의 탭 하나로 통일함)
+// metric은 실시간 모니터링 그리드 상단 탭과 공유되는 값(부모에서 내려받음)
 const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCounts, metric }) => {
-  // equipId -> 시간순 정렬된 최근 데이터 배열 (캐시가 있으면 새로고침 직후에도 곧바로 채워진 상태로 시작)
   const [historyMap, setHistoryMap] = useState(() => loadCachedHistory() || {});
-  // 첫 조회가 끝나기 전까지는 "데이터가 확실히 부족함"과 구분해서 로딩 표시를 해줌
   const [hasLoadedHistoryOnce, setHasLoadedHistoryOnce] = useState(() => loadCachedHistory() !== null);
 
-  // 카드 순서를 직접 바꾸는 모드 (설정 버튼으로 토글) + 사용자가 정한 순서(없으면 기본 정렬 사용)
+  // 카드 순서 변경 모드 + 사용자가 정한 순서(없으면 기본 정렬)
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [customOrder, setCustomOrder] = useState(() => loadCardOrder());
 
-  // 카드가 많으면(설비 수만큼 recharts 인스턴스가 동시에 다시 그려짐) 탭 전환 시 눈에 띄게 버벅이는데,
-  // 그 렌더링이 끝날 때까지 그냥 화면이 멈춘 것처럼 보이는 문제가 있었음. metric이 바뀌면 일단
-  // 로딩 표시부터 그려지도록 한 프레임 양보한 뒤에 실제(무거운) 차트 전환을 함
+  // metric 전환 시 로딩 표시부터 그린 뒤 한 프레임 양보하고 무거운 차트 전환
   const [displayMetric, setDisplayMetric] = useState(metric);
   const [isMetricPending, setIsMetricPending] = useState(false);
   useEffect(() => {
@@ -269,21 +236,19 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     return () => cancelAnimationFrame(rafId);
   }, [metric, displayMetric]);
 
-  // 매 조회 시점의 최신 설비 목록을 참조하기 위한 ref (interval을 재시작하지 않고도 최신 목록을 반영)
+  // interval 재시작 없이 최신 설비 목록을 참조하기 위한 ref
   const equipIdsRef = useRef([]);
   useEffect(() => {
     equipIdsRef.current = equipments.map(eq => eq.equipId);
   }, [equipments]);
 
-  // load()가 클로저로 갇힌 옛 historyMap을 안 보고 항상 최신값을 보도록 ref로 미러링
+  // load()가 항상 최신 historyMap을 보도록 ref로 미러링
   const historyMapRef = useRef(historyMap);
   useEffect(() => {
     historyMapRef.current = historyMap;
   }, [historyMap]);
 
-  // 마운트 시점엔 설비 목록이 아직 안 온 경우가 많아서(REST 조회가 끝나기 전) 예전엔 첫 조회가 그냥
-  // 빈 목록으로 건너뛰어지고, 다음 REFRESH_MS(4초) 주기까지 기다려야 카드가 채워졌음. 목록이 실제로
-  // 채워지는 시점에 맞춰 바로 첫 조회가 실행되도록 이 시점을 deps로 잡음
+  // 설비 목록이 채워지는 시점에 맞춰 바로 첫 조회 실행
   const hasEquipIds = equipments.length > 0;
   useEffect(() => {
     if (!hasEquipIds) return;
@@ -292,11 +257,9 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
       const ids = equipIdsRef.current;
       if (ids.length === 0) return;
       try {
-        // equipId 인덱스로 설비별 최근 데이터만 바로 조회 (전체 스캔 없이 항상 빠름)
         const results = await Promise.all(ids.map(id => getRecentByEquipIdFromDB(id, MAX_POINTS)));
         if (cancelled) return;
-        // 내용이 그대로인 설비는 이전 배열 참조를 그대로 재사용함 - 매번 새 객체를 만들면 카드별
-        // memo가 무의미해져서 폴링(1초)마다 카드 24개가 전부 다시 그려지며 버벅였음
+        // 내용이 그대로인 설비는 이전 배열 참조를 재사용해 카드 memo 유지
         const prevMap = historyMapRef.current;
         const grouped = {};
         ids.forEach((id, i) => {
@@ -326,8 +289,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
     return String(a.equipId).localeCompare(String(b.equipId));
   });
-  // 사용자가 순서를 정해둔 적이 있으면 그 순서를 우선 적용함. 아직 순서가 없던(=새로 추가된)
-  // 설비는 Infinity로 밀려서 sort가 안정 정렬이라 defaultSortedEquipments 순서 그대로 맨 뒤에 붙음
+  // 순서가 없던 설비는 Infinity로 밀려서 기본 정렬 순서 그대로 맨 뒤에 붙음
   const sortedEquipments = useMemo(() => {
     if (!customOrder || customOrder.length === 0) return defaultSortedEquipments;
     const orderIndex = new Map(customOrder.map((id, i) => [id, i]));
@@ -339,15 +301,13 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equipments, customOrder]);
 
-  // moveCard가 항상 최신 sortedEquipments를 보도록 ref로 미러링 (핸들러 자체는 useCallback으로
-  // 고정해서 EquipTrendCard의 memo가 매 렌더 새 함수 때문에 깨지지 않게 함)
+  // 핸들러 참조를 useCallback으로 고정하기 위해 최신 목록은 ref로 미러링
   const sortedEquipmentsRef = useRef(sortedEquipments);
   useEffect(() => {
     sortedEquipmentsRef.current = sortedEquipments;
   }, [sortedEquipments]);
 
-  // 드래그로 순서 변경 - draggedIdRef는 항상 최신 드래그 대상을 들고 있어야 해서(핸들러 자체는
-  // memo 깨짐 방지를 위해 참조가 고정돼야 함) state와 별도로 ref로도 미러링해둠
+  // 드래그로 순서 변경 - 핸들러 참조 고정을 위해 state와 별도로 ref도 유지
   const draggedIdRef = useRef(null);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
@@ -388,9 +348,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
     setDragOverId(null);
   }, []);
 
-  // equipId -> basePoints. historyMap/displayMetric이 바뀔 때만(=폴링될 때만) 다시 계산하고,
-  // 그 사이 설비 값이 실시간으로 바뀌어 부모가 리렌더링돼도 이전 배열 참조를 그대로 씀 - 그래야
-  // 안 바뀐 설비의 EquipTrendCard가 "새 배열이라 다르다"고 오판해 다시 그려지지 않음
+  // historyMap/displayMetric 변경 시에만 재계산 (부모 리렌더링에 영향 안 받도록)
   const basePointsByEquip = useMemo(() => {
     const map = new Map();
     Object.keys(historyMap).forEach(equipId => {
@@ -498,10 +456,7 @@ const EquipmentTrendGrid = ({ equipments, isDarkMode, onSelectEquip, statusCount
   );
 };
 
-// equipments는 웹소켓 틱마다 새 배열로 갱신되는데, 안 바뀐 설비는 객체 참조가 그대로라
-// id/이름/상태/현재 지표 값이 실제로 바뀐 경우에만 리렌더링함 (그래야 이 카드들의 숫자/그래프가
-// 폴링 주기가 아니라 메인 그리드와 같은 타이밍에 움직임 - 값 자체는 비교 대상에서 뺐던 예전 방식은
-// 카드가 그리드보다 한 박자씩 늦게 움직이는 문제가 있었음)
+// id/이름/상태/지표 값이 실제로 바뀐 경우에만 리렌더링 (메인 그리드와 같은 타이밍에 움직이도록)
 const areEqual = (prev, next) => {
   if (prev.isDarkMode !== next.isDarkMode) return false;
   if (prev.metric !== next.metric) return false;

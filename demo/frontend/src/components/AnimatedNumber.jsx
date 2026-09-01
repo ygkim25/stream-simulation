@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react';
 // 그래서 정수는 실제로 1씩 증가/감소하며 그 값을 그대로 찍어주는 방식으로 셈.
 // 값이 실제로 바뀔 때마다 popKey를 올려서(key로 씀) 숫자가 살짝 튀어오르며 다시 나타나는
 // 효과(index.css의 .report-pop)가 매번 재생되게 함
-const AnimatedNumber = ({ value, decimals = 0, duration = 800, suffix = '' }) => {
+const AnimatedNumber = ({ value, decimals = 0, duration = 800, suffix = '', skipAnimation = false }) => {
   const [display, setDisplay] = useState(value);
   // 지금 화면에 실제로 찍힌 값을 항상 들고 있음 - 애니메이션이 끝나기 전에 value가 또 바뀌어도
   // (기억해둔 "목표값"이 아니라) 지금 보이는 값에서부터 이어서 움직이게 하기 위함
@@ -23,7 +23,9 @@ const AnimatedNumber = ({ value, decimals = 0, duration = 800, suffix = '' }) =>
 
     const from = displayRef.current;
     const to = value;
-    if (from === to || Number.isNaN(to)) {
+    // 로딩 중 임시값(0 등)에서 실제 데이터로 처음 바뀔 때는 세는 대신 바로 값으로 점프.
+    // 안 그러면 한 화면에 있는 수십 개의 숫자가 동시에 카운팅되며 버벅이는 것처럼 보임
+    if (from === to || Number.isNaN(to) || skipAnimation) {
       setValue(to);
       return;
     }
@@ -53,7 +55,7 @@ const AnimatedNumber = ({ value, decimals = 0, duration = 800, suffix = '' }) =>
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [value, duration, decimals]);
+  }, [value, duration, decimals, skipAnimation]);
 
   return (
     <span key={popKey} className={popKey > 0 ? 'inline-block report-pop' : 'inline-block'}>

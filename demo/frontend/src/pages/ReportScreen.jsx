@@ -11,8 +11,7 @@ import { getStatusMeta } from '../utils/statusStyles';
 import { API_BASE_URL } from '../utils/apiConfig';
 import { fetchHistoryFromBackend } from '../utils/historyApi';
 
-// 기간 프리셋 - 백엔드에 집계 API가 없어서 원본 기록을 그대로 내려받아 프론트에서 계산하는
-// 프로토타입이라, 기간이 너무 길면(설비가 많고 틱이 잦으면) 느려질 수 있어 우선 짧은 범위만 제공
+// 백엔드 집계 없이 원본을 프론트에서 계산하는 구조라 우선 짧은 범위만 제공
 const RANGE_OPTIONS = [
   { value: 1, label: '오늘' },
   { value: 3, label: '최근 3일' },
@@ -22,9 +21,7 @@ const RANGE_OPTIONS = [
 const STATUS_COLORS = { danger: '#FB5D75', warning: '#FBBF24', normal: '#34D399' };
 const STATUS_PRIORITY = { '위험': 2, '경고': 1, '정상': 0 };
 
-// 백엔드 집계 없이 매번 원본 기록을 통째로 받아오는 구조라 최초 조회가 느릴 수 있음 - 한 번 받아온
-// 구간은 이 브라우저 탭 안에서 캐시해두고, 재방문/탭 전환 시엔 이 캐시를 먼저 그대로 보여준 뒤
-// 뒤에서 조용히 최신 데이터로 갱신함 (로딩 스피너를 다시 볼 필요가 없게)
+// 받아온 구간은 탭 세션 안에 캐시해두고, 재방문 시 먼저 보여준 뒤 조용히 최신화
 const reportCacheKey = (days) => `reportCache_${days}`;
 const loadReportCache = (days) => {
   try {
@@ -37,69 +34,52 @@ const loadReportCache = (days) => {
 const saveReportCache = (days, data) => {
   try {
     sessionStorage.setItem(reportCacheKey(days), JSON.stringify(data));
-  } catch {
-    // sessionStorage를 못 쓰거나 용량 초과면 캐시 없이 그냥 넘어감 (기능엔 영향 없음)
-  }
+  } catch { /* 캐시 없이 진행 */ }
 };
 
-// ==========================================
-// 기간별 설비 상태 통계 리포트 - 백엔드 집계 API 없이, 이미 있는 히스토리 내보내기 API
-// (fetchHistoryFromBackend - CSV 내보내기에서 쓰는 것과 동일)로 원본 기록을 받아와
-// 프론트에서 직접 집계하는 프로토타입 화면
-// ==========================================
+// 기간별 설비 상태 통계 리포트 - 히스토리 내보내기 API로 받은 원본 기록을 프론트에서 집계
 const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const [rangeDays, setRangeDays] = useState(1);
   const [rows, setRows] = useState(() => loadReportCache(1)?.rows ?? []);
   const [equipNameById, setEquipNameById] = useState(() => loadReportCache(1)?.equipNameById ?? {});
-  const [isLoading, setIsLoading] = useState(() => !loadReportCache(1));
+  // 캐시가 있어도 화면엔 곧바로 띄우지 않음 - 캐시 값을 잠깐 보여줬다가 실제 값으로 바뀌면
+  // 숫자/그래프가 흔들리는 것처럼 보여서, 매번 실제 데이터가 도착할 때까지 로딩 표시로 가림
+  const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   // TOP5 카드의 "+" 버튼으로 여는 전체 순위 모달 - null이면 닫힘
   const [rankModal, setRankModal] = useState(null);
 
-  // 실제로 서버에서 데이터를 몇 번째로 받아왔는지 세는 값 - 캐시로 보여준 화면(0번)과 이번
-  // 세션에서 처음으로 실제로 받아온 데이터(1번)까지는 "화면이 만들어지는 중"으로 보고 TOP5
-  // 막대에 깜빡임 효과를 넣지 않음. 2번째로 받아온 데이터(15초 뒤)부터 진짜 변화로 보고 효과를 줌
-  const loadGenerationRef = useRef(0);
-  const [dataGeneration, setDataGeneration] = useState(0);
-  // TOP5 막대 애니메이션 판단에 쓰는 "직전 값" 기억 - 탭(오늘/최근3일/최근7일)을 바꾸면 같이 리셋됨
+  // 캐시/최초 로딩에서 처음으로 실제 데이터가 반영될 때는 숫자 카운팅 애니메이션 없이 바로
+  // 값을 보여주고, 그 이후 진짜 갱신부터만 재생. ref는 취소되지 않고 "살아남은" 요청만 건드리므로
+  // StrictMode의 effect 이중 실행으로 조기에 풀리지 않음
+  const hasCompletedAnyLoadRef = useRef(false);
+  const [skipAnimation, setSkipAnimation] = useState(true);
+  // TOP5 막대 애니메이션 판단용 "직전 값" (탭 전환 시 같이 리셋)
   const prevTop5ValuesRef = useRef({});
-  // React StrictMode(개발 모드)는 관련 effect를 같은 값으로 두 번 연달아 호출할 수 있어서,
-  // 그때마다 ref를 새로 덮어쓰면 두 번째 호출이 "방금 자기가 갱신한 값"과 비교하게 되어
-  // 애니메이션이 안 나오거나 두 번 재생되는 것처럼 보임 - 같은 입력이면 건너뛰어서 막음
+  // StrictMode의 effect 이중 호출로 같은 입력이 재처리되는 것 방지
   const lastProcessedTop5Ref = useRef(null);
+  // TOP5를 실제로 한 번이라도 계산해본 적이 있는지 - 이게 true가 되기 전(=아직 빈 목록만 봤거나
+  // 캐시/첫 실제 조회 단계)까지는 새로 등장하는 막대도 애니메이션 없이 바로 보여줌
+  const hasInitializedTop5Ref = useRef(false);
 
-  // 도넛 차트가 처음 화면이 뜰 때만 그려지는 애니메이션이 나오게(그 이후 15초마다 갱신될 땐
-  // 다시 안 그려지도록) - 첫 로딩이 끝난 뒤 애니메이션 한 번 재생될 시간만 기다렸다가 잠금.
-  // (TOP5 막대는 항목별로 "처음 등장"을 따로 추적하는 changedIds 쪽에서 처리함 - 나중에 새로
-  // 등장하는 설비도 있어서 페이지 로딩 시점 하나로만 판단하면 안 됨)
-  const [hasRevealed, setHasRevealed] = useState(false);
-  useEffect(() => {
-    if (isLoading || hasRevealed) return;
-    const timer = setTimeout(() => setHasRevealed(true), 1200);
-    return () => clearTimeout(timer);
-  }, [isLoading, hasRevealed]);
-
-  // 오늘/최근3일/최근7일 탭을 바꿨을 때 - 캐시가 있으면 그 값을 즉시 보여주고, 없으면 로딩
-  // 상태로 리셋함 (setState-in-effect를 피하려고 렌더 중에 바로 처리 - React 공식 문서가
-  // 안내하는 "prop이 바뀌면 state를 조정하는" 패턴)
+  // 기간 탭 전환 시 캐시가 있으면 즉시 표시, 없으면 로딩 (렌더 중 state 조정 패턴)
   const [prevRangeDays, setPrevRangeDays] = useState(rangeDays);
   if (rangeDays !== prevRangeDays) {
     setPrevRangeDays(rangeDays);
     const cached = loadReportCache(rangeDays);
     setRows(cached?.rows ?? []);
     setEquipNameById(cached?.equipNameById ?? {});
-    setIsLoading(!cached);
+    setIsLoading(true);
     setLoadError('');
-    setDataGeneration(0);
+    setSkipAnimation(true);
   }
 
-  // 탭(오늘/최근3일/최근7일)이 바뀌면 애니메이션 판단용 ref들도 같이 리셋함 - ref는 렌더 중에
-  // 못 건드리므로 effect에서 처리 (아래 두 effect보다 먼저 선언해서, 같은 커밋 안에서 이 리셋이
-  // 먼저 반영된 뒤에 로딩/비교 effect가 실행되게 함)
+  // 탭 전환 시 애니메이션 판단용 ref도 리셋 (아래 effect들보다 먼저 실행되도록 순서 배치)
   useEffect(() => {
-    loadGenerationRef.current = 0;
+    hasCompletedAnyLoadRef.current = false;
     prevTop5ValuesRef.current = {};
     lastProcessedTop5Ref.current = null;
+    hasInitializedTop5Ref.current = false;
   }, [rangeDays]);
 
   // Top5/표가 실시간으로 갱신되어 보이도록 일정 주기로 다시 집계함 (REFRESH_MS)
@@ -112,7 +92,6 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
       if (isFirstLoad) setIsLoading(true);
       const to = new Date();
       const from = new Date(to.getTime() - rangeDays * 24 * 60 * 60 * 1000);
-      const myGeneration = ++loadGenerationRef.current;
       try {
         const [tempRows, elecRows, tempList, elecList] = await Promise.all([
           fetchHistoryFromBackend('temp', from, to, headers),
@@ -122,13 +101,14 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
         ]);
         if (cancelled) return;
         setLoadError('');
-        // history/export 응답엔 equipName이 없어서, 현재 목록 조회에서 이름만 따로 매핑함
+        // history/export엔 equipName이 없어서 현재 목록에서 매핑
         const nameMap = {};
         [...tempList, ...elecList].forEach(dto => { nameMap[dto.equipId] = dto.equipName; });
         const mergedRows = [...tempRows, ...elecRows];
         setEquipNameById(nameMap);
         setRows(mergedRows);
-        setDataGeneration(myGeneration);
+        setSkipAnimation(!hasCompletedAnyLoadRef.current);
+        hasCompletedAnyLoadRef.current = true;
         saveReportCache(rangeDays, { rows: mergedRows, equipNameById: nameMap });
       } catch (e) {
         if (!cancelled && isFirstLoad) setLoadError('데이터를 불러오지 못했습니다.');
@@ -145,11 +125,7 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
     return () => { cancelled = true; clearInterval(timer); };
   }, [rangeDays, user?.token]);
 
-  // 온도/전력은 완전히 분리된 도메인이라 "온도 위험 TOP5"/"전력 위험 TOP5"는 도메인별로 따로
-  // 발생 횟수를 셈(상태가 바뀐 시점만 카운트). 반면 표/합계에 쓰는 정상/경고/위험은 "이 설비가
-  // 전체적으로 몇 번이나 정상/경고/위험이었는지"를 뜻하므로, 온도·전력 각각의 발생 횟수를 단순히
-  // 더하면(둘 다 계속 정상이면 1+1=2가 되어버림) 안 되고, 두 도메인 중 더 안 좋은 쪽을 그 순간의
-  // 설비 상태로 보고 하나로 합친 타임라인에서 전환 횟수를 세야 함
+  // TOP5는 도메인별(온도/전력) 발생 횟수, 표/합계는 두 도메인 중 더 안 좋은 쪽을 기준으로 전환 횟수를 셈
   const { perEquip, totals } = useMemo(() => {
     const byEquip = {};
     rows.forEach(r => {
@@ -175,7 +151,7 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
         const label = getStatusMeta(r.status).label;
         if (r.domain === 'temp') { bucket.tempSum += r.temperature; bucket.tempCount += 1; } else { bucket.powerSum += r.power; bucket.powerCount += 1; }
 
-        // 온도/전력 TOP5 차트용 - 도메인별 발생 횟수 (해당 도메인 안에서 상태가 바뀐 시점만)
+        // TOP5용 - 도메인별 발생 횟수(상태 전환 시점만)
         if (label !== curLabel[r.domain]) {
           if (label === '위험') bucket[`${r.domain}Danger`] += 1;
           else if (label === '경고') bucket[`${r.domain}Warning`] += 1;
@@ -212,44 +188,53 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
   const top5Power = useMemo(() => (
     [...perEquip].filter(eq => eq.powerDanger > 0).sort((a, b) => b.powerDanger - a.powerDanger).slice(0, 5)
   ), [perEquip]);
-  // 온도/전력 두 그래프의 막대 길이를 같은 기준으로 비교할 수 있도록 X축 최댓값을 맞춤
-  const top5MaxValue = useMemo(() => Math.max(
-    1,
-    ...top5Temp.map(eq => eq.tempDanger),
-    ...top5Power.map(eq => eq.powerDanger),
-  ), [top5Temp, top5Power]);
+  // 온도/전력 두 그래프의 막대 길이를 같은 기준으로 비교할 수 있도록 X축 최댓값을 맞춤.
+  // 5 단위로 올림해서, 값이 한두 개 오르내릴 때마다 축 기준이 바뀌어 막대 전체 길이가
+  // 흔들리며 깜빡이는 것처럼 보이는 걸 방지 (같은 5 구간 안에서는 축이 그대로 유지됨)
+  const top5MaxValue = useMemo(() => {
+    const rawMax = Math.max(
+      1,
+      ...top5Temp.map(eq => eq.tempDanger),
+      ...top5Power.map(eq => eq.powerDanger),
+    );
+    return Math.max(5, Math.ceil(rawMax / 5) * 5);
+  }, [top5Temp, top5Power]);
 
-  // 갱신될 때마다 값이 바뀌었거나 새로 등장한 막대만 깜빡임 효과가 나오게 - 직전에 실제로
-  // 화면에 반영됐던 값을 기억해뒀다가 비교함. 다만 dataGeneration이 2 미만이면(캐시로 보여준
-  // 화면 + 이번 세션 첫 실제 조회) 아직 "화면이 만들어지는 중"이므로 효과를 주지 않음 - 그
-  // 상태에서도 비교 기준(prevTop5ValuesRef)은 계속 갱신해둬야 다음 진짜 변화를 정확히 잡아냄.
-  // ref는 렌더 중에 못 읽으므로 비교는 폴링 결과가 반영된 뒤(effect)에 한 번씩 하고, 그 결과만
-  // state로 들고 있음
+  // 갱신될 때마다 값이 바뀌었거나 새로 순위에 등장한 막대만 깜빡임 효과가 나오게 - 직전에
+  // 실제로 화면에 반영됐던 값을 기억해뒀다가 비교함. 로딩 스피너가 떠 있는 동안(캐시 기반 계산
+  // 포함)은 아예 비교하지 않고 건너뜀 - 화면에 처음 실제 데이터가 뜨는 순간을 "최초 진입"으로
+  // 보고, 그 이후에 값이 바뀔 때만 애니메이션이 붙게 하기 위함
   const [changedTempIds, setChangedTempIds] = useState(() => new Set());
   const [changedPowerIds, setChangedPowerIds] = useState(() => new Set());
   useEffect(() => {
+    if (isLoading) return;
     if (lastProcessedTop5Ref.current?.temp === top5Temp && lastProcessedTop5Ref.current?.power === top5Power) {
       return;
     }
     lastProcessedTop5Ref.current = { temp: top5Temp, power: top5Power };
-    const isStillSettling = dataGeneration < 2;
+    const isFirstPass = !hasInitializedTop5Ref.current;
     const changedTemp = new Set();
     const changedPower = new Set();
     top5Temp.forEach(eq => {
       const key = `temp-${eq.equipId}`;
       const prev = prevTop5ValuesRef.current[key];
-      if (!isStillSettling && prev !== eq.tempDanger) changedTemp.add(eq.equipId);
+      if (!isFirstPass && prev !== eq.tempDanger) changedTemp.add(eq.equipId);
       prevTop5ValuesRef.current[key] = eq.tempDanger;
     });
     top5Power.forEach(eq => {
       const key = `power-${eq.equipId}`;
       const prev = prevTop5ValuesRef.current[key];
-      if (!isStillSettling && prev !== eq.powerDanger) changedPower.add(eq.equipId);
+      if (!isFirstPass && prev !== eq.powerDanger) changedPower.add(eq.equipId);
       prevTop5ValuesRef.current[key] = eq.powerDanger;
     });
+    // 완전히 빈 상태(데이터가 하나도 없음)는 "초기화됐다"고 보지 않음 - 캐시 없이 처음 방문해
+    // 빈 배열만 보다가 실제 데이터가 처음 채워지는 순간에도 애니메이션이 없게 하기 위함
+    if (top5Temp.length > 0 || top5Power.length > 0) {
+      hasInitializedTop5Ref.current = true;
+    }
     setChangedTempIds(changedTemp);
     setChangedPowerIds(changedPower);
-  }, [top5Temp, top5Power, dataGeneration]);
+  }, [top5Temp, top5Power, isLoading]);
 
   return (
     <div className={`w-full min-w-[320px] flex flex-col transition-colors h-[calc(100vh/1.1)] max-h-[calc(1080px/1.1)] overflow-hidden ${
@@ -266,7 +251,7 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
         setIsAlarmOn={setIsAlarmOn}
       />
 
-      <div className="flex-1 min-h-0 p-5 lg:p-8 flex flex-col gap-5">
+      <div className="flex-1 min-h-0 p-5 lg:p-8 flex flex-col gap-5 screen-enter">
         <div className="flex items-center justify-between gap-3 flex-wrap shrink-0">
           <div className="flex items-center gap-2.5">
             <div className={`flex items-center p-1 rounded-full border shrink-0 transition-colors ${
@@ -302,19 +287,19 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                   isDarkMode ? 'bg-[#34D399]/10 text-[#34D399] border-transparent' : 'bg-green-50 text-green-700 border-green-200'
                 }`}>
                   <span className="status-dot bg-green-500" />
-                  정상 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.normal} /></span>
+                  정상 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.normal} skipAnimation={skipAnimation} /></span>
                 </span>
                 <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold border ${
                   isDarkMode ? 'bg-[#FBBF24]/10 text-[#FBBF24] border-transparent' : 'bg-amber-50 text-amber-700 border-amber-200'
                 }`}>
                   <span className="status-dot bg-amber-500" />
-                  경고 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.warning} /></span>
+                  경고 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.warning} skipAnimation={skipAnimation} /></span>
                 </span>
                 <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono font-bold border ${
                   isDarkMode ? 'bg-[#FB5D75]/10 text-[#FB5D75] border-transparent' : 'bg-red-50 text-red-600 border-red-200'
                 }`}>
                   <span className="status-dot bg-red-500" />
-                  위험 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.danger} /></span>
+                  위험 <span className="inline-block min-w-[1.6em] text-right tabular-nums"><AnimatedNumber value={totals.danger} skipAnimation={skipAnimation} /></span>
                 </span>
               </div>
             )}
@@ -359,10 +344,18 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                       더보기
                     </button>
                   </div>
-                  {chart.data.length === 0 ? (
-                    <p className={`text-[13px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>이 기간에 위험 상태가 없었습니다.</p>
-                  ) : (
-                    <ResponsiveContainer width="100%" height={240} initialDimension={{ width: 340, height: 240 }}>
+                  {/* 데이터 유무와 상관없이 차트를 항상 마운트해둠 - 조건부로 마운트/언마운트하면
+                      그때마다 ResponsiveContainer가 크기를 처음부터 다시 측정하면서 커졌다
+                      작아지는 것처럼 보이는 문제가 있어서, 빈 상태는 투명 처리 + 안내 문구
+                      오버레이로만 표시함 */}
+                  <div className="relative" style={{ height: 240 }}>
+                    {chart.data.length === 0 && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <p className={`text-[13px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>이 기간에 위험 상태가 없었습니다.</p>
+                      </div>
+                    )}
+                    <div className={chart.data.length === 0 ? 'opacity-0' : ''}>
+                    <ResponsiveContainer width="100%" height={240} initialDimension={{ width: 480, height: 240 }}>
                       <BarChart data={chart.data} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 0 }}>
                         <CartesianGrid stroke={isDarkMode ? '#1E253D' : '#E5E7EB'} strokeDasharray="3 3" horizontal={false} />
                         <XAxis type="number" domain={[0, top5MaxValue]} tick={{ fontSize: 12, fill: isDarkMode ? '#7D87A8' : '#6B7280' }} allowDecimals={false} />
@@ -405,7 +398,8 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
-                  )}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -438,27 +432,27 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                       <td className="px-3 py-3 text-center">
                         <span className={`inline-block min-w-[2.5em] px-2 py-1 rounded-full font-mono font-bold ${
                           isDarkMode ? 'bg-[#34D399]/10 text-[#34D399]' : 'bg-green-50 text-green-700'
-                        }`}><AnimatedNumber value={eq.normal} /></span>
+                        }`}><AnimatedNumber value={eq.normal} skipAnimation={skipAnimation} /></span>
                       </td>
                       <td className="px-3 py-3 text-center">
                         <span className={`inline-block min-w-[2.5em] px-2 py-1 rounded-full font-mono font-bold ${
                           eq.warning > 0
                             ? (isDarkMode ? 'bg-[#FBBF24]/10 text-[#FBBF24]' : 'bg-amber-50 text-amber-700')
                             : (isDarkMode ? 'text-[#3A4266]' : 'text-gray-300')
-                        }`}><AnimatedNumber value={eq.warning} /></span>
+                        }`}><AnimatedNumber value={eq.warning} skipAnimation={skipAnimation} /></span>
                       </td>
                       <td className="px-3 py-3 text-center">
                         <span className={`inline-block min-w-[2.5em] px-2 py-1 rounded-full font-mono font-bold ${
                           eq.danger > 0
                             ? (isDarkMode ? 'bg-[#FB5D75]/10 text-[#FB5D75]' : 'bg-red-50 text-red-600')
                             : (isDarkMode ? 'text-[#3A4266]' : 'text-gray-300')
-                        }`}><AnimatedNumber value={eq.danger} /></span>
+                        }`}><AnimatedNumber value={eq.danger} skipAnimation={skipAnimation} /></span>
                       </td>
                       <td className={`px-3 py-3 text-right font-mono font-semibold ${isDarkMode ? 'text-[#B9C2DE]' : 'text-gray-600'}`}>
-                        {eq.avgTemp != null ? <><AnimatedNumber value={eq.avgTemp} decimals={1} />℃</> : '-'}
+                        {eq.avgTemp != null ? <><AnimatedNumber value={eq.avgTemp} decimals={1} skipAnimation={skipAnimation} />℃</> : '-'}
                       </td>
                       <td className={`px-5 py-3 text-right font-mono font-semibold ${isDarkMode ? 'text-[#B9C2DE]' : 'text-gray-600'}`}>
-                        {eq.avgPower != null ? <AnimatedNumber value={eq.avgPower} decimals={1} /> : '-'}
+                        {eq.avgPower != null ? <AnimatedNumber value={eq.avgPower} decimals={1} skipAnimation={skipAnimation} /> : '-'}
                       </td>
                     </tr>
                   ))}
@@ -470,11 +464,16 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
             {/* 전체 상태 비율 요약 */}
             <div className={`rounded-2xl border p-5 ${isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'}`}>
               <h3 className={`text-base font-bold mb-2 ${isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'}`}>전체 상태 비율</h3>
-              {totals.normal + totals.warning + totals.danger === 0 ? (
-                <p className={`text-[13px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>이 기간에 집계된 데이터가 없습니다.</p>
-              ) : (
-                <>
-                  <ResponsiveContainer width="100%" height={200} initialDimension={{ width: 200, height: 200 }}>
+              {/* TOP5와 마찬가지로 항상 마운트해두고 빈 상태는 투명 처리 + 오버레이 문구로만
+                  표시 (조건부 마운트 시 ResponsiveContainer 재측정으로 커졌다 작아지는 문제 방지) */}
+              <div className="relative">
+                {totals.normal + totals.warning + totals.danger === 0 && (
+                  <div className="absolute inset-0 flex items-center justify-center z-10">
+                    <p className={`text-[13px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>이 기간에 집계된 데이터가 없습니다.</p>
+                  </div>
+                )}
+                <div className={totals.normal + totals.warning + totals.danger === 0 ? 'opacity-0' : ''}>
+                  <ResponsiveContainer width="100%" height={200} initialDimension={{ width: 340, height: 200 }}>
                     <PieChart>
                       <Pie
                         data={[
@@ -488,9 +487,7 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                         outerRadius={75}
                         paddingAngle={2}
                         stroke="none"
-                        isAnimationActive={!hasRevealed}
-                        animationDuration={1100}
-                        animationEasing="ease-out"
+                        isAnimationActive={false}
                       >
                         {[STATUS_COLORS.normal, STATUS_COLORS.warning, STATUS_COLORS.danger].map(color => (
                           <Cell key={color} fill={color} />
@@ -513,10 +510,10 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
                     </PieChart>
                   </ResponsiveContainer>
                   <p className={`text-[12px] text-center mt-1 ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>
-                    총 <AnimatedNumber value={totals.normal + totals.warning + totals.danger} />건 기준
+                    총 <AnimatedNumber value={totals.normal + totals.warning + totals.danger} skipAnimation={skipAnimation} />건 기준
                   </p>
-                </>
-              )}
+                </div>
+              </div>
             </div>
             </div>
           </div>

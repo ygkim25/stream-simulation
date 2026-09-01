@@ -13,6 +13,15 @@ html {
   zoom: 1.1;
 }
 
+/* 화면 전환 시 내용이 뚝 나타나지 않고 살짝 떠오르며 부드럽게 나타남 */
+@keyframes screen-enter {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.screen-enter {
+  animation: screen-enter 380ms ease-out;
+}
+
 /* ------------------------------------------
  * 기본 (라이트 / 일반 모드) 스크롤바
  * ------------------------------------------ */
@@ -216,7 +225,7 @@ button:disabled {
 }
 
 /* 리포트 TOP5 그래프 - 값이 바뀐 막대만 왼쪽을 기준으로 스무스하게 다시 채워지고(한 번),
- * 색은 눈에 잘 띄도록 원래 색<->강조색을 세 번 반짝임 */
+ * 색은 눈에 잘 띄도록 원래 색<->강조색을 네 번 반짝임 */
 @keyframes report-bar-grow-scale {
   0% { transform: scaleX(0); }
   100% { transform: scaleX(1); }
