@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
     "@stomp/stompjs": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "axios": "^1.19.0",
@@ -19,6 +21,7 @@
     "recharts": "^3.10.1",
     "sockjs-client": "^1.6.1",
     "tailwindcss": "^4.3.3",
+    "three": "^0.185.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

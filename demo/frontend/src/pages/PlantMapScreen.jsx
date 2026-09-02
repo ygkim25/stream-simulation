@@ -1,10 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
 import CustomConfirm from '../components/CustomConfirm';
 import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentCompareModal from '../components/EquipmentCompareModal';
+import PlantMap3DView from '../components/PlantMap3DView';
+import EquipShapePanel from '../components/EquipShapePanel';
+import { saveModelBlob, deleteModelBlob } from '../utils/plantMapModelsDb';
 import { getStatusMeta, STATUS_DOT_CLASS, DEFAULT_STATUS_INFO_LINES } from '../utils/statusStyles';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 import { EMPTY_EQUIP_ROW, mergeTempDto, mergeElecDto, mergeEquipmentLists } from '../utils/equipmentMerge';
@@ -36,6 +40,20 @@ const loadStoredZones = () => {
 const saveZones = (zones) => {
   try { localStorage.setItem(ZONES_KEY, JSON.stringify(zones)); } catch { /* 세션 메모리로만 유지 */ }
 };
+
+// 설비별 3D 모양 오버라이드 - { [equipId]: { type: 'preset', preset } | { type: 'model', modelId, fileName } }.
+// 값이 없는 설비는 3D 보기에서 이름 기반 자동 추정(classifyShape)을 그대로 씀
+const EQUIP_SHAPES_KEY = 'plantMapEquipShapes';
+const generateModelId = () => `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const loadStoredEquipShapes = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(EQUIP_SHAPES_KEY));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+};
+const saveEquipShapes = (shapes) => {
+  try { localStorage.setItem(EQUIP_SHAPES_KEY, JSON.stringify(shapes)); } catch { /* 세션 메모리로만 유지 */ }
+};
 // 구역 안 설비 중 제일 안 좋은 상태로 구역 색을 정함 (위험 > 경고 > 정상)
 const STATUS_COLOR_PRIORITY = { red: 2, amber: 1, green: 0 };
 const ZONE_BORDER_CLASS = {
@@ -44,11 +62,54 @@ const ZONE_BORDER_CLASS = {
   red: { dark: 'border-[#FB5D75]', light: 'border-red-500' },
 };
 
+// 3D 보기로 전환될 때 바로 팝업되지 않고 살짝 페이드인되게 하는 래퍼
+const FadeIn = ({ children }) => {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    // rAF를 한 번만 걸면 opacity:0 상태가 화면에 실제로 그려지기 전에 곧바로 1로 바뀌어서
+    // 트랜지션 없이 뚝 나타나 보임 - 한 프레임 더 기다렸다가 값을 바꿔야 브라우저가 0 상태를
+    // 먼저 그린 뒤 진짜로 페이드인됨
+    let id2;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => setVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      cancelAnimationFrame(id2);
+    };
+  }, []);
+  return (
+    <div
+      className="w-full h-full"
+      style={{
+        opacity: visible ? 1 : 0,
+        transform: visible ? 'scale(1)' : 'scale(0.97)',
+        transition: 'opacity 320ms ease-out, transform 320ms ease-out',
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
 const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
   const [equipments, setEquipments] = useState([]);
   const image = FLOORPLAN_IMAGE_URL;
   const [positions, setPositions] = useState(() => loadStoredPositions());
   const [isEditMode, setIsEditMode] = useState(false);
+  // 3D는 보기 전용 - 배치/구역 편집(포인터 좌표 계산)은 2D에서만 동작하므로 편집 모드 진입 시 자동으로 꺼짐
+  // (렌더 중 조정 패턴 - effect에서 setState하면 캐스케이딩 렌더 경고가 발생함)
+  const [is3DView, setIs3DView] = useState(false);
+  const [prevIsEditMode, setPrevIsEditMode] = useState(isEditMode);
+  if (isEditMode !== prevIsEditMode) {
+    setPrevIsEditMode(isEditMode);
+    if (isEditMode) setIs3DView(false);
+  }
+  // 편집 모드에서 2D로 배치를 바꾸면서 결과를 바로바로 3D로 확인할 수 있게 하는 작은 미리보기
+  // 인셋. body 포털에 fixed로 띄우는 진짜 떠 있는 창이라 화면 기준 좌표(px)로 관리함
+  const [show3DPreview, setShow3DPreview] = useState(false);
+  const [previewPos, setPreviewPos] = useState(() => ({ x: 16, y: Math.max(16, window.innerHeight - 260) }));
+  const [previewSize, setPreviewSize] = useState({ width: 320, height: 224 });
   const [metricTab, setMetricTab] = useState('temperature');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -81,6 +142,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
 
   // 구역(zone) - 사각형 이동/크기조절도 위 마커 드래그와 같은 패턴(포인터 이벤트 + %기반 델타)
   const [zones, setZones] = useState(() => loadStoredZones());
+  const [equipmentShapes, setEquipmentShapes] = useState(() => loadStoredEquipShapes());
   const [isZoneDragging, setIsZoneDragging] = useState(false);
   const [zoneDragPreview, setZoneDragPreview] = useState(null); // 드래그 중인 구역 1개의 실시간 {xPct,yPct,widthPct,heightPct}
   const zoneDragRef = useRef(null); // { id, mode: 'move'|'resize', startPct, startZone }
@@ -93,7 +155,10 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
 
   const mapRef = useRef(null);
 
-  // 도면 컨테이너 크기 실시간 추적 (레이아웃/창 크기 변화 대응)
+  // 도면 컨테이너 크기 실시간 추적 (레이아웃/창 크기 변화 대응).
+  // is3DView가 바뀌면 2D의 <div ref={mapRef}>가 언마운트/재마운트되어 mapRef.current가
+  // 다른 DOM 노드로 바뀌므로, 그때마다 옵저버를 새 노드에 다시 붙여야 함 (안 그러면 3D 갔다가
+  // 2D로 돌아왔을 때 예전 노드 크기 기준으로 남아있어 구역/마커 위치 계산이 어긋남)
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return undefined;
@@ -105,7 +170,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [is3DView]);
 
   // object-contain 규칙대로 "실제 이미지가 차지하는 영역"을 비율(0~1)로 계산 (zoom 배율 무관하게 정확하도록 px 대신 비율만 사용)
   const getImageBoxRatio = () => {
@@ -345,6 +410,49 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
     });
     if (renamingZoneId === zoneId) setRenamingZoneId(null);
     if (openZoneId === zoneId) setOpenZoneId(null);
+  };
+
+  // 설비별 3D 모양 오버라이드 - 프리셋 선택/모델 업로드/초기화. rotationY(회전)는 모양(프리셋/모델)을
+  // 바꿔도 유지해야 자연스러워서, 새 엔트리를 만들 때 이전 값에서 넘겨받음
+  const handleChangeShapePreset = (equipId, preset) => {
+    setEquipmentShapes(prev => {
+      const prevEntry = prev[equipId];
+      if (prevEntry?.type === 'model') deleteModelBlob(prevEntry.modelId);
+      const next = { ...prev, [equipId]: { type: 'preset', preset, rotationY: prevEntry?.rotationY || 0 } };
+      saveEquipShapes(next);
+      return next;
+    });
+  };
+
+  const handleUploadShapeModel = async (equipId, file) => {
+    const prevEntry = equipmentShapes[equipId];
+    const modelId = generateModelId();
+    await saveModelBlob(modelId, file, file.name);
+    if (prevEntry?.type === 'model') deleteModelBlob(prevEntry.modelId);
+    setEquipmentShapes(prev => {
+      const next = { ...prev, [equipId]: { type: 'model', modelId, fileName: file.name, rotationY: prevEntry?.rotationY || 0 } };
+      saveEquipShapes(next);
+      return next;
+    });
+  };
+
+  const handleChangeShapeRotation = (equipId, rotationY) => {
+    setEquipmentShapes(prev => {
+      const next = { ...prev, [equipId]: { ...prev[equipId], rotationY } };
+      saveEquipShapes(next);
+      return next;
+    });
+  };
+
+  const handleResetShape = (equipId) => {
+    setEquipmentShapes(prev => {
+      const prevEntry = prev[equipId];
+      if (prevEntry?.type === 'model') deleteModelBlob(prevEntry.modelId);
+      const next = { ...prev };
+      delete next[equipId];
+      saveEquipShapes(next);
+      return next;
+    });
   };
 
   const startRenameZone = (zone) => {
@@ -674,6 +782,22 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
           </button>
 
           <div className="ml-auto flex items-center gap-2">
+            {/* 3D 보기 토글 - 편집 모드에선 좌표 계산이 2D 기준이라 숨김. 왼쪽 아이콘들 앞이 아니라
+                여기 우측 그룹에 둬서, 편집 모드를 켜고 끌 때 이 버튼이 사라져도 앞쪽 정상/경고/위험·
+                사용법 아이콘 위치가 안 밀리게 함 */}
+            {!isEditMode && (
+              <button
+                type="button"
+                onClick={() => setIs3DView(v => !v)}
+                className={`px-2.5 py-1.5 rounded-full text-[11px] font-bold tracking-wide transition-colors border shrink-0 ${
+                  is3DView
+                    ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border-[#22D3EE]/40' : 'bg-white text-green-700 border-gray-300 shadow-sm')
+                    : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border-transparent bg-[#0D1224]' : 'text-gray-500 hover:text-gray-800 border-transparent bg-gray-100')
+                }`}
+              >
+                {is3DView ? '2D 보기' : '3D 보기'}
+              </button>
+            )}
             {isEditMode && (
               <>
                 {unplacedEquipments.length > 0 && (
@@ -716,6 +840,18 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                     배치 초기화
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setShow3DPreview(v => !v)}
+                  title="2D에서 편집한 내용을 작은 3D 창으로 실시간으로 확인합니다"
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
+                    show3DPreview
+                      ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border-[#22D3EE]/40' : 'bg-green-50 text-green-700 border-green-300')
+                      : (isDarkMode ? 'border-[#232B45] hover:border-[#2A335A] hover:bg-[#151B30] text-[#9FACC9] hover:text-[#EDF1FC]' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-100 text-gray-600 hover:text-gray-900')
+                  }`}
+                >
+                  3D 미리보기
+                </button>
               </>
             )}
 
@@ -741,6 +877,21 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
         <div className={`relative flex-1 min-h-0 rounded-xl border overflow-hidden ${
             isDarkMode ? 'bg-[#12172A] border-[#1E253D]' : 'bg-white border-gray-200 shadow-sm'
           }`}>
+          {is3DView ? (
+            <FadeIn>
+              <PlantMap3DView
+                image={image}
+                placedEquipments={placedEquipments}
+                positions={positions}
+                zones={zones}
+                metricTab={metricTab}
+                isDarkMode={isDarkMode}
+                equipmentShapes={equipmentShapes}
+                onSelectEquip={setSelectedEquipId}
+              />
+            </FadeIn>
+          ) : (
+          <>
           {/* 다중 선택(ctrl+클릭) 상태 - flex 흐름에 넣으면 선택/해제될 때마다 이 패널이
               생겼다 없어지면서 도면 영역 높이가 바뀌어 이미지가 커졌다 작아졌다 했음(이전에
               "배치되지 않은 설비 N개" 문구에서 겪은 것과 같은 문제) - 도면 위에 반투명
@@ -778,15 +929,17 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
           })()}
 
           {/* 배치되지 않은 설비 트레이 - 도면 "위"에 있던 걸(flex 흐름) 이미지 위 오버레이로 옮겨서
-              열고 닫아도(isTrayOpen) 도면 크기에 전혀 영향이 없게 함 */}
+              열고 닫아도(isTrayOpen) 도면 크기에 전혀 영향이 없게 함. 목록 높이가 고정값(14rem)이라
+              도면이 큰 화면에서는 아래쪽이 많이 비어보인다는 피드백으로, 도면 영역 전체 높이만큼
+              늘어나게(헤더는 고정, 목록만 flex-1로 나머지를 채움) 바꿈 */}
           {isEditMode && (
-            <div className={`absolute z-20 top-2 left-2 max-w-[220px] rounded-lg backdrop-blur-sm ${
+            <div className={`absolute z-20 top-2 left-2 max-w-[220px] max-h-[calc(100%-1rem)] flex flex-col rounded-lg backdrop-blur-sm ${
               isDarkMode ? 'bg-[#0A0E1A]/70' : 'bg-white/80'
             }`}>
               <button
                 type="button"
                 onClick={() => setIsTrayOpen(v => !v)}
-                className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-[11px] font-semibold ${
+                className={`shrink-0 w-full flex items-center justify-between gap-3 px-3 py-2 text-[11px] font-semibold ${
                   isDarkMode ? 'text-[#EDF1FC]' : 'text-gray-800'
                 }`}
               >
@@ -794,7 +947,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                 <span className={`transition-transform text-[9px] ${isTrayOpen ? '' : '-rotate-90'}`}>▾</span>
               </button>
               {isTrayOpen && (
-                <div className="px-3 pb-3 max-h-56 overflow-y-auto flex flex-col gap-1.5">
+                <div className="px-3 pb-3 flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5">
                   {unplacedEquipments.length === 0 ? (
                     <p className={`text-[11px] ${isDarkMode ? 'text-[#5C6584]' : 'text-gray-400'}`}>모든 설비가 배치되었습니다.</p>
                   ) : (
@@ -1016,9 +1169,12 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                         dragEquipId === eq.equipId ? 'opacity-0' : ''
                       }`}
                     >
+                      {/* 선택 여부는 테두리 색으로만 구분 - box-shadow 링을 추가로 씌우면 선택된
+                          핀만 실제보다 커 보여서(약 4px 더 큰 시각적 크기) 핀 크기가 제각각인
+                          것처럼 보였음. 모든 핀이 항상 같은 크기(w-3.5 h-3.5)를 유지하게 함 */}
                       <span className={`w-3.5 h-3.5 rounded-full border-2 shadow ${STATUS_DOT_CLASS[meta.color]} ${meta.color === 'red' ? 'animate-pulse' : ''} ${
                         isSelected ? (isDarkMode ? 'border-[#22D3EE]' : 'border-green-600') : 'border-white'
-                      }`} style={isSelected ? { boxShadow: `0 0 0 2px ${isDarkMode ? '#22D3EE' : '#16A34A'}` } : undefined} />
+                      }`} />
                       <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-black/60 text-white whitespace-nowrap">
                         {eq.equipName}
                       </span>
@@ -1051,6 +1207,115 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               })()}
             </div>
 
+            {/* 2D 편집 중 실시간 3D 확인용 인셋 - 배치/구역을 바꿀 때마다 같은 props가 그대로
+                다시 렌더돼서 별도 동기화 로직 없이 항상 최신 상태를 보여줌.
+                simplified로 등장 애니메이션/경고 링 펄스 같은 장식 효과는 꺼서 계속 다시
+                그려져도 정신없지 않게 함. 위쪽 헤더 바를 잡고 끌면 원하는 위치로, 우하단
+                모서리를 잡고 끌면 원하는 크기로 자유롭게 조절할 수 있음.
+                "도면 영역" 컨테이너는 overflow-hidden이라, 그 안의 absolute 자식으로 두면
+                위로 끌어올렸을 때 컨테이너 경계에서 잘려서 다시 잡을 수 없는 위치로 가버리는
+                문제가 있었음 - body에 포털로 띄워서 어디로 옮기든 잘리지 않고 항상 맨 위에
+                보이는 진짜 떠 있는 창처럼 동작하게 함 */}
+            {show3DPreview && createPortal(
+              <div
+                className={`fixed flex flex-col rounded-lg overflow-hidden border shadow-2xl ${
+                  isDarkMode ? 'border-[#232B45] bg-[#0A0E1A]' : 'border-gray-300 bg-white'
+                }`}
+                style={{ width: previewSize.width, height: previewSize.height, left: previewPos.x, top: previewPos.y, zIndex: 9999 }}
+              >
+                <div
+                  onPointerDown={(e) => {
+                    const panelEl = e.currentTarget.parentElement;
+                    const startLeft = panelEl.offsetLeft;
+                    const startTop = panelEl.offsetTop;
+                    const startX = e.clientX;
+                    const startY = e.clientY;
+                    const handleMove = (moveEvent) => {
+                      // 화면 밖으로 완전히 나가면 다시 못 잡으니, 헤더 일부는 항상 화면 안에 남게 clamp
+                      const nextX = Math.min(window.innerWidth - 40, Math.max(-previewSize.width + 40, startLeft + (moveEvent.clientX - startX)));
+                      const nextY = Math.min(window.innerHeight - 24, Math.max(0, startTop + (moveEvent.clientY - startY)));
+                      setPreviewPos({ x: nextX, y: nextY });
+                    };
+                    const handleUp = () => {
+                      window.removeEventListener('pointermove', handleMove);
+                      window.removeEventListener('pointerup', handleUp);
+                    };
+                    window.addEventListener('pointermove', handleMove);
+                    window.addEventListener('pointerup', handleUp);
+                  }}
+                  className={`shrink-0 h-6 flex items-center px-2 cursor-move select-none ${
+                    isDarkMode ? 'bg-[#12172A] text-[#9FACC9]' : 'bg-gray-100 text-gray-500'
+                  }`}
+                >
+                  <span className="text-[10px] font-semibold">3D 미리보기</span>
+                </div>
+                <div className="flex-1 min-h-0">
+                  <PlantMap3DView
+                    image={image}
+                    placedEquipments={placedEquipments}
+                    positions={positions}
+                    zones={zones}
+                    metricTab={metricTab}
+                    isDarkMode={isDarkMode}
+                    equipmentShapes={equipmentShapes}
+                    onSelectEquip={() => {}}
+                    simplified
+                  />
+                </div>
+                <div
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const startWidth = previewSize.width;
+                    const startHeight = previewSize.height;
+                    const startX = e.clientX;
+                    const startY = e.clientY;
+                    const handleMove = (moveEvent) => {
+                      setPreviewSize({
+                        width: Math.min(900, Math.max(220, startWidth + (moveEvent.clientX - startX))),
+                        height: Math.min(700, Math.max(140, startHeight + (moveEvent.clientY - startY))),
+                      });
+                    };
+                    const handleUp = () => {
+                      window.removeEventListener('pointermove', handleMove);
+                      window.removeEventListener('pointerup', handleUp);
+                    };
+                    window.addEventListener('pointermove', handleMove);
+                    window.addEventListener('pointerup', handleUp);
+                  }}
+                  title="드래그해서 크기 조절"
+                  className={`absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize ${isDarkMode ? 'text-[#3A4266]' : 'text-gray-400'}`}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-full h-full">
+                    <path d="M13 3 L3 13 M13 8 L8 13 M13 13 L13 13" strokeLinecap="round" />
+                  </svg>
+                </div>
+              </div>,
+              document.body,
+            )}
+
+            {/* 3D 모양 설정 패널 - "배치되지 않은 설비" 트레이와 같은 패턴으로 도면 위 오버레이
+                (레이아웃에 영향 안 주고, 우측 상단에 떠 있음) */}
+            {isEditMode && multiSelectedIds.length === 1 && (() => {
+              const selectedEquipId = multiSelectedIds[0];
+              const selectedEquip = equipments.find(eq => eq.equipId === selectedEquipId)
+                || { ...EMPTY_EQUIP_ROW, equipId: selectedEquipId, equipName: selectedEquipId };
+              return (
+                <div className="absolute z-20 top-2 right-2">
+                  <EquipShapePanel
+                    key={selectedEquipId}
+                    equip={selectedEquip}
+                    shapeConfig={equipmentShapes[selectedEquipId] || null}
+                    onChangePreset={(preset) => handleChangeShapePreset(selectedEquipId, preset)}
+                    onUploadModel={(file) => handleUploadShapeModel(selectedEquipId, file)}
+                    onChangeRotation={(rotationY) => handleChangeShapeRotation(selectedEquipId, rotationY)}
+                    onReset={() => handleResetShape(selectedEquipId)}
+                    isDarkMode={isDarkMode}
+                  />
+                </div>
+              );
+            })()}
+          </>
+          )}
         </div>
       </div>
 

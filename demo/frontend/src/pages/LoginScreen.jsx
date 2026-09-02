@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../utils/apiConfig';
+import FindPasswordModal from '../components/FindPasswordModal';
 
 const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
   // 자동로그인 체크 시 저장해둔 아이디/비밀번호를 화면에 미리 채워둠
@@ -10,6 +11,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showFindPassword, setShowFindPassword] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -170,33 +172,45 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
             </button>
           </div>
 
-          <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none group w-fit">
-            <input
-              type="checkbox"
-              checked={rememberLogin}
-              onChange={(e) => setRememberLogin(e.target.checked)}
-              className="sr-only"
-            />
-            <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-all duration-200 ${
-              rememberLogin
-                ? (isDarkMode ? 'bg-[#22D3EE] border-[#22D3EE] shadow-[0_0_8px_rgba(34,211,238,0.5)]' : 'bg-green-600 border-green-600')
-                : (isDarkMode ? 'bg-[#0D1224] border-[#2A335A] group-hover:border-[#5C6584]' : 'bg-gray-50 border-gray-300 group-hover:border-gray-400')
-            }`}>
-              <svg
-                className={`w-3 h-3 transition-all duration-200 ${
-                  rememberLogin ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
-                } ${isDarkMode ? 'text-[#0A0E1A]' : 'text-white'}`}
-                fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-            </span>
-            <span className={`transition-colors ${
-              isDarkMode ? 'text-[#9FACC9] group-hover:text-[#EDF1FC]' : 'text-gray-600 group-hover:text-gray-800'
-            }`}>
-              자동 로그인
-            </span>
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none group w-fit">
+              <input
+                type="checkbox"
+                checked={rememberLogin}
+                onChange={(e) => setRememberLogin(e.target.checked)}
+                className="sr-only"
+              />
+              <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 transition-all duration-200 ${
+                rememberLogin
+                  ? (isDarkMode ? 'bg-[#22D3EE] border-[#22D3EE] shadow-[0_0_8px_rgba(34,211,238,0.5)]' : 'bg-green-600 border-green-600')
+                  : (isDarkMode ? 'bg-[#0D1224] border-[#2A335A] group-hover:border-[#5C6584]' : 'bg-gray-50 border-gray-300 group-hover:border-gray-400')
+              }`}>
+                <svg
+                  className={`w-3 h-3 transition-all duration-200 ${
+                    rememberLogin ? 'scale-100 opacity-100' : 'scale-50 opacity-0'
+                  } ${isDarkMode ? 'text-[#0A0E1A]' : 'text-white'}`}
+                  fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              </span>
+              <span className={`transition-colors ${
+                isDarkMode ? 'text-[#9FACC9] group-hover:text-[#EDF1FC]' : 'text-gray-600 group-hover:text-gray-800'
+              }`}>
+                자동 로그인
+              </span>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setShowFindPassword(true)}
+              className={`text-xs font-semibold cursor-pointer bg-transparent border-none transition-colors ${
+                isDarkMode ? 'text-[#7D87A8] hover:text-[#22D3EE]' : 'text-gray-500 hover:text-green-700'
+              }`}
+            >
+              비밀번호 찾기
+            </button>
+          </div>
 
           {error && (
             <p className="text-[#FB5D75] text-xs font-semibold whitespace-pre-line pt-1">
@@ -217,6 +231,10 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
           </button>
         </form>
       </div>
+
+      {showFindPassword && (
+        <FindPasswordModal onClose={() => setShowFindPassword(false)} isDarkMode={isDarkMode} />
+      )}
     </div>
   );
 };
