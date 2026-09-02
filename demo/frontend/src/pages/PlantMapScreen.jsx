@@ -108,8 +108,11 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   // 편집 모드에서 2D로 배치를 바꾸면서 결과를 바로바로 3D로 확인할 수 있게 하는 작은 미리보기
   // 인셋. body 포털에 fixed로 띄우는 진짜 떠 있는 창이라 화면 기준 좌표(px)로 관리함
   const [show3DPreview, setShow3DPreview] = useState(false);
-  const [previewPos, setPreviewPos] = useState(() => ({ x: 16, y: Math.max(16, window.innerHeight - 260) }));
+  const [previewPos, setPreviewPos] = useState({ x: 16, y: 100 });
   const [previewSize, setPreviewSize] = useState({ width: 320, height: 224 });
+  // 사용자가 직접 옮긴 적이 없으면, 열 때마다 "도면 영역" 좌하단에 맞춰 새로 계산함(창 크기가
+  // 달라도 항상 도면 바로 위 왼쪽 아래에 뜨게) - 한 번이라도 직접 옮기면 그 뒤로는 그 위치를 유지
+  const hasMovedPreviewRef = useRef(false);
   const [metricTab, setMetricTab] = useState('temperature');
   const [selectedEquipId, setSelectedEquipId] = useState(null);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -842,7 +845,13 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                 )}
                 <button
                   type="button"
-                  onClick={() => setShow3DPreview(v => !v)}
+                  onClick={() => {
+                    if (!show3DPreview && !hasMovedPreviewRef.current && mapRef.current) {
+                      const rect = mapRef.current.getBoundingClientRect();
+                      setPreviewPos({ x: rect.left - 5, y: rect.bottom - previewSize.height - 76 });
+                    }
+                    setShow3DPreview(v => !v);
+                  }}
                   title="2D에서 편집한 내용을 작은 3D 창으로 실시간으로 확인합니다"
                   className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
                     show3DPreview
@@ -1225,6 +1234,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               >
                 <div
                   onPointerDown={(e) => {
+                    hasMovedPreviewRef.current = true;
                     const panelEl = e.currentTarget.parentElement;
                     const startLeft = panelEl.offsetLeft;
                     const startTop = panelEl.offsetTop;
