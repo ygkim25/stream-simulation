@@ -332,7 +332,7 @@ const PlantMap3DView = ({ image, placedEquipments, positions, zones, metricTab, 
               : 'bg-white/90 border-gray-200 text-gray-600 hover:bg-gray-50'
           }`}
         >
-          전체 보기로
+          돌아가기
         </button>
       )}
       <Canvas

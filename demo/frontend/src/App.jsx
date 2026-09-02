@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginScreen from './pages/LoginScreen';
 import MainScreen from './pages/MainScreen';
@@ -79,6 +79,29 @@ export default function App() {
     setIsMyPageOpen(false);
     setRoute('login');
   };
+
+  // 401(로그인 만료/무효 토큰)이 오면 어디서 호출한 API든 자동으로 로그아웃시킴. 403(로그인은
+  // 유효하지만 그 리소스에 대한 권한이 없음)은 다른 사람 소유 데이터 등 정상적인 상황일 수 있어서
+  // 여기서 로그아웃시키면 안 됨 - 그건 각 화면에서 에러 메시지로만 보여줌.
+  // ref로 최신 user/handleLogout을 참조해서, 인터셉터는 마운트 시 한 번만 등록함
+  const userRef = useRef(user);
+  const handleLogoutRef = useRef(handleLogout);
+  useEffect(() => {
+    userRef.current = user;
+    handleLogoutRef.current = handleLogout;
+  });
+  useEffect(() => {
+    const interceptorId = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error?.response?.status === 401 && userRef.current) {
+          handleLogoutRef.current();
+        }
+        return Promise.reject(error);
+      },
+    );
+    return () => axios.interceptors.response.eject(interceptorId);
+  }, []);
 
   const handleMyPageOpen = (tab) => {
     setMyPageInitialTab(tab || 'info');

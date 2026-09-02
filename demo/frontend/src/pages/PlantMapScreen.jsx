@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { Client } from '@stomp/stompjs';
 import Header from '../components/Header';
@@ -8,52 +7,19 @@ import EquipmentHistoryModal from '../components/EquipmentHistoryModal';
 import EquipmentCompareModal from '../components/EquipmentCompareModal';
 import PlantMap3DView from '../components/PlantMap3DView';
 import EquipShapePanel from '../components/EquipShapePanel';
+import FloatingPanel from '../components/FloatingPanel';
 import { saveModelBlob, deleteModelBlob } from '../utils/plantMapModelsDb';
 import { getStatusMeta, STATUS_DOT_CLASS, DEFAULT_STATUS_INFO_LINES } from '../utils/statusStyles';
 import { API_BASE_URL, WS_BASE_URL } from '../utils/apiConfig';
 import { EMPTY_EQUIP_ROW, mergeTempDto, mergeElecDto, mergeEquipmentLists } from '../utils/equipmentMerge';
 import { saveToDB } from '../utils/indexedDb';
 import { useClickOutside } from '../utils/useClickOutside';
-
-// 배치도 이미지는 고정 SVG. 설비 좌표/구역은 브라우저 localStorage에만 저장
-const FLOORPLAN_IMAGE_URL = '/test-floorplan.svg';
-const POSITIONS_KEY = 'plantMapPositions';
-const ZONES_KEY = 'plantMapZones';
-
-const loadStoredPositions = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(POSITIONS_KEY));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch { return {}; }
-};
-const savePositions = (positions) => {
-  try { localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions)); } catch { /* 세션 메모리로만 유지 */ }
-};
-
-// 구역(zone) - 도면 위 이름 붙은 사각형. 좌표는 이미지 기준 %로 저장(xPct/yPct/widthPct/heightPct)
-const loadStoredZones = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(ZONES_KEY));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-};
-const saveZones = (zones) => {
-  try { localStorage.setItem(ZONES_KEY, JSON.stringify(zones)); } catch { /* 세션 메모리로만 유지 */ }
-};
-
-// 설비별 3D 모양 오버라이드 - { [equipId]: { type: 'preset', preset } | { type: 'model', modelId, fileName } }.
-// 값이 없는 설비는 3D 보기에서 이름 기반 자동 추정(classifyShape)을 그대로 씀
-const EQUIP_SHAPES_KEY = 'plantMapEquipShapes';
-const generateModelId = () => `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const loadStoredEquipShapes = () => {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(EQUIP_SHAPES_KEY));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch { return {}; }
-};
-const saveEquipShapes = (shapes) => {
-  try { localStorage.setItem(EQUIP_SHAPES_KEY, JSON.stringify(shapes)); } catch { /* 세션 메모리로만 유지 */ }
-};
+import {
+  FLOORPLAN_IMAGE_URL,
+  loadStoredPositions, savePositions,
+  loadStoredZones, saveZones,
+  loadStoredEquipShapes, saveEquipShapes, generateModelId,
+} from '../utils/plantMapStorage';
 // 구역 안 설비 중 제일 안 좋은 상태로 구역 색을 정함 (위험 > 경고 > 정상)
 const STATUS_COLOR_PRIORITY = { red: 2, amber: 1, green: 0 };
 const ZONE_BORDER_CLASS = {
@@ -798,7 +764,7 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
                     : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE] border-transparent bg-[#0D1224]' : 'text-gray-500 hover:text-gray-800 border-transparent bg-gray-100')
                 }`}
               >
-                {is3DView ? '2D 보기' : '3D 보기'}
+                {is3DView ? '2D' : '3D'}
               </button>
             )}
             {isEditMode && (
@@ -1216,91 +1182,33 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               })()}
             </div>
 
-            {/* 2D 편집 중 실시간 3D 확인용 인셋 - 배치/구역을 바꿀 때마다 같은 props가 그대로
-                다시 렌더돼서 별도 동기화 로직 없이 항상 최신 상태를 보여줌.
+            {/* 2D 편집 중 실시간 3D 확인용 떠 있는 창 - 배치/구역을 바꿀 때마다 같은 props가
+                그대로 다시 렌더돼서 별도 동기화 로직 없이 항상 최신 상태를 보여줌.
                 simplified로 등장 애니메이션/경고 링 펄스 같은 장식 효과는 꺼서 계속 다시
-                그려져도 정신없지 않게 함. 위쪽 헤더 바를 잡고 끌면 원하는 위치로, 우하단
-                모서리를 잡고 끌면 원하는 크기로 자유롭게 조절할 수 있음.
-                "도면 영역" 컨테이너는 overflow-hidden이라, 그 안의 absolute 자식으로 두면
-                위로 끌어올렸을 때 컨테이너 경계에서 잘려서 다시 잡을 수 없는 위치로 가버리는
-                문제가 있었음 - body에 포털로 띄워서 어디로 옮기든 잘리지 않고 항상 맨 위에
-                보이는 진짜 떠 있는 창처럼 동작하게 함 */}
-            {show3DPreview && createPortal(
-              <div
-                className={`fixed flex flex-col rounded-lg overflow-hidden border shadow-2xl ${
-                  isDarkMode ? 'border-[#232B45] bg-[#0A0E1A]' : 'border-gray-300 bg-white'
-                }`}
-                style={{ width: previewSize.width, height: previewSize.height, left: previewPos.x, top: previewPos.y, zIndex: 9999 }}
+                그려져도 정신없지 않게 함 */}
+            {show3DPreview && (
+              <FloatingPanel
+                title="3D 미리보기"
+                isDarkMode={isDarkMode}
+                pos={previewPos}
+                size={previewSize}
+                onPosChange={setPreviewPos}
+                onSizeChange={setPreviewSize}
+                onDragStart={() => { hasMovedPreviewRef.current = true; }}
+                onClose={() => setShow3DPreview(false)}
               >
-                <div
-                  onPointerDown={(e) => {
-                    hasMovedPreviewRef.current = true;
-                    const panelEl = e.currentTarget.parentElement;
-                    const startLeft = panelEl.offsetLeft;
-                    const startTop = panelEl.offsetTop;
-                    const startX = e.clientX;
-                    const startY = e.clientY;
-                    const handleMove = (moveEvent) => {
-                      // 화면 밖으로 완전히 나가면 다시 못 잡으니, 헤더 일부는 항상 화면 안에 남게 clamp
-                      const nextX = Math.min(window.innerWidth - 40, Math.max(-previewSize.width + 40, startLeft + (moveEvent.clientX - startX)));
-                      const nextY = Math.min(window.innerHeight - 24, Math.max(0, startTop + (moveEvent.clientY - startY)));
-                      setPreviewPos({ x: nextX, y: nextY });
-                    };
-                    const handleUp = () => {
-                      window.removeEventListener('pointermove', handleMove);
-                      window.removeEventListener('pointerup', handleUp);
-                    };
-                    window.addEventListener('pointermove', handleMove);
-                    window.addEventListener('pointerup', handleUp);
-                  }}
-                  className={`shrink-0 h-6 flex items-center px-2 cursor-move select-none ${
-                    isDarkMode ? 'bg-[#12172A] text-[#9FACC9]' : 'bg-gray-100 text-gray-500'
-                  }`}
-                >
-                  <span className="text-[10px] font-semibold">3D 미리보기</span>
-                </div>
-                <div className="flex-1 min-h-0">
-                  <PlantMap3DView
-                    image={image}
-                    placedEquipments={placedEquipments}
-                    positions={positions}
-                    zones={zones}
-                    metricTab={metricTab}
-                    isDarkMode={isDarkMode}
-                    equipmentShapes={equipmentShapes}
-                    onSelectEquip={() => {}}
-                    simplified
-                  />
-                </div>
-                <div
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    const startWidth = previewSize.width;
-                    const startHeight = previewSize.height;
-                    const startX = e.clientX;
-                    const startY = e.clientY;
-                    const handleMove = (moveEvent) => {
-                      setPreviewSize({
-                        width: Math.min(900, Math.max(220, startWidth + (moveEvent.clientX - startX))),
-                        height: Math.min(700, Math.max(140, startHeight + (moveEvent.clientY - startY))),
-                      });
-                    };
-                    const handleUp = () => {
-                      window.removeEventListener('pointermove', handleMove);
-                      window.removeEventListener('pointerup', handleUp);
-                    };
-                    window.addEventListener('pointermove', handleMove);
-                    window.addEventListener('pointerup', handleUp);
-                  }}
-                  title="드래그해서 크기 조절"
-                  className={`absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize ${isDarkMode ? 'text-[#3A4266]' : 'text-gray-400'}`}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-full h-full">
-                    <path d="M13 3 L3 13 M13 8 L8 13 M13 13 L13 13" strokeLinecap="round" />
-                  </svg>
-                </div>
-              </div>,
-              document.body,
+                <PlantMap3DView
+                  image={image}
+                  placedEquipments={placedEquipments}
+                  positions={positions}
+                  zones={zones}
+                  metricTab={metricTab}
+                  isDarkMode={isDarkMode}
+                  equipmentShapes={equipmentShapes}
+                  onSelectEquip={() => {}}
+                  simplified
+                />
+              </FloatingPanel>
             )}
 
             {/* 3D 모양 설정 패널 - "배치되지 않은 설비" 트레이와 같은 패턴으로 도면 위 오버레이

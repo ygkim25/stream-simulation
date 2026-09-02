@@ -8,6 +8,9 @@ import SimulationTrendChart from '../components/SimulationTrendChart';
 import Dropdown from '../components/Dropdown';
 import EquipTimelineBar from '../components/EquipTimelineBar';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PlantMap3DView from '../components/PlantMap3DView';
+import FloatingPanel from '../components/FloatingPanel';
+import { FLOORPLAN_IMAGE_URL, loadStoredPositions, loadStoredZones, loadStoredEquipShapes } from '../utils/plantMapStorage';
 import { listScenarios, getScenarioDetail, uploadScenario, updateScenarioRows, deleteScenarioApi, renameScenarioApi } from '../utils/simulationApi';
 import { parseSimulationFileInWorker, computeStatus, computeCombinedStatus, isWarningStatus, formatMmSs, formatClockTime } from '../utils/simulationParse';
 import { STATUS_STYLES, getStatusMeta } from '../utils/statusStyles';
@@ -65,6 +68,16 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   const [isExportingFile, setIsExportingFile] = useState(false); // CSV 내보내기 중
   const [selectedScenarioId, setSelectedScenarioId] = useState(null);
   const [rows, setRows] = useState([]); // 선택된 시나리오의 정규화된 원본 로우 (시간순 정렬)
+
+  // 재생 중인 시나리오를 3D 배치도로도 보여주는 기능 - 설비 배치도(PlantMapScreen)에서 이미
+  // 설정해둔 배치/구역/3D 모양을 그대로 재사용함(localStorage 공유, 이 화면에서는 읽기만 함)
+  const [show3DView, setShow3DView] = useState(false);
+  const [simMetricTab, setSimMetricTab] = useState('temperature'); // 온도/전력 둘 다 있는 시나리오의 3D 보기 색 기준
+  const [sim3DPos, setSim3DPos] = useState({ x: 16, y: 100 });
+  const [sim3DSize, setSim3DSize] = useState({ width: 360, height: 260 });
+  const [simPlantPositions] = useState(() => loadStoredPositions());
+  const [simPlantZones] = useState(() => loadStoredZones());
+  const [simPlantEquipShapes] = useState(() => loadStoredEquipShapes());
 
   const [playState, setPlayState] = useState('stopped'); // 'stopped' | 'playing' | 'paused'
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -1329,6 +1342,21 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                 />
               )}
 
+              {selectedScenario && (
+                <button
+                  type="button"
+                  onClick={() => setShow3DView(v => !v)}
+                  title="설비 배치도에서 설정한 배치 그대로, 재생 중인 상태를 3D로 봅니다"
+                  className={`px-3 py-2 rounded-lg text-xs font-bold tracking-wide transition-colors border shrink-0 ${
+                    show3DView
+                      ? (isDarkMode ? 'bg-[#1E2A4A] text-[#22D3EE] border-[#22D3EE]/40' : 'bg-green-50 text-green-700 border-green-300')
+                      : (isDarkMode ? 'bg-[#0D1224] border-[#232B45] text-[#EDF1FC] hover:bg-[#151B30]' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-white')
+                  }`}
+                >
+                  3D
+                </button>
+              )}
+
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold tracking-wide transition-colors border shrink-0 ${
@@ -1891,6 +1919,52 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
               </>
             )}
           </div>
+
+          {/* 재생 중인 시나리오를 3D 배치도로 보여주는 떠 있는 창 - 표/이력 보기를 가리지 않고
+              따로 띄워서 원하는 위치에 두고 볼 수 있음. 설비 배치도(PlantMapScreen)에서
+              설정해둔 배치를 그대로 재사용함 */}
+          {show3DView && (
+            <FloatingPanel
+              title={selectedScenario?.fileName || '3D로 보기'}
+              isDarkMode={isDarkMode}
+              pos={sim3DPos}
+              size={sim3DSize}
+              onPosChange={setSim3DPos}
+              onSizeChange={setSim3DSize}
+              onClose={() => setShow3DView(false)}
+              headerRight={
+                hasTemperatureData && hasPowerData ? (
+                  <div className="flex items-center gap-0.5">
+                    {[['temperature', '온도'], ['power', '전력']].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setSimMetricTab(value)}
+                        className={`px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide transition-colors ${
+                          simMetricTab === value
+                            ? (isDarkMode ? 'bg-[#22D3EE] text-[#0A0E1A]' : 'bg-green-700 text-white')
+                            : (isDarkMode ? 'text-[#7D87A8] hover:text-[#B9C2DE]' : 'text-gray-400 hover:text-gray-700')
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null
+              }
+            >
+              <PlantMap3DView
+                image={FLOORPLAN_IMAGE_URL}
+                placedEquipments={currentEquipRows.filter(eq => simPlantPositions[eq.equipId])}
+                positions={simPlantPositions}
+                zones={simPlantZones}
+                metricTab={hasTemperatureData && hasPowerData ? simMetricTab : (hasTemperatureData ? 'temperature' : 'power')}
+                isDarkMode={isDarkMode}
+                equipmentShapes={simPlantEquipShapes}
+                onSelectEquip={(equipId) => { setViewEquipId(equipId); setSelectedEquipId(equipId); }}
+              />
+            </FloatingPanel>
+          )}
 
           {/* 우측: 알람 사이드바 */}
           <div className="w-full lg:w-[300px] xl:w-[330px] shrink-0">
