@@ -594,9 +594,8 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     const eventsChanged = prevMergedEventsRef.current !== mergedTransitionEvents;
     prevMergedEventsRef.current = mergedTransitionEvents;
     if (elapsedMs < prev || eventsChanged) {
-      // 되감기(스크럽) 또는 수정으로 인한 재계산: 처음부터 현재 위치까지 다시 계산
       const upto = mergedTransitionEvents.slice(0, upperBoundByElapsedMs(mergedTransitionEvents, elapsedMs));
-      setSimAlarms(upto.filter(e => e.kind === 'warning').map(toAlarmCard).slice(-MAX_SIM_ALARMS));
+      setSimAlarms(upto.filter(e => e.kind === 'warning' && e.status === '위험').map(toAlarmCard).slice(-MAX_SIM_ALARMS));
       setSimLogs(upto.map(toLogCard).slice(-MAX_SIM_LOGS));
     } else if (elapsedMs > prev) {
       const newly = mergedTransitionEvents.slice(
@@ -604,11 +603,9 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
         upperBoundByElapsedMs(mergedTransitionEvents, elapsedMs),
       );
       if (newly.length > 0) {
-        const newWarnings = newly.filter(e => e.kind === 'warning');
+        const newWarnings = newly.filter(e => e.kind === 'warning' && e.status === '위험');
         setSimAlarms(p => [...p, ...newWarnings.map(toAlarmCard)].slice(-MAX_SIM_ALARMS));
         setSimLogs(p => [...p, ...newly.map(toLogCard)].slice(-MAX_SIM_LOGS));
-        // 되감기/수정 재계산(위 분기)에서는 알리지 않음 - 스크럽하거나 셀을 편집할 때마다 밀린
-        // 알림이 한꺼번에 쏟아지는 걸 막고, 실제로 재생하며 자연스럽게 지나갈 때만 알림
         notifySimAlarms(newWarnings);
       }
     }
