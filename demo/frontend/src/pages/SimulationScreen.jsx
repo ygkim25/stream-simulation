@@ -846,27 +846,46 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
       const last = sortedList[totalCount - 1];
       if (sourceList[sourceList.length - 1] !== last) sourceList[sourceList.length - 1] = last;
     }
-    let prevStatus = null;
-    return sourceList
-      .map(r => {
-        const rowTime = r.time.getTime();
-        const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
-        const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
-        const editedThreshold = resolveEditedValue(r.equipId, 'threshold', rowTime);
-        const editedPowerThreshold = resolveEditedValue(r.equipId, 'powerThreshold', rowTime);
-        // 경고/위험 상태가 "새로 시작된" 지점에만 원 마커를 표시 (계속 경고 상태인 구간은 표시 안 함)
-        const isWarning = isWarningStatus(r.status) && !isWarningStatus(prevStatus);
-        prevStatus = r.status;
-        return {
-          time: formatClockTime(r.time),
-          elapsedMs: realToCompressed(rowTime),
-          temperature: editedTemp !== undefined ? editedTemp : r.temperature,
-          power: editedPower !== undefined ? editedPower : r.power,
-          threshold: editedThreshold !== undefined ? editedThreshold : r.threshold,
-          powerThreshold: editedPowerThreshold !== undefined ? editedPowerThreshold : r.powerThreshold,
-          isWarning,
-        };
-      });
+
+    let prevTempStatus = null;
+    let prevPowerStatus = null;
+    
+return sourceList
+  .map(r => {
+    const rowTime = r.time.getTime();
+    const editedTemp = resolveEditedValue(r.equipId, 'temperature', rowTime);
+    const editedPower = resolveEditedValue(r.equipId, 'power', rowTime);
+    const editedThreshold = resolveEditedValue(r.equipId, 'threshold', rowTime);
+    const editedPowerThreshold = resolveEditedValue(r.equipId, 'powerThreshold', rowTime);
+    const temperature = editedTemp !== undefined ? editedTemp : r.temperature;
+    const power = editedPower !== undefined ? editedPower : r.power;
+    const threshold = editedThreshold !== undefined ? editedThreshold : r.threshold;
+    const powerThreshold = editedPowerThreshold !== undefined ? editedPowerThreshold : r.powerThreshold;
+
+    const tempStatus = (editedTemp !== undefined || editedThreshold !== undefined)
+      ? computeStatus(temperature, threshold)
+      : r.status;
+    const powerStatus = (editedPower !== undefined || editedPowerThreshold !== undefined)
+      ? computeStatus(power, powerThreshold)
+      : r.powerStatus;
+
+    // 핀은 "위험"으로 새로 진입한 시점에만 표시 (경고는 제외)
+    const isTempWarning = tempStatus === '위험' && prevTempStatus !== '위험';
+    const isPowerWarning = powerStatus === '위험' && prevPowerStatus !== '위험';
+    prevTempStatus = tempStatus;
+    prevPowerStatus = powerStatus;
+
+    return {
+      time: formatClockTime(r.time),
+      elapsedMs: realToCompressed(rowTime),
+      temperature,
+      power,
+      threshold,
+      powerThreshold,
+      isTempWarning,
+      isPowerWarning,
+    };
+  });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, sortedRowsByEquip, selectedEquipId, elapsedMs, editedValues, startTimeMs]);
 
@@ -1317,7 +1336,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
                         : (isDarkMode ? 'text-[#9FACC9] hover:text-[#EDF1FC]' : 'text-gray-500 hover:text-gray-800')
                     }`}
                   >
-                    이후 전체 적용
+                    전체 적용
                   </button>
                 </div>
               )}

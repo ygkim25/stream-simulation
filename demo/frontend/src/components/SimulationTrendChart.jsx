@@ -159,6 +159,7 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
         x={lastPoint.elapsedMs}
         y={lastPoint[valueKey]}
         r={5}
+        isAnimationActive={false}
         isFront
         ifOverflow="extendDomain"
         fill={color}
@@ -192,8 +193,8 @@ const SimulationTrendChart = ({ data, equipName, isDarkMode, onPointClick, showT
   const tempChartData = data.slice(-tempVisibleCount);
   const powerChartData = data.slice(-powerVisibleCount);
 
-  const tempWarningPoints = tempChartData.filter(d => d.isWarning);
-  const powerWarningPoints = powerChartData.filter(d => d.isWarning);
+  const tempWarningPoints = tempChartData.filter(d => d.isTempWarning && d.temperature != null);
+  const powerWarningPoints = powerChartData.filter(d => d.isPowerWarning && d.power != null);
 
   // X축은 elapsedMs(숫자, 항상 유일함) 기준으로 그림 - 표시용 "time"(HH:mm:ss) 문자열은 초 단위라
   // 재생 속도가 빠르면 같은 초 안에 여러 지점이 몰려 값이 겹치는데, 문자열 카테고리 축을 쓰면

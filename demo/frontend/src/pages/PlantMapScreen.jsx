@@ -59,23 +59,30 @@ const FadeIn = ({ children }) => {
 };
 
 const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDarkMode, isAlarmOn, setIsAlarmOn }) => {
+    // 편집 모드에서 2D로 배치를 바꾸면서 결과를 바로바로 3D로 확인할 수 있게 하는 작은 미리보기
+  // 인셋. body 포털에 fixed로 띄우는 진짜 떠 있는 창이라 화면 기준 좌표(px)로 관리함
+  const [show3DPreview, setShow3DPreview] = useState(false);
+  const [previewPos, setPreviewPos] = useState({ x: 16, y: 100 });
+  const [previewSize, setPreviewSize] = useState({ width: 320, height: 224 });
+
+  
   const [equipments, setEquipments] = useState([]);
   const image = FLOORPLAN_IMAGE_URL;
-  const [positions, setPositions] = useState(() => loadStoredPositions());
+  const [positions, setPositions] = useState({});
   const [isEditMode, setIsEditMode] = useState(false);
   // 3D는 보기 전용 - 배치/구역 편집(포인터 좌표 계산)은 2D에서만 동작하므로 편집 모드 진입 시 자동으로 꺼짐
   // (렌더 중 조정 패턴 - effect에서 setState하면 캐스케이딩 렌더 경고가 발생함)
   const [is3DView, setIs3DView] = useState(false);
   const [prevIsEditMode, setPrevIsEditMode] = useState(isEditMode);
-  if (isEditMode !== prevIsEditMode) {
-    setPrevIsEditMode(isEditMode);
-    if (isEditMode) setIs3DView(false);
+if (isEditMode !== prevIsEditMode) {
+  setPrevIsEditMode(isEditMode);
+  if (isEditMode) {
+    setIs3DView(false);
+  } else {
+    setShow3DPreview(false);
   }
-  // 편집 모드에서 2D로 배치를 바꾸면서 결과를 바로바로 3D로 확인할 수 있게 하는 작은 미리보기
-  // 인셋. body 포털에 fixed로 띄우는 진짜 떠 있는 창이라 화면 기준 좌표(px)로 관리함
-  const [show3DPreview, setShow3DPreview] = useState(false);
-  const [previewPos, setPreviewPos] = useState({ x: 16, y: 100 });
-  const [previewSize, setPreviewSize] = useState({ width: 320, height: 224 });
+}
+
   // 사용자가 직접 옮긴 적이 없으면, 열 때마다 "도면 영역" 좌하단에 맞춰 새로 계산함(창 크기가
   // 달라도 항상 도면 바로 위 왼쪽 아래에 뜨게) - 한 번이라도 직접 옮기면 그 뒤로는 그 위치를 유지
   const hasMovedPreviewRef = useRef(false);
@@ -110,8 +117,8 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   const groupDragRef = useRef(null); // { startPct, startPositions } - 이벤트 핸들러 전용, 렌더링에선 안 씀
 
   // 구역(zone) - 사각형 이동/크기조절도 위 마커 드래그와 같은 패턴(포인터 이벤트 + %기반 델타)
-  const [zones, setZones] = useState(() => loadStoredZones());
-  const [equipmentShapes, setEquipmentShapes] = useState(() => loadStoredEquipShapes());
+  const [zones, setZones] = useState([]);
+  const [equipmentShapes, setEquipmentShapes] = useState({});
   const [isZoneDragging, setIsZoneDragging] = useState(false);
   const [zoneDragPreview, setZoneDragPreview] = useState(null); // 드래그 중인 구역 1개의 실시간 {xPct,yPct,widthPct,heightPct}
   const zoneDragRef = useRef(null); // { id, mode: 'move'|'resize', startPct, startZone }
@@ -489,68 +496,102 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
   }, [isEditMode, multiSelectedIds]);
 
   // 설비 목록 초기 조회(REST) + 실시간 갱신(WebSocket) - RealtimeScreen.jsx의 축소판
-  useEffect(() => {
-    let isMounted = true;
-    const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
+// 설비 목록 초기 조회(REST) + 실시간 갱신(WebSocket) - RealtimeScreen.jsx의 축소판
+useEffect(() => {
+  let isMounted = true;
+  const headers = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
 
-    const fetchEquipments = async () => {
-      const [tempRes, elecRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/live/monitoring/temp`, { headers })
-          .catch(err => { console.error('요청 실패 (temp):', err); return { data: [] }; }),
-        axios.get(`${API_BASE_URL}/api/live/monitoring/elec`, { headers })
-          .catch(err => { console.error('요청 실패 (elec):', err); return { data: [] }; }),
-      ]);
+  const fetchEquipments = async () => {
+    const [tempRes, elecRes] = await Promise.all([
+      axios.get(`${API_BASE_URL}/api/live/monitoring/temp`, { headers })
+        .catch(err => { console.error('요청 실패 (temp):', err); return { data: [] }; }),
+      axios.get(`${API_BASE_URL}/api/live/monitoring/elec`, { headers })
+        .catch(err => { console.error('요청 실패 (elec):', err); return { data: [] }; }),
+    ]);
+    if (!isMounted) return;
+    setEquipments(mergeEquipmentLists(tempRes.data || [], elecRes.data || []));
+  };
+  fetchEquipments();
+
+  const client = new Client({
+    brokerURL: `${WS_BASE_URL}/ws/websocket`,
+    connectHeaders: {
+      Authorization: user?.token ? `Bearer ${user.token}` : '',
+      token: user?.token || '',
+    },
+    reconnectDelay: 5000,
+    onConnect: () => {
       if (!isMounted) return;
-      setEquipments(mergeEquipmentLists(tempRes.data || [], elecRes.data || []));
-    };
-    fetchEquipments();
-
-    const client = new Client({
-      brokerURL: `${WS_BASE_URL}/ws/websocket`,
-      connectHeaders: {
-        Authorization: user?.token ? `Bearer ${user.token}` : '',
-        token: user?.token || '',
-      },
-      reconnectDelay: 5000,
-      onConnect: () => {
+      const handleLiveMessage = (domain) => async (message) => {
         if (!isMounted) return;
-        const handleLiveMessage = (domain) => async (message) => {
-          if (!isMounted) return;
-          try {
-            const parsed = JSON.parse(message.body);
-            const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : [parsed]);
-            if (list.length === 0) return;
-            const mergeDto = domain === 'temp' ? mergeTempDto : mergeElecDto;
-            setEquipments(prev => {
-              const updated = [...prev];
-              list.forEach(dto => {
-                const idx = updated.findIndex(eq => eq.equipId === dto.equipId);
-                if (idx >= 0) {
-                  updated[idx] = mergeDto(updated[idx], dto);
-                } else {
-                  updated.push(mergeDto({ ...EMPTY_EQUIP_ROW }, dto));
-                }
-              });
-              return updated;
+        try {
+          const parsed = JSON.parse(message.body);
+          const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : [parsed]);
+          if (list.length === 0) return;
+          const mergeDto = domain === 'temp' ? mergeTempDto : mergeElecDto;
+          setEquipments(prev => {
+            const updated = [...prev];
+            list.forEach(dto => {
+              const idx = updated.findIndex(eq => eq.equipId === dto.equipId);
+              if (idx >= 0) {
+                updated[idx] = mergeDto(updated[idx], dto);
+              } else {
+                updated.push(mergeDto({ ...EMPTY_EQUIP_ROW }, dto));
+              }
             });
-            // EquipmentHistoryModal이 IndexedDB에서 추이를 읽으므로 여기서도 저장
-            await saveToDB(list);
-          } catch (e) {
-            console.error('웹소켓 데이터 파싱 에러:', e);
-          }
-        };
-        client.subscribe('/topic/live/monitoring/temp', handleLiveMessage('temp'));
-        client.subscribe('/topic/live/monitoring/elec', handleLiveMessage('elec'));
-      },
-      onStompError: (frame) => console.error('STOMP 에러:', frame.headers['message']),
-    });
-    client.activate();
+            return updated;
+          });
+          await saveToDB(list);
+        } catch (e) {
+          console.error('웹소켓 데이터 파싱 에러:', e);
+        }
+      };
+      client.subscribe('/topic/live/monitoring/temp', handleLiveMessage('temp'));
+      client.subscribe('/topic/live/monitoring/elec', handleLiveMessage('elec'));
+    },
+    onStompError: (frame) => console.error('STOMP 에러:', frame.headers['message']),
+  });
+  client.activate();
 
-    return () => {
-      isMounted = false;
-      client.deactivate();
-    };
-  }, [user?.token]);
+  return () => {
+    isMounted = false;
+    client.deactivate();
+  };
+}, [user?.token]);
+
+// 공유 배치 설정(positions/zones/equipmentShapes) 정적 JSON 로드 - 없으면 로컬 편집본 폴백
+// 공유 배치 설정(positions/zones/equipmentShapes) 로드 - 이 브라우저에서 편집해서 로컬에
+// 저장해둔 값이 있으면 그걸 우선 사용(관리자가 저장 직후 바로 결과를 확인할 수 있도록), 로컬에
+// 아무것도 없는 브라우저(=아직 한 번도 편집 안 한 일반 사용자)에서만 공유 정적 파일로 폴백
+useEffect(() => {
+  let isMounted = true;
+  const localPositions = loadStoredPositions();
+  const hasLocalEdits = Object.keys(localPositions || {}).length > 0;
+
+  if (hasLocalEdits) {
+    setPositions(localPositions);
+    setZones(loadStoredZones());
+    setEquipmentShapes(loadStoredEquipShapes());
+    return undefined;
+  }
+
+  fetch('/plant-map-config.json')
+    .then(res => (res.ok ? res.json() : null))
+    .then(sharedConfig => {
+      if (!isMounted) return;
+      setPositions(sharedConfig?.positions || {});
+      setZones(sharedConfig?.zones || []);
+      setEquipmentShapes(sharedConfig?.equipmentShapes || {});
+    })
+    .catch(() => {
+      if (!isMounted) return;
+      setPositions({});
+      setZones([]);
+      setEquipmentShapes({});
+    });
+  return () => { isMounted = false; };
+}, []);
+
 
   const handleResetPositions = () => {
     setIsResetConfirmOpen(false);
@@ -830,21 +871,23 @@ const PlantMapScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDa
               </>
             )}
 
-            <button
-              type="button"
-              onClick={() => { setIsEditMode(v => !v); setMultiSelectedIds([]); setOpenZoneId(null); }}
-              title={isEditMode ? '배치 편집 완료' : '설비 배치 편집'}
-              className={`shrink-0 p-1.5 rounded-lg transition-colors ${
-                isEditMode
-                  ? (isDarkMode ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-green-100 text-green-700')
-                  : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC] hover:bg-[#1A2036]' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100')
-              }`}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
+            {user?.role === 'ADMIN' && (
+              <button
+                type="button"
+                onClick={() => { setIsEditMode(v => !v); setMultiSelectedIds([]); setOpenZoneId(null); }}
+                title={isEditMode ? '배치 편집 완료' : '설비 배치 편집'}
+                className={`shrink-0 p-1.5 rounded-lg transition-colors ${
+                  isEditMode
+                    ? (isDarkMode ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-green-100 text-green-700')
+                    : (isDarkMode ? 'text-[#5C6584] hover:text-[#EDF1FC] hover:bg-[#1A2036]' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100')
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
