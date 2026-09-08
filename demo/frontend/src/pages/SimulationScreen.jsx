@@ -75,9 +75,40 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
   const [simMetricTab, setSimMetricTab] = useState('temperature'); // 온도/전력 둘 다 있는 시나리오의 3D 보기 색 기준
   const [sim3DPos, setSim3DPos] = useState({ x: 16, y: 100 });
   const [sim3DSize, setSim3DSize] = useState({ width: 360, height: 260 });
-  const [simPlantPositions] = useState(() => loadStoredPositions());
-  const [simPlantZones] = useState(() => loadStoredZones());
-  const [simPlantEquipShapes] = useState(() => loadStoredEquipShapes());
+  
+  const [simPlantPositions, setSimPlantPositions] = useState({});
+  const [simPlantZones, setSimPlantZones] = useState([]);
+  const [simPlantEquipShapes, setSimPlantEquipShapes] = useState({});
+
+  useEffect(() => {
+    let isMounted = true;
+    const localPositions = loadStoredPositions();
+    const hasLocalEdits = Object.keys(localPositions || {}).length > 0;
+
+    if (hasLocalEdits) {
+      setSimPlantPositions(localPositions);
+      setSimPlantZones(loadStoredZones());
+      setSimPlantEquipShapes(loadStoredEquipShapes());
+      return undefined;
+    }
+
+    fetch('/plant-map-config.json')
+      .then(res => (res.ok ? res.json() : null))
+      .then(sharedConfig => {
+        if (!isMounted) return;
+        setSimPlantPositions(sharedConfig?.positions || {});
+        setSimPlantZones(sharedConfig?.zones || []);
+        setSimPlantEquipShapes(sharedConfig?.equipmentShapes || {});
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setSimPlantPositions({});
+        setSimPlantZones([]);
+        setSimPlantEquipShapes({});
+      });
+    return () => { isMounted = false; };
+  }, []);
+
 
   const [playState, setPlayState] = useState('stopped'); // 'stopped' | 'playing' | 'paused'
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -575,6 +606,7 @@ const SimulationScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIs
     }
   }, []);
   const notifySimAlarms = (warningEvents) => {
+    return; // 잠깐 꺼둠 시뮬레이션 모드 알람
     const canNotify = isAlarmOn && typeof Notification !== 'undefined' && Notification.permission === 'granted';
     if (!canNotify) return;
     warningEvents.forEach(e => {
