@@ -91,7 +91,8 @@ const ReportScreen = ({ user, route, setRoute, openMyPage, isDarkMode, setIsDark
     const load = async () => {
       if (isFirstLoad) setIsLoading(true);
       const to = new Date();
-      const from = new Date(to.getTime() - rangeDays * 24 * 60 * 60 * 1000);
+      const from = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+      from.setDate(from.getDate() - (rangeDays - 1));
       try {
         const [tempRows, elecRows, tempList, elecList] = await Promise.all([
           fetchHistoryFromBackend('temp', from, to, headers),
