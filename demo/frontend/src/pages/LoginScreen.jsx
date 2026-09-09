@@ -144,7 +144,7 @@ const LoginScreen = ({ onLogin, isDarkMode, setIsDarkMode }) => {
                   ? 'bg-[#0D1224] border border-[#232B45] focus:border-[#22D3EE] text-[#EDF1FC] placeholder-[#5C6584]'
                   : 'bg-gray-50 border border-gray-200 focus:border-green-600 text-gray-800 placeholder-gray-400'
               }`}
-              placeholder="비밀번호"
+              placeholder="비밀번호 (초기 비밀번호: 12345)"
               value={pw}
               onChange={(e) => setPw(e.target.value)}
               disabled={isLoading}
