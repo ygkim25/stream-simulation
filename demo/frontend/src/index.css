@@ -1,111 +1,241 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+@import "tailwindcss";
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+/* 앱 전체 기본 폰트를 Pretendard로 통일 (한글/영문 모두 깔끔하게 어울리는 폰트) */
+@theme {
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', system-ui, Roboto, 'Helvetica Neue', 'Apple SD Gothic Neo',
+    'Noto Sans KR', 'Malgun Gothic', sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+/* 브라우저 확대 110%로 봤을 때가 딱 좋은 크기라, 기본 배율 자체를 110%로 올려서
+   100% 확대 상태에서도 그 크기로 보이게 함 (크로미움/사파리 계열의 zoom 속성 사용) */
+html {
+  zoom: 1.1;
 }
 
-body {
-  margin: 0;
+/* 화면 전환 시 내용이 뚝 나타나지 않고 살짝 떠오르며 부드럽게 나타남 */
+@keyframes screen-enter {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.screen-enter {
+  animation: screen-enter 380ms ease-out;
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
+/* ------------------------------------------
+ * 기본 (라이트 / 일반 모드) 스크롤바
+ * ------------------------------------------ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F1F5F9; /* slate-100 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1; /* slate-300 */
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8; /* slate-400 */
+}
+
+/* ------------------------------------------
+ * 다크 모드 스크롤바 (.dark 클래스 적용 시)
+ * ------------------------------------------ */
+.dark ::-webkit-scrollbar-track,
+html.dark ::-webkit-scrollbar-track {
+  background: #0A0E1A;
+}
+
+.dark ::-webkit-scrollbar-thumb,
+html.dark ::-webkit-scrollbar-thumb {
+  background: #232B45;
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover,
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #22D3EE;
+}
+
+/* ------------------------------------------
+ * recharts 차트를 클릭했을 때 생기는 포커스 테두리 제거
+ * ------------------------------------------ */
+.recharts-wrapper:focus,
+.recharts-wrapper *:focus,
+.recharts-surface:focus {
+  outline: none;
+}
+
+/* ------------------------------------------
+ * 알람 패널에서 온도/전력 탭을 전환할 때, 필터링된 목록이 위에서 아래로 살짝
+ * 내려오면서 나타나는 효과 (탭이 바뀌었다는 게 시각적으로 느껴지도록)
+ * ------------------------------------------ */
+@keyframes alarm-slide-down {
+  from { opacity: 0; transform: translateY(-14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.alarm-slide-down {
+  animation: alarm-slide-down 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ------------------------------------------
+ * 시뮬레이션 재생바(재생 위치 슬라이더) - 트랙을 두껍게, 썸(재생 위치 점)을 크게.
+ * appearance:none으로 브라우저 기본 크기 제한을 없애야 트랙 두께가 실제로 커짐 -
+ * 대신 진행 채움색은 자동으로 안 그려지므로, 컴포넌트에서 background로 직접 그라데이션을 그림
+ * ------------------------------------------ */
+.sim-seekbar {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+.sim-seekbar::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 9999px;
+  background: transparent;
+}
+.sim-seekbar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background-color: var(--seek-accent, #22D3EE);
+  border: 2px solid var(--seek-accent, #22D3EE);
+  cursor: pointer;
+}
+.sim-seekbar::-moz-range-track {
+  height: 10px;
+  border-radius: 9999px;
+  background: transparent;
+}
+.sim-seekbar::-moz-range-progress {
+  height: 10px;
+  border-radius: 9999px;
+  background-color: var(--seek-accent, #22D3EE);
+}
+.sim-seekbar::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  border: none;
+  background-color: var(--seek-accent, #22D3EE);
+  cursor: pointer;
+}
+
+/* ------------------------------------------
+ * 버튼 클릭 시 브라우저 기본 포커스 테두리 제거 (커스텀 스타일로 대체하므로 불필요)
+ * ------------------------------------------ */
+button {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus,
+button:focus-visible {
+  outline: none;
+}
+
+/* 버튼마다 일일이 cursor-pointer를 안 넣어도 전부 마우스 오버 시 손가락 커서로 보이도록 공통 적용
+   (비활성 버튼은 그대로 not-allowed로 구분) */
+button:not(:disabled) {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------
+ * 실시간/시뮬레이션 화면 표(grid)들에서 공통으로 반복되던 조합을 클래스로 뺌 (여러 페이지에서
+ * 같이 씀). 너비/높이·다크모드 테두리색·상태별 글자색처럼 칸마다 달라지는 부분만 className에서
+ * 그대로 조합해서 씀
+ * ------------------------------------------ */
+.grid-cell-input {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  border-radius: 0.25rem;
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
   text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+  font-weight: 700;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.75rem;
+  line-height: 1;
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+  appearance: textfield;
+}
+.grid-cell-input:focus {
+  outline: none;
+}
+.grid-cell-input::-webkit-outer-spin-button,
+.grid-cell-input::-webkit-inner-spin-button {
+  appearance: none;
+}
+
+/* 표 헤더 셀 - 다크모드 테두리색만 .dark로 자동 전환되고, 나머지는 항상 동일 */
+.grid-th {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  border-bottom-width: 1px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-color: #D1D5DB; /* gray-300 */
+}
+.dark .grid-th {
+  border-color: #2A335A;
+}
+
+/* 상태(정상/경고/위험) 뱃지 - 점+글자 배치 구조만 공통, 색은 그대로 동적으로 조합 */
+.status-badge {
+  height: 100%;
   display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+/* ------------------------------------------
+ * 리포트 화면에서 숫자가 바뀔 때, 바뀐 그 숫자(또는 막대)만 스르륵 부드럽게 나타나는 효과
+ * (매번 값이 갱신될 때 "방금 바뀌었다"는 게 눈에 보이도록 - 튀어오르는 느낌은 없게)
+ * ------------------------------------------ */
+@keyframes report-pop {
+  0% { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+.report-pop {
+  animation: report-pop 1100ms ease-out;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+/* 리포트 TOP5 그래프 - 값이 바뀐 막대만 왼쪽을 기준으로 스무스하게 다시 채워지고(한 번),
+ * 색은 눈에 잘 띄도록 원래 색<->강조색을 네 번 반짝임 */
+@keyframes report-bar-grow-scale {
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+@keyframes report-bar-flash {
+  0%, 100% { fill: #FB5D75; }
+  50% { fill: #FBBF24; }
 }
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.report-bar-grow {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: report-bar-grow-scale 1100ms ease-out, report-bar-flash 1200ms ease-in-out 4;
 }

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/wemb/java/java-1.8.0-openjdk/bin/jps.exe\" -l)",
+      "Read(//c/wemb/java/**)",
+      "Bash(grep -i \"^-.*nul$\\\\|nul$\")",
+      "Bash(cd \"c:/Workspace/stream-simulation-develop\" && rm -f nul && ls -la | grep -i \"nul\" ; echo \"삭제 확인 완료 \\(결과 없으면 삭제됨\\)\" *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Workspace\\stream-simulation-develop"
+    ]
+  }
+}
