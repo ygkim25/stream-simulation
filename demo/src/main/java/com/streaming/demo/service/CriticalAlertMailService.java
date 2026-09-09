@@ -40,9 +40,10 @@ public class CriticalAlertMailService {
         String text = equipName + "(" + equipId + ")의 " + metricLabel + "이(가) 위험 상태입니다.\n" +
                 "현재값: " + value + " / 임계값: " + threshold;
 
-        // admin의 user_id를 메일 주소로 사용. 한 명 발송 실패해도 나머지 admin에게는 계속 보냄
+        // admin의 user_id를 메일 주소로 사용. 순수 아이디면 회사 도메인을 붙여서 발송. 한 명 발송 실패해도 나머지 admin에게는 계속 보냄
         for (Login admin : admins) {
-            String toAddress = admin.getUserId();
+            String userId = admin.getUserId();
+            String toAddress = userId.contains("@") ? userId : userId + "@wemb.co.kr";
             try {
                 SimpleMailMessage message = new SimpleMailMessage();
                 message.setTo(toAddress);
